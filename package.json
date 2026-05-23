@@ -1,0 +1,33 @@
+{
+  "name": "beat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "stdb:build": "spacetime build -p spacetimedb",
+    "stdb:generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path spacetimedb --no-config",
+    "stdb:publish:local": "spacetime publish beat-rooms-local -p spacetimedb -s local --no-config",
+    "stdb:publish:maincloud": "spacetime publish beat-rooms -p spacetimedb -s maincloud --no-config",
+    "stdb:dev": "spacetime dev beat-rooms-local --server local --server-only --project-path . --module-path spacetimedb --module-bindings-path src/module_bindings --client-lang typescript -y --no-config"
+  },
+  "dependencies": {
+    "@dimforge/rapier2d-compat": "^0.19.3",
+    "spacetimedb": "2.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.4",
+    "vite": "^8.0.13",
+    "vitest": "^4.0.14"
+  }
+}

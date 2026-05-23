@@ -1,0 +1,19 @@
+{
+  "name": "Beat Hosted Rooms",
+  "short_name": "Beat",
+  "id": ".",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "description": "Hackable browser-hosted arena rooms with Rapier2D and WebRTC.",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
