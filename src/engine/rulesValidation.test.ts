@@ -4,7 +4,7 @@ import { parseRulesetJson, stringifyRuleset, validateRuleset } from './rulesVali
 
 describe('rulesValidation', () => {
   it('accepts the default preset', () => {
-    expect(validateRuleset(createDefaultRuleset()).loadout.primaryAbilityId).toBe('pulse-bolt');
+    expect(validateRuleset(createDefaultRuleset()).loadout.abilityIds).toEqual(['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance']);
   });
 
   it('round-trips exported rules JSON', () => {
@@ -12,13 +12,33 @@ describe('rulesValidation', () => {
     expect(parseRulesetJson(stringifyRuleset(ruleset))).toEqual(ruleset);
   });
 
-  it('rejects a missing primary ability', () => {
+  it('rejects a missing slotted ability', () => {
     const ruleset = createDefaultRuleset();
     expect(() =>
       validateRuleset({
         ...ruleset,
-        loadout: { primaryAbilityId: 'missing' },
+        loadout: { abilityIds: ['pulse-bolt', 'missing', 'seeker-spark', 'ion-lance'] },
       }),
-    ).toThrow(/primaryAbilityId/);
+    ).toThrow(/loadout\.abilityIds\[1\]/);
+  });
+
+  it('rejects a loadout without four slots', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        loadout: {},
+      }),
+    ).toThrow(/loadout\.abilityIds/);
+  });
+
+  it('rejects invalid ability targeting', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        abilities: ruleset.abilities.map((ability, index) => (index === 0 ? { ...ability, targeting: 'nearest' } : ability)),
+      }),
+    ).toThrow(/ability\.targeting/);
   });
 });

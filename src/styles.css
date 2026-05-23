@@ -269,6 +269,100 @@ h2 {
   min-width: 68px;
 }
 
+.skill-bar {
+  position: absolute;
+  z-index: 5;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: 50%;
+  display: grid;
+  grid-template-columns: repeat(4, 74px);
+  gap: 8px;
+  transform: translateX(-50%);
+}
+
+.skill-slot {
+  position: relative;
+  display: grid;
+  grid-template-rows: 16px 1fr;
+  width: 74px;
+  height: 58px;
+  min-height: 0;
+  padding: 6px;
+  overflow: hidden;
+  color: #f5f3ed;
+  border: 1px solid color-mix(in srgb, var(--skill-color, #6a6760), #f5f3ed 18%);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--skill-color, #6a6760), transparent 72%), rgba(20, 20, 20, 0.78)),
+    #1d1d1a;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.skill-slot:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.skill-slot:hover,
+.skill-slot:focus-visible {
+  border-color: #ffe66d;
+  outline: none;
+}
+
+.skill-slot__cooldown-fill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: rgba(5, 5, 5, 0.56);
+  transform: scaleY(var(--cooldown-ratio, 0));
+  transform-origin: bottom;
+  pointer-events: none;
+}
+
+.skill-slot__key,
+.skill-slot__name,
+.skill-slot__timer {
+  position: relative;
+  z-index: 1;
+}
+
+.skill-slot__key {
+  justify-self: start;
+  width: 18px;
+  height: 18px;
+  color: #141414;
+  border-radius: 4px;
+  background: var(--skill-color, #b9b4a8);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 18px;
+  text-align: center;
+}
+
+.skill-slot__name {
+  align-self: end;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-slot__timer {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #ffe66d;
+  font: 700 18px ui-monospace, "SFMono-Regular", Consolas, monospace;
+  pointer-events: none;
+}
+
 .arena-log {
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
@@ -345,6 +439,26 @@ h2 {
 
   .arena-log {
     display: none;
+  }
+
+  .skill-bar {
+    right: max(20px, env(safe-area-inset-right));
+    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 134px);
+    left: auto;
+    grid-template-columns: repeat(2, 58px);
+    gap: 8px;
+    transform: none;
+  }
+
+  .skill-slot {
+    width: 58px;
+    height: 58px;
+    padding: 5px;
+  }
+
+  .skill-slot__name {
+    font-size: 10px;
+    white-space: normal;
   }
 }
 

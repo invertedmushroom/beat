@@ -39,6 +39,7 @@ export class BeatApp {
   private resetRulesButton!: HTMLButtonElement;
   private applyRulesButton!: HTMLButtonElement;
   private copyRulesButton!: HTMLButtonElement;
+  private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
   private engine?: EngineClient;
   private hostSession?: HostSession;
@@ -107,6 +108,10 @@ export class BeatApp {
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
+    this.skillButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.skill-slot'));
+    if (this.skillButtons.length !== 4) {
+      throw new Error('missing skill slots');
+    }
     this.canvas = requireNode<HTMLCanvasElement>('#arena');
   }
 
@@ -140,6 +145,7 @@ export class BeatApp {
       window.__BEAT_SNAPSHOT__ = snapshot;
       this.renderer.update(snapshot);
       this.updateAimOrigin(snapshot);
+      this.updateSkillBar(snapshot);
       this.hostSession?.broadcastSnapshot(snapshot);
       this.setStatus(`hosting: ${room.name}`);
     });
@@ -203,6 +209,7 @@ export class BeatApp {
       window.__BEAT_SNAPSHOT__ = snapshot;
       this.renderer.update(snapshot);
       this.updateAimOrigin(snapshot);
+      this.updateSkillBar(snapshot);
       this.setStatus('solo: browser worker authority');
     });
     this.hashLine.textContent = `rules ${shortHash(rulesetHash)} · content ${shortHash(this.ruleset.contentHash)}`;
@@ -236,6 +243,7 @@ export class BeatApp {
       window.__BEAT_SNAPSHOT__ = snapshot;
       this.renderer.update(snapshot);
       this.updateAimOrigin(snapshot);
+      this.updateSkillBar(snapshot);
       this.setStatus(`joined: ${room.name}`);
     });
     await this.clientSession.connect(room);
@@ -272,6 +280,7 @@ export class BeatApp {
     this.renderer.setEmptyMessage('No room active');
     this.renderer.setLocalPlayer(undefined);
     this.input.setAimOrigin(undefined);
+    this.updateSkillBar(undefined);
     this.mode = 'idle';
     this.setRulesLocked(false);
     this.showMenu();
@@ -377,6 +386,7 @@ export class BeatApp {
     this.arenaView.hidden = false;
     requestAnimationFrame(() => this.renderer.resizeNow());
     this.setRulesLocked(true);
+    this.updateSkillBar(this.lastSnapshot);
   }
 
   private setRulesLocked(locked: boolean): void {
@@ -395,6 +405,26 @@ export class BeatApp {
     this.input.setAimOrigin(local ? this.renderer.worldToClient(local.x, local.y) : undefined);
   }
 
+  private updateSkillBar(snapshot: EngineSnapshot | undefined): void {
+    const ruleset = this.ruleset;
+    const local = this.localPlayerId ? snapshot?.players.find((player) => player.playerId === this.localPlayerId) : undefined;
+    for (const [index, button] of this.skillButtons.entries()) {
+      const abilityId = ruleset?.loadout.abilityIds[index];
+      const ability = abilityId ? ruleset?.abilities.find((candidate) => candidate.id === abilityId) : undefined;
+      const cooldown = local?.slotCooldownTicks[index] ?? 0;
+      const ratio = ability && ability.cooldownTicks > 0 ? Math.max(0, Math.min(1, cooldown / ability.cooldownTicks)) : 0;
+      button.style.setProperty('--skill-color', ability?.color ?? '#6a6760');
+      button.style.setProperty('--cooldown-ratio', String(ratio));
+      button.classList.toggle('is-cooling', cooldown > 0);
+      button.classList.toggle('is-unavailable', !ability || Boolean(local && !local.alive));
+      button.disabled = !ability || Boolean(local && !local.alive);
+      button.title = ability ? `${index + 1} ${ability.name}` : `Slot ${index + 1}`;
+      button.setAttribute('aria-label', ability ? `Slot ${index + 1}: ${ability.name}` : `Slot ${index + 1}`);
+      button.querySelector('.skill-slot__name')?.replaceChildren(document.createTextNode(ability?.name ?? `Slot ${index + 1}`));
+      button.querySelector('.skill-slot__timer')?.replaceChildren(document.createTextNode(cooldown > 0 ? String(cooldown) : ''));
+    }
+  }
+
   private touchControls(): TouchControlElements {
     return {
       root: requireNode<HTMLElement>('#touch-controls'),
@@ -402,6 +432,7 @@ export class BeatApp {
       joystickKnob: requireNode<HTMLElement>('#touch-joystick-knob'),
       firePad: requireNode<HTMLElement>('#touch-fire'),
       fireKnob: requireNode<HTMLElement>('#touch-fire-knob'),
+      skillButtons: this.skillButtons,
     };
   }
 }
@@ -459,6 +490,32 @@ function shellHtml(): string {
           <div id="peer-line">peer</div>
         </div>
         <button id="leave-room" class="button arena-menu-button" type="button">Menu</button>
+        <div id="skill-bar" class="skill-bar" aria-label="Skill bar">
+          <button class="skill-slot" type="button" data-slot="0">
+            <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__key">1</span>
+            <span class="skill-slot__name">Slot 1</span>
+            <span class="skill-slot__timer"></span>
+          </button>
+          <button class="skill-slot" type="button" data-slot="1">
+            <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__key">2</span>
+            <span class="skill-slot__name">Slot 2</span>
+            <span class="skill-slot__timer"></span>
+          </button>
+          <button class="skill-slot" type="button" data-slot="2">
+            <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__key">3</span>
+            <span class="skill-slot__name">Slot 3</span>
+            <span class="skill-slot__timer"></span>
+          </button>
+          <button class="skill-slot" type="button" data-slot="3">
+            <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__key">4</span>
+            <span class="skill-slot__name">Slot 4</span>
+            <span class="skill-slot__timer"></span>
+          </button>
+        </div>
         <div id="touch-controls" class="touch-controls" aria-hidden="true">
           <div id="touch-joystick" class="touch-pad touch-pad--move">
             <div id="touch-joystick-knob" class="touch-knob"></div>

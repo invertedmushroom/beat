@@ -24,7 +24,17 @@ describe('rulesetFingerprint', () => {
     const a = createDefaultRuleset();
     const b = {
       ...a,
-      abilities: a.abilities.map((ability) => (ability.id === a.loadout.primaryAbilityId ? { ...ability, damage: ability.damage + 1 } : ability)),
+      abilities: a.abilities.map((ability) => (ability.id === a.loadout.abilityIds[0] ? { ...ability, damage: ability.damage + 1 } : ability)),
+    };
+
+    expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
+  });
+
+  it('changes when loadout order changes', () => {
+    const a = createDefaultRuleset();
+    const b = {
+      ...a,
+      loadout: { abilityIds: [a.loadout.abilityIds[1], a.loadout.abilityIds[0], a.loadout.abilityIds[2], a.loadout.abilityIds[3]] },
     };
 
     expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));

@@ -9,10 +9,7 @@ export function validateRuleset(value: unknown): Ruleset {
   const ruleset = assertRecord(value, 'ruleset');
   const abilities = readArray(ruleset.abilities, 'abilities').map(validateAbility);
   const loadout = assertRecord(ruleset.loadout, 'loadout');
-  const primaryAbilityId = readString(loadout.primaryAbilityId, 'loadout.primaryAbilityId');
-  if (!abilities.some((ability) => ability.id === primaryAbilityId)) {
-    throw new Error('loadout.primaryAbilityId must reference an ability');
-  }
+  const abilityIds = validateLoadoutAbilityIds(loadout.abilityIds, abilities);
 
   return {
     id: readId(ruleset.id, 'id'),
@@ -26,7 +23,7 @@ export function validateRuleset(value: unknown): Ruleset {
     player: validatePlayer(ruleset.player),
     obstacles: readArray(ruleset.obstacles, 'obstacles').map(validateObstacle),
     abilities,
-    loadout: { primaryAbilityId },
+    loadout: { abilityIds },
   };
 }
 
@@ -64,11 +61,26 @@ function validateObstacle(value: unknown): Ruleset['obstacles'][number] {
   };
 }
 
+function validateLoadoutAbilityIds(value: unknown, abilities: Ability[]): string[] {
+  const abilityIds = readArray(value, 'loadout.abilityIds');
+  if (abilityIds.length !== 4) {
+    throw new Error('loadout.abilityIds must contain exactly four ability ids');
+  }
+  return abilityIds.map((abilityId, index) => {
+    const id = readId(abilityId, `loadout.abilityIds[${index}]`);
+    if (!abilities.some((ability) => ability.id === id)) {
+      throw new Error(`loadout.abilityIds[${index}] must reference an ability`);
+    }
+    return id;
+  });
+}
+
 function validateAbility(value: unknown): Ability {
   const ability = assertRecord(value, 'ability');
   const base = {
     id: readId(ability.id, 'ability.id'),
     name: clampString(readString(ability.name, 'ability.name'), 1, 36, 'ability.name'),
+    targeting: validateTargeting(ability.targeting),
     damage: readNumber(ability.damage, 'ability.damage', 0, 10_000),
     cooldownTicks: readInt(ability.cooldownTicks, 'ability.cooldownTicks', 1, 3_600),
     radius: readNumber(ability.radius, 'ability.radius', 0.05, 10),
@@ -94,6 +106,14 @@ function validateAbility(value: unknown): Ability {
     } satisfies MeleeAbility;
   }
   throw new Error('ability.shape must be projectile or melee');
+}
+
+function validateTargeting(value: unknown): Ability['targeting'] {
+  const targeting = readString(value, 'ability.targeting');
+  if (targeting === 'free-aim' || targeting === 'aim-assist') {
+    return targeting;
+  }
+  throw new Error('ability.targeting must be free-aim or aim-assist');
 }
 
 function assertRecord(value: unknown, label: string): Record<string, unknown> {

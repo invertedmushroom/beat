@@ -7,11 +7,13 @@ export type RectObstacle = {
 };
 
 export type AbilityShape = 'projectile' | 'melee';
+export type AbilityTargeting = 'free-aim' | 'aim-assist';
 
 export type BaseAbility = {
   id: string;
   name: string;
   shape: AbilityShape;
+  targeting: AbilityTargeting;
   damage: number;
   cooldownTicks: number;
   radius: number;
@@ -56,7 +58,7 @@ export type Ruleset = {
   obstacles: RectObstacle[];
   abilities: Ability[];
   loadout: {
-    primaryAbilityId: string;
+    abilityIds: string[];
   };
 };
 
@@ -66,7 +68,7 @@ export type PlayerInput = {
   moveY: number;
   aimDx: number;
   aimDy: number;
-  primaryPressed: boolean;
+  castSlots: number[];
   sampledAtMs: number;
 };
 
@@ -89,7 +91,7 @@ export type PlayerSnapshot = {
   maxHp: number;
   alive: boolean;
   respawnTick: number;
-  primaryCooldownTicks: number;
+  slotCooldownTicks: number[];
   lastInputSequence: number;
 };
 

@@ -158,12 +158,6 @@ export class CanvasRenderer {
     this.ctx.textAlign = 'left';
     this.ctx.fillStyle = '#b9b4a8';
     this.ctx.fillText(`tick ${this.snapshot?.tick ?? 0}`, 16, height - 18);
-    const local = this.snapshot?.players.find((player) => player.playerId === this.localPlayerId);
-    if (local) {
-      this.ctx.textAlign = 'right';
-      this.ctx.fillStyle = local.primaryCooldownTicks > 0 ? '#ffb199' : '#ffe66d';
-      this.ctx.fillText(local.primaryCooldownTicks > 0 ? `primary ${local.primaryCooldownTicks}` : 'primary ready', width - 16, height - 18);
-    }
   }
 
   private drawHpBar(x: number, y: number, width: number, hp: number, maxHp: number, alive: boolean): void {

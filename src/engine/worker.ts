@@ -31,7 +31,6 @@ type RuntimePlayer = {
   alive: boolean;
   respawnTick: number;
   cooldownUntil: Map<string, number>;
-  lastPrimaryPressed: boolean;
   facing: Vec2;
 };
 
@@ -84,6 +83,8 @@ let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
+
+const AIM_ASSIST_CONE_DEGREES = 70;
 
 port.addEventListener('message', (event) => {
   void dispatchCommand(event.data);
@@ -214,7 +215,6 @@ function addPlayer(spawn: PlayerSpawn): void {
     alive: true,
     respawnTick: 0,
     cooldownUntil: new Map(),
-    lastPrimaryPressed: false,
     facing: { x: 1, y: 0 },
   });
 }
@@ -239,7 +239,6 @@ function step(): void {
     }
     if (!player.alive) {
       player.body.setLinvel({ x: 0, y: 0 }, true);
-      player.lastPrimaryPressed = player.input.primaryPressed;
       continue;
     }
 
@@ -249,10 +248,9 @@ function step(): void {
     const speed = ruleset.player.speed;
     player.body.setLinvel({ x: (axisX / mag) * speed, y: (axisY / mag) * speed }, true);
     player.facing = aimForPlayer(player);
-    if (player.input.primaryPressed && !player.lastPrimaryPressed) {
-      castPrimary(player);
+    for (const slot of player.input.castSlots) {
+      castSlot(player, slot);
     }
-    player.lastPrimaryPressed = player.input.primaryPressed;
   }
 
   world.step();
@@ -263,26 +261,30 @@ function step(): void {
   port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
 }
 
-function castPrimary(player: RuntimePlayer): void {
+function castSlot(player: RuntimePlayer, slot: number): void {
   const activeRuleset = ruleset;
   if (!activeRuleset) {
     return;
   }
-  const ability = activeRuleset.abilities.find((candidate) => candidate.id === activeRuleset.loadout.primaryAbilityId);
+  if (!Number.isInteger(slot) || slot < 0 || slot >= activeRuleset.loadout.abilityIds.length) {
+    return;
+  }
+  const abilityId = activeRuleset.loadout.abilityIds[slot];
+  const ability = activeRuleset.abilities.find((candidate) => candidate.id === abilityId);
   if (!ability || (player.cooldownUntil.get(ability.id) ?? 0) > tick) {
     return;
   }
   player.cooldownUntil.set(ability.id, tick + ability.cooldownTicks);
+  const aim = aimForAbility(player, ability);
   if (ability.shape === 'projectile') {
-    spawnProjectile(player, ability);
+    spawnProjectile(player, ability, aim);
   } else {
-    spawnMelee(player, ability);
+    spawnMelee(player, ability, aim);
   }
 }
 
-function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility): void {
+function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility, aim: Vec2): void {
   const pos = player.body.translation();
-  const aim = aimForPlayer(player);
   projectiles.push({
     projectileId: `proj-${++projectileIndex}`,
     ownerId: player.spawn.playerId,
@@ -296,9 +298,8 @@ function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility): voi
   });
 }
 
-function spawnMelee(player: RuntimePlayer, ability: MeleeAbility): void {
+function spawnMelee(player: RuntimePlayer, ability: MeleeAbility, aim: Vec2): void {
   const pos = player.body.translation();
-  const aim = aimForPlayer(player);
   melees.push({
     effectId: `melee-${++effectIndex}`,
     ownerId: player.spawn.playerId,
@@ -497,7 +498,6 @@ function readSnapshot(): EngineSnapshot {
     players: Array.from(players.values()).map((player) => {
       const pos = player.body.translation();
       const vel = player.body.linvel();
-      const primary = primaryAbility();
       return {
         playerId: player.spawn.playerId,
         displayName: player.spawn.displayName,
@@ -510,7 +510,7 @@ function readSnapshot(): EngineSnapshot {
         maxHp: activeRuleset.player.maxHp,
         alive: player.alive,
         respawnTick: player.respawnTick,
-        primaryCooldownTicks: primary ? Math.max(0, (player.cooldownUntil.get(primary.id) ?? 0) - tick) : 0,
+        slotCooldownTicks: activeRuleset.loadout.abilityIds.map((abilityId) => Math.max(0, (player.cooldownUntil.get(abilityId) ?? 0) - tick)),
         lastInputSequence: player.input.sequence,
       };
     }),
@@ -562,13 +562,53 @@ function neutralInput(): PlayerInput {
     moveY: 0,
     aimDx: 0,
     aimDy: 0,
-    primaryPressed: false,
+    castSlots: [],
     sampledAtMs: performance.now(),
   };
 }
 
-function primaryAbility(): Ability | undefined {
-  return ruleset?.abilities.find((ability) => ability.id === ruleset?.loadout.primaryAbilityId);
+function aimForAbility(player: RuntimePlayer, ability: Ability): Vec2 {
+  const baseAim = aimForPlayer(player);
+  if (ability.targeting !== 'aim-assist') {
+    return baseAim;
+  }
+  const target = findAimAssistTarget(player, ability, baseAim);
+  if (!target) {
+    return baseAim;
+  }
+  const origin = player.body.translation();
+  const targetPos = target.body.translation();
+  return normalized(targetPos.x - origin.x, targetPos.y - origin.y) ?? baseAim;
+}
+
+function findAimAssistTarget(owner: RuntimePlayer, ability: Ability, aim: Vec2): RuntimePlayer | undefined {
+  const origin = owner.body.translation();
+  const minDot = Math.cos((AIM_ASSIST_CONE_DEGREES * Math.PI) / 360);
+  let best: { player: RuntimePlayer; distance: number } | undefined;
+  for (const candidate of players.values()) {
+    if (candidate.spawn.playerId === owner.spawn.playerId || !candidate.alive) {
+      continue;
+    }
+    const pos = candidate.body.translation();
+    const dx = pos.x - origin.x;
+    const dy = pos.y - origin.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 0.001 || distance > ability.range + (ruleset?.player.radius ?? 0.5)) {
+      continue;
+    }
+    const dot = (dx / distance) * aim.x + (dy / distance) * aim.y;
+    if (dot < minDot) {
+      continue;
+    }
+    if (
+      !best ||
+      distance < best.distance ||
+      (distance === best.distance && candidate.spawn.playerId < best.player.spawn.playerId)
+    ) {
+      best = { player: candidate, distance };
+    }
+  }
+  return best?.player;
 }
 
 function aimForPlayer(player: RuntimePlayer): Vec2 {

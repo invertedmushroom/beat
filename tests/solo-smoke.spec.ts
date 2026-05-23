@@ -42,6 +42,18 @@ test('solo mode initializes Rapier and advances snapshots without console noise'
     )
     .toBeLessThan(0);
 
+  const beforeSlotCast = await page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0));
+  await page.keyboard.press('Digit2');
+  await expect
+    .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
+    .toBeGreaterThan(beforeSlotCast);
+
+  const beforeButtonCast = await page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0));
+  await page.locator('.skill-slot[data-slot="3"]').click();
+  await expect
+    .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
+    .toBeGreaterThan(beforeButtonCast);
+
   expect(consoleMessages.filter((line) => /rawintegrationparameters_new|deprecated parameters|Cannot read/.test(line))).toEqual([]);
 });
 
@@ -68,8 +80,21 @@ test('mobile viewport can move and fire with touch controls', async ({ page }) =
   await page.mouse.move(fire.x + fire.width / 2, fire.y + fire.height / 2);
   await page.mouse.down();
   await page.mouse.move(fire.x + fire.width / 2 + 36, fire.y + fire.height / 2, { steps: 3 });
+  await page.mouse.up();
   await expect
     .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
     .toBeGreaterThan(0);
+
+  const skill = await page.locator('.skill-slot[data-slot="2"]').boundingBox();
+  if (!skill) {
+    throw new Error('mobile skill slot missing');
+  }
+  const beforeSkillCast = await page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0));
+  await page.mouse.move(skill.x + skill.width / 2, skill.y + skill.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(skill.x + skill.width / 2 - 28, skill.y + skill.height / 2, { steps: 3 });
   await page.mouse.up();
+  await expect
+    .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
+    .toBeGreaterThan(beforeSkillCast);
 });

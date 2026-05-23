@@ -13,7 +13,7 @@ type ClientToHost =
         moveY: number;
         aimDx: number;
         aimDy: number;
-        primaryPressed: boolean;
+        castSlots: number[];
         sampledAtMs: number;
       };
     };
@@ -28,7 +28,7 @@ type HostToClient =
   | { type: 'notice'; message: string };
 ```
 
-Snapshots include players, active projectiles, and short-lived visual effects. Player snapshots include HP, alive/respawn state, last input sequence, and local-primary cooldown.
+Snapshots include players, active projectiles, and short-lived visual effects. Player snapshots include HP, alive/respawn state, last input sequence, and four loadout slot cooldowns.
 
 ## Authority
 

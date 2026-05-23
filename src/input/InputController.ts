@@ -8,6 +8,7 @@ export type TouchControlElements = {
   joystickKnob: HTMLElement;
   firePad: HTMLElement;
   fireKnob: HTMLElement;
+  skillButtons: HTMLElement[];
 };
 
 type Vec2 = { x: number; y: number };
@@ -17,16 +18,18 @@ export class InputController {
   private readonly listeners = new Set<InputListener>();
   private sequence = 0;
   private mouseAim?: Vec2;
-  private mousePrimaryPressed = false;
   private touchMove: Vec2 = { x: 0, y: 0 };
   private touchAim: Vec2 = { x: 0, y: 0 };
   private lastExplicitAim: Vec2 = { x: 1, y: 0 };
   private hasExplicitAim = false;
   private joystickPointerId?: number;
   private firePointerId?: number;
+  private skillPointerId?: number;
+  private skillPointerSlot?: number;
+  private skillPointerElement?: HTMLElement;
   private firePressed = false;
-  private primaryPulse = false;
   private aimOrigin?: Vec2;
+  private queuedCastSlots: number[] = [];
   private interval?: number;
 
   constructor(
@@ -46,7 +49,13 @@ export class InputController {
     controls?.firePad.addEventListener('pointerdown', this.onFirePointerDown);
     controls?.firePad.addEventListener('pointermove', this.onFirePointerMove);
     controls?.firePad.addEventListener('pointerup', this.onFirePointerUp);
-    controls?.firePad.addEventListener('pointercancel', this.onFirePointerUp);
+    controls?.firePad.addEventListener('pointercancel', this.onFirePointerCancel);
+    for (const button of controls?.skillButtons ?? []) {
+      button.addEventListener('pointerdown', this.onSkillPointerDown);
+      button.addEventListener('pointermove', this.onSkillPointerMove);
+      button.addEventListener('pointerup', this.onSkillPointerUp);
+      button.addEventListener('pointercancel', this.onSkillPointerCancel);
+    }
   }
 
   start(rateHz = 30): void {
@@ -85,7 +94,13 @@ export class InputController {
     this.controls?.firePad.removeEventListener('pointerdown', this.onFirePointerDown);
     this.controls?.firePad.removeEventListener('pointermove', this.onFirePointerMove);
     this.controls?.firePad.removeEventListener('pointerup', this.onFirePointerUp);
-    this.controls?.firePad.removeEventListener('pointercancel', this.onFirePointerUp);
+    this.controls?.firePad.removeEventListener('pointercancel', this.onFirePointerCancel);
+    for (const button of this.controls?.skillButtons ?? []) {
+      button.removeEventListener('pointerdown', this.onSkillPointerDown);
+      button.removeEventListener('pointermove', this.onSkillPointerMove);
+      button.removeEventListener('pointerup', this.onSkillPointerUp);
+      button.removeEventListener('pointercancel', this.onSkillPointerCancel);
+    }
     this.listeners.clear();
   }
 
@@ -96,26 +111,27 @@ export class InputController {
       x: keyboardX + this.touchMove.x,
       y: keyboardY + this.touchMove.y,
     });
-    const explicitAim = this.firePressed && magnitude(this.touchAim) > 0.01 ? normalized(this.touchAim) : this.mouseAim;
+    const touchAiming = this.firePressed || this.skillPointerId !== undefined;
+    const explicitAim = touchAiming && magnitude(this.touchAim) > 0.01 ? normalized(this.touchAim) : this.mouseAim;
     if (explicitAim && magnitude(explicitAim) > 0.01) {
       this.lastExplicitAim = explicitAim;
       this.hasExplicitAim = true;
     }
     const fallbackAim = this.hasExplicitAim ? this.lastExplicitAim : magnitude(move) > 0.01 ? move : { x: 1, y: 0 };
     const aim = explicitAim ?? fallbackAim;
+    const castSlots = this.drainCastSlots();
     const input: PlayerInput = {
       sequence: ++this.sequence,
       moveX: move.x,
       moveY: move.y,
       aimDx: aim.x,
       aimDy: aim.y,
-      primaryPressed: this.keys.has('Space') || this.mousePrimaryPressed || this.firePressed || this.primaryPulse,
+      castSlots,
       sampledAtMs: performance.now(),
     };
     for (const listener of this.listeners) {
       listener(input);
     }
-    this.primaryPulse = false;
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
@@ -124,8 +140,9 @@ export class InputController {
     }
     if (isGameKey(event.code)) {
       event.preventDefault();
-      if (event.code === 'Space' && !this.keys.has('Space')) {
-        this.primaryPulse = true;
+      const slot = slotForKey(event.code);
+      if (slot !== undefined && !this.keys.has(event.code)) {
+        this.queueCast(slot);
       }
       this.keys.add(event.code);
     }
@@ -154,8 +171,7 @@ export class InputController {
     }
     event.preventDefault();
     this.updateMouseAim(event);
-    this.mousePrimaryPressed = true;
-    this.primaryPulse = true;
+    this.queueCast(0);
     this.target.setPointerCapture(event.pointerId);
   };
 
@@ -164,7 +180,6 @@ export class InputController {
       return;
     }
     this.updateMouseAim(event);
-    this.mousePrimaryPressed = false;
   };
 
   private readonly onJoystickPointerDown = (event: PointerEvent): void => {
@@ -206,12 +221,70 @@ export class InputController {
     if (event.pointerId !== this.firePointerId) {
       return;
     }
+    this.updateFire(event);
+    this.rememberTouchAim();
+    this.queueCast(0);
+    this.clearFirePointer();
+  };
+
+  private readonly onFirePointerCancel = (event: PointerEvent): void => {
+    if (event.pointerId !== this.firePointerId) {
+      return;
+    }
+    this.clearFirePointer();
+  };
+
+  private readonly onSkillPointerDown = (event: PointerEvent): void => {
+    const button = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+    const slot = button ? slotFromElement(button) : undefined;
+    if (!button || slot === undefined) {
+      return;
+    }
+    event.preventDefault();
+    this.skillPointerId = event.pointerId;
+    this.skillPointerSlot = slot;
+    this.skillPointerElement = button;
+    button.setPointerCapture(event.pointerId);
+    this.updateSkillAim(event);
+  };
+
+  private readonly onSkillPointerMove = (event: PointerEvent): void => {
+    if (event.pointerId === this.skillPointerId) {
+      this.updateSkillAim(event);
+    }
+  };
+
+  private readonly onSkillPointerUp = (event: PointerEvent): void => {
+    if (event.pointerId !== this.skillPointerId || this.skillPointerSlot === undefined) {
+      return;
+    }
+    this.updateSkillAim(event);
+    this.rememberTouchAim();
+    this.queueCast(this.skillPointerSlot);
+    this.clearSkillPointer();
+  };
+
+  private readonly onSkillPointerCancel = (event: PointerEvent): void => {
+    if (event.pointerId !== this.skillPointerId) {
+      return;
+    }
+    this.clearSkillPointer();
+  };
+
+  private clearFirePointer(): void {
     this.firePointerId = undefined;
     this.firePressed = false;
     this.touchAim = { x: 0, y: 0 };
     this.controls?.fireKnob.style.setProperty('--knob-x', '0px');
     this.controls?.fireKnob.style.setProperty('--knob-y', '0px');
-  };
+  }
+
+  private clearSkillPointer(): void {
+    this.skillPointerId = undefined;
+    this.skillPointerSlot = undefined;
+    this.skillPointerElement = undefined;
+    this.touchAim = { x: 0, y: 0 };
+  }
 
   private updateJoystick(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.joystick);
@@ -225,6 +298,19 @@ export class InputController {
     this.touchAim = magnitude(stick.value) > 0.01 ? stick.value : this.lastExplicitAim;
     this.controls?.fireKnob.style.setProperty('--knob-x', `${stick.offset.x}px`);
     this.controls?.fireKnob.style.setProperty('--knob-y', `${stick.offset.y}px`);
+  }
+
+  private updateSkillAim(event: PointerEvent): void {
+    const stick = this.readPadVector(event, this.skillPointerElement);
+    this.touchAim = magnitude(stick.value) > 0.01 ? stick.value : this.lastExplicitAim;
+  }
+
+  private rememberTouchAim(): void {
+    if (magnitude(this.touchAim) <= 0.01) {
+      return;
+    }
+    this.lastExplicitAim = normalized(this.touchAim);
+    this.hasExplicitAim = true;
   }
 
   private readPadVector(event: PointerEvent, element: HTMLElement | undefined): { value: Vec2; offset: Vec2 } {
@@ -258,10 +344,35 @@ export class InputController {
       y: event.clientY - origin.y,
     });
   }
+
+  private queueCast(slot: number): void {
+    this.queuedCastSlots.push(slot);
+  }
+
+  private drainCastSlots(): number[] {
+    const slots = Array.from(new Set(this.queuedCastSlots.filter((slot) => Number.isInteger(slot) && slot >= 0 && slot < 4)));
+    this.queuedCastSlots = [];
+    return slots;
+  }
 }
 
 function isGameKey(code: string): boolean {
-  return ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code);
+  return ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(code);
+}
+
+function slotForKey(code: string): number | undefined {
+  if (code === 'Space') {
+    return 0;
+  }
+  if (/^Digit[1-4]$/.test(code)) {
+    return Number(code.at(-1)) - 1;
+  }
+  return undefined;
+}
+
+function slotFromElement(element: HTMLElement): number | undefined {
+  const slot = Number(element.dataset.slot);
+  return Number.isInteger(slot) && slot >= 0 && slot < 4 ? slot : undefined;
 }
 
 function isTextInput(target: EventTarget | null): boolean {

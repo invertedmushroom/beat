@@ -17,7 +17,7 @@ npm run dev
 
 Open `http://127.0.0.1:5177`.
 
-For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, and fire the primary ability with `Space`. On phones, use the left virtual joystick and the right fire pad.
+For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, aim with the mouse, and cast skills with `Space`, left click, or `1`-`4`. On phones, use the left virtual joystick and the right skill buttons or fire pad.
 
 For a quick multiplayer smoke test, open the app in two tabs:
 
@@ -33,8 +33,8 @@ The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or 
 
 - arena size and static obstacles
 - player speed, HP, radius, damping, and respawn time
-- a primary loadout ability
-- projectile and melee ability definitions with damage, cooldown, range, radius, color, and shape-specific timing
+- a four-slot loadout
+- projectile and melee ability definitions with targeting, damage, cooldown, range, radius, color, and shape-specific timing
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 
