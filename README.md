@@ -6,12 +6,7 @@ The important boundary: the browser can cache and run the game client, local rul
 
 ## Play
 
-```
-<div align="center">
-
-### [PLAY NOW](https://invertedmushroom.github.io/beat/)
-
-</div>
+[▶ PLAY NOW](https://invertedmushroom.github.io/beat/)
 
 ## Run
 
