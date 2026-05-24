@@ -120,7 +120,7 @@ export class LocalRoomDirectory implements RoomDirectory {
   private activeRooms(): RoomInfo[] {
     const now = Date.now();
     return this.readRooms()
-      .filter((room) => room.status === 'open' && now - room.lastHeartbeat < ROOM_TTL_MS)
+      .filter((room) => room.status !== 'closed' && now - room.lastHeartbeat < ROOM_TTL_MS)
       .sort(compareRooms);
   }
 

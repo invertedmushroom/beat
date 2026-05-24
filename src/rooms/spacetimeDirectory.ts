@@ -332,7 +332,7 @@ function toRoomStatus(value: string): RoomInfo['status'] {
 function activeRooms(rooms: RoomInfo[]): RoomInfo[] {
   const now = Date.now();
   return rooms
-    .filter((room) => room.status === 'open' && now - room.lastHeartbeat < ROOM_TTL_MS)
+    .filter((room) => room.status !== 'closed' && now - room.lastHeartbeat < ROOM_TTL_MS)
     .sort(compareRooms);
 }
 

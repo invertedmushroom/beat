@@ -294,6 +294,11 @@ export class BeatApp {
   }
 
   private async joinRoom(room: RoomInfo): Promise<void> {
+    if (room.status !== 'open' || room.playerCount >= room.maxPlayers) {
+      this.log(`join blocked: ${room.name} is full`);
+      this.setStatus(`room unavailable: ${room.name}`);
+      return;
+    }
     this.stopActiveMode();
     this.mode = 'client';
     this.localPlayerId = undefined;
@@ -336,8 +341,13 @@ export class BeatApp {
     this.clientSession.onSnapshot((snapshot) => {
       this.consumeSnapshot(snapshot, `joined: ${room.name}`);
     });
-    await this.clientSession.connect(room);
-    this.setStatus(`joining: ${room.name}`);
+    try {
+      await this.clientSession.connect(room);
+      this.setStatus(`joining: ${room.name}`);
+    } catch (error: unknown) {
+      this.log(`join failed: ${readError(error)}`);
+      this.stopActiveMode();
+    }
   }
 
   private handleInput(input: PlayerInput): void {
@@ -404,13 +414,17 @@ export class BeatApp {
     }
     for (const room of rooms) {
       const row = document.createElement('button');
+      const joinable = room.status === 'open' && room.playerCount < room.maxPlayers;
       row.className = 'room-row';
       row.type = 'button';
+      row.disabled = !joinable;
       row.innerHTML = `
         <span class="room-row__name">${escapeHtml(room.name)}</span>
-        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers} · ${shortHash(room.rulesetHash)}</span>
+        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers}${joinable ? '' : ' · full'} · ${shortHash(room.rulesetHash)}</span>
       `;
-      row.addEventListener('click', () => void this.joinRoom(room));
+      if (joinable) {
+        row.addEventListener('click', () => void this.joinRoom(room));
+      }
       this.roomList.append(row);
     }
   }

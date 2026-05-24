@@ -13,6 +13,8 @@ const SNAPSHOT_CHANNEL_LABEL = 'beat-snapshot';
 const LEGACY_CHANNEL_LABEL = 'beat';
 const HOST_SNAPSHOT_INTERVAL_MS = 50;
 const MAX_SNAPSHOT_BUFFERED_AMOUNT = 64_000;
+const CLIENT_CONNECT_TIMEOUT_MS = 15_000;
+const MAX_PEER_DISPLAY_NAME_LENGTH = 24;
 
 type LogListener = (message: string) => void;
 type SnapshotListener = (snapshot: EngineSnapshot) => void;
@@ -82,7 +84,7 @@ export class HostSession {
   async start(): Promise<void> {
     this.log(describeRtcConfig(await getRtcConfig()));
     try {
-      await this.options.directory.advertiseRoom(this.options.room);
+      await this.options.directory.advertiseRoom(this.currentRoomInfo());
     } catch (error: unknown) {
       this.log(`room advertise failed: ${readError(error)}`);
     }
@@ -151,12 +153,20 @@ export class HostSession {
   }
 
   private heartbeat(): void {
-    const room = {
+    this.publishRoomState('room heartbeat failed');
+  }
+
+  private currentRoomInfo(): RoomInfo {
+    return {
       ...this.options.room,
       playerCount: this.currentPlayerCount,
+      status: this.currentPlayerCount >= this.options.room.maxPlayers ? 'full' : 'open',
       lastHeartbeat: Date.now(),
     };
-    void Promise.resolve(this.options.directory.advertiseRoom(room)).catch((error: unknown) => this.log(`room heartbeat failed: ${readError(error)}`));
+  }
+
+  private publishRoomState(errorPrefix: string): void {
+    void Promise.resolve(this.options.directory.advertiseRoom(this.currentRoomInfo())).catch((error: unknown) => this.log(`${errorPrefix}: ${readError(error)}`));
   }
 
   private async handleSignal(signal: RoomSignal): Promise<void> {
@@ -273,23 +283,37 @@ export class HostSession {
   }
 
   private handleHello(peerId: string, peer: PeerState, channel: RTCDataChannel, displayName: string): void {
-    peer.displayName = displayName;
+    const normalizedDisplayName = displayName.trim().slice(0, MAX_PEER_DISPLAY_NAME_LENGTH) || 'Player';
+    peer.displayName = normalizedDisplayName;
+    if (!peer.playerId && this.currentPlayerCount >= this.options.room.maxPlayers) {
+      const target = peer.controlChannel?.readyState === 'open' ? peer.controlChannel : channel;
+      const notice = encodeMessage({ type: 'notice', message: 'room is full' });
+      target.send(notice);
+      this.bytesSent += notice.length;
+      const closed = encodeMessage({ type: 'host-closed' });
+      target.send(closed);
+      this.bytesSent += closed.length;
+      this.log(`join rejected (room full): ${shortPeer(peerId)}`);
+      this.closePeer(peerId, peer, false);
+      return;
+    }
     if (!peer.playerId) {
       peer.playerId = createId('player');
       this.currentPlayerCount += 1;
       this.options.engine.addPlayer({
         playerId: peer.playerId,
-        displayName,
+        displayName: normalizedDisplayName,
         hue: hueFromString(peer.playerId),
         local: false,
         team: this.options.ruleset.match.teams[0]?.id ?? 'players',
       });
+      this.publishRoomState('room heartbeat failed');
     }
-    const response = encodeMessage({ type: 'welcome', playerId: peer.playerId, room: this.options.room, ruleset: this.options.ruleset });
+    const response = encodeMessage({ type: 'welcome', playerId: peer.playerId, room: this.currentRoomInfo(), ruleset: this.options.ruleset });
     const target = peer.controlChannel?.readyState === 'open' ? peer.controlChannel : channel;
     target.send(response);
     this.bytesSent += response.length;
-    this.log(`${displayName} joined`);
+    this.log(`${normalizedDisplayName} joined`);
   }
 
   private applyPeerInputs(peer: PeerState, message: Extract<ClientToHostMessage, { type: 'input' }>): void {
@@ -345,7 +369,9 @@ export class HostSession {
   }
 
   private closePeer(peerId: string, peer: PeerState, notifyHostClosed: boolean): void {
+    let removedPlayer = false;
     if (peer.playerId) {
+      removedPlayer = true;
       this.options.engine.removePlayer(peer.playerId);
       this.currentPlayerCount = Math.max(1, this.currentPlayerCount - 1);
     }
@@ -363,6 +389,9 @@ export class HostSession {
     }
     peer.connection.close();
     this.peers.delete(peerId);
+    if (removedPlayer) {
+      this.publishRoomState('room heartbeat failed');
+    }
   }
 
   private bindConnectionLogs(connection: RTCPeerConnection, label: string): void {
@@ -679,10 +708,18 @@ export class ClientSession {
   }
 
   private checkHostSilence(): void {
-    if (this.disconnected || !this.localPlayerId || !this.receivedFirstSnapshot) {
+    if (this.disconnected) {
       return;
     }
-    if (Date.now() - this.lastHostMessageAt > 15_000) {
+    const silenceMs = Date.now() - this.lastHostMessageAt;
+    if (!this.receivedFirstSnapshot) {
+      if (silenceMs > CLIENT_CONNECT_TIMEOUT_MS) {
+        this.log('connection timed out before first snapshot');
+        this.notifyDisconnect();
+      }
+      return;
+    }
+    if (silenceMs > CLIENT_CONNECT_TIMEOUT_MS) {
       this.log('host timed out');
       this.notifyDisconnect();
     }

@@ -135,6 +135,9 @@ export const requestJoinHostedRoom = spacetimedb.reducer(
     const room = requireOpenRoom(ctx, roomId);
     const membershipId = makeMembershipId(roomId, peerId);
     const existing = ctx.db.hostedRoomPeer.membershipId.find(membershipId);
+    if (!existing && room.playerCount >= room.maxPlayers) {
+      throw new Error('Room is full');
+    }
     if (existing && !sameIdentity(existing.peerIdentity, ctx.sender)) {
       throw new SenderError('This peer id is already owned by another identity');
     }
