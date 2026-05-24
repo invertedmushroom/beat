@@ -2,7 +2,12 @@
 // by every RTCPeerConnection in the app. Keep env access here so the rest of
 // src/net stays portable.
 
-const DEFAULT_STUN_URLS = ['stun:stun.l.google.com:19302'];
+const DEFAULT_STUN_URLS = [
+  'stun:stun.l.google.com:19302',
+  'stun:stun1.l.google.com:19302',
+  'stun:stun.cloudflare.com:3478',
+  'stun:global.stun.twilio.com:3478',
+];
 
 let cachedRtcConfig: Promise<RTCConfiguration> | undefined;
 
