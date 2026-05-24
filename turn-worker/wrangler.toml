@@ -1,0 +1,14 @@
+name = "beat-turn"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+
+# Set these with `npx wrangler secret put TURN_TOKEN_ID` and
+# `npx wrangler secret put TURN_API_TOKEN`. Do NOT put secrets here.
+
+[vars]
+# Comma-separated list of allowed browser origins (your GitHub Pages URL,
+# plus localhost during development). Update before deploying.
+ALLOWED_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,https://invertedmushroom.github.io"
+
+# Credential TTL in seconds. 24h is fine for a game session.
+TURN_TTL_SECONDS = "86400"

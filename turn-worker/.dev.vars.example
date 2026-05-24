@@ -1,0 +1,4 @@
+# Copy to .dev.vars (gitignored) for `wrangler dev` only.
+# In production, use `wrangler secret put` instead.
+TURN_TOKEN_ID=
+TURN_API_TOKEN=
