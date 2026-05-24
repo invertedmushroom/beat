@@ -38,6 +38,19 @@ describe('rulesetFingerprint', () => {
     expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
   });
 
+  it('changes when mechanics tuning changes', () => {
+    const a = createDefaultRuleset();
+    const b = {
+      ...a,
+      mechanics: {
+        ...a.mechanics,
+        statuses: a.mechanics.statuses.map((status) => (status.id === 'chilled' ? { ...status, durationTicks: status.durationTicks + 1 } : status)),
+      },
+    };
+
+    expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
+  });
+
   it('changes when loadout order changes', () => {
     const a = createDefaultRuleset();
     const b = {

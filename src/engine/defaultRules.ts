@@ -3,13 +3,13 @@ import { validateRuleset } from './rulesValidation';
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({
-    id: 'beat-arena-v5',
-    name: 'Beat Arena Skills V5',
-    version: 5,
+    id: 'beat-arena-v6',
+    name: 'Beat Arena Mechanics V6',
+    version: 6,
     tickRate: 30,
     maxPlayers: 6,
     mapBundleId: 'local-grid-arena',
-    contentHash: 'local-content-v6',
+    contentHash: 'local-content-v7',
     arena: {
       width: 38,
       height: 24,
@@ -41,6 +41,7 @@ export function createDefaultRuleset(): Ruleset {
         name: 'Pulse Bolt',
         shape: 'projectile',
         targeting: 'free-aim',
+        tags: ['electric'],
         damage: 26,
         cooldownTicks: 14,
         radius: 0.22,
@@ -51,6 +52,11 @@ export function createDefaultRuleset(): Ruleset {
             kind: 'knockback',
             force: 1.55,
           },
+          {
+            kind: 'applyStatus',
+            target: 'hit',
+            statusId: 'shocked',
+          },
         ],
         speed: 1.05,
         lifetimeTicks: 34,
@@ -60,6 +66,7 @@ export function createDefaultRuleset(): Ruleset {
         name: 'Arc Slash',
         shape: 'melee',
         targeting: 'aim-assist',
+        tags: ['frost', 'melee'],
         damage: 34,
         cooldownTicks: 22,
         radius: 1.3,
@@ -67,9 +74,9 @@ export function createDefaultRuleset(): Ruleset {
         color: '#ff6b4a',
         effects: [
           {
-            kind: 'slow',
-            multiplier: 0.48,
-            durationTicks: 42,
+            kind: 'applyStatus',
+            target: 'hit',
+            statusId: 'chilled',
           },
         ],
         arcDegrees: 105,
@@ -81,6 +88,7 @@ export function createDefaultRuleset(): Ruleset {
         name: 'Seeker Spark',
         shape: 'projectile',
         targeting: 'aim-assist',
+        tags: ['support'],
         damage: 18,
         cooldownTicks: 18,
         radius: 0.18,
@@ -101,6 +109,7 @@ export function createDefaultRuleset(): Ruleset {
         name: 'Ion Lance',
         shape: 'projectile',
         targeting: 'free-aim',
+        tags: ['overcharge'],
         damage: 44,
         cooldownTicks: 38,
         radius: 0.16,
@@ -127,6 +136,128 @@ export function createDefaultRuleset(): Ruleset {
         lifetimeTicks: 30,
       },
     ],
+    mechanics: {
+      statuses: [
+        {
+          id: 'shocked',
+          name: 'Shocked',
+          color: '#ffe66d',
+          durationTicks: 72,
+          tags: ['electric'],
+        },
+        {
+          id: 'chilled',
+          name: 'Chilled',
+          color: '#62d2ff',
+          durationTicks: 78,
+          tags: ['frost'],
+          stacking: 'stack',
+          maxStacks: 2,
+          movementMultiplier: 0.68,
+        },
+        {
+          id: 'overheated',
+          name: 'Overheated',
+          color: '#ff6b4a',
+          durationTicks: 90,
+          tags: ['heat'],
+          movementMultiplier: 0.86,
+          damageDealtMultiplier: 1.12,
+        },
+      ],
+      resources: [
+        {
+          id: 'shield',
+          name: 'Shield',
+          color: '#2fd17c',
+          max: 36,
+          start: 18,
+          regenPerTick: 0.08,
+        },
+        {
+          id: 'heat',
+          name: 'Heat',
+          color: '#ff6b4a',
+          max: 100,
+          start: 0,
+          regenPerTick: -0.18,
+        },
+      ],
+      triggers: [
+        {
+          id: 'shock-bonus',
+          name: 'Shock Bonus',
+          event: 'onHit',
+          conditions: [
+            { kind: 'abilityTag', tag: 'electric' },
+            { kind: 'hasStatus', target: 'target', statusId: 'shocked' },
+          ],
+          actions: [
+            { kind: 'dealDamage', target: 'target', amount: 9, color: '#ffe66d' },
+            { kind: 'flashEffect', target: 'target', radius: 1.25, color: '#ffe66d' },
+          ],
+        },
+        {
+          id: 'chill-shatter',
+          name: 'Chill Shatter',
+          event: 'onHit',
+          conditions: [
+            { kind: 'abilityTag', tag: 'frost' },
+            { kind: 'hasStatus', target: 'target', statusId: 'chilled' },
+          ],
+          actions: [
+            { kind: 'dealDamage', target: 'target', amount: 7, color: '#62d2ff' },
+            { kind: 'flashEffect', target: 'target', radius: 1.45, color: '#62d2ff' },
+          ],
+        },
+        {
+          id: 'spark-shield',
+          name: 'Spark Shield',
+          event: 'onCast',
+          conditions: [{ kind: 'abilityTag', tag: 'support' }],
+          actions: [
+            { kind: 'modifyResource', target: 'source', resourceId: 'shield', amount: 12 },
+            { kind: 'flashEffect', target: 'source', radius: 1.5, color: '#2fd17c' },
+          ],
+        },
+        {
+          id: 'shield-cushion',
+          name: 'Shield Cushion',
+          event: 'onDamageTaken',
+          conditions: [{ kind: 'resourceAtLeast', target: 'target', resourceId: 'shield', amount: 10 }],
+          actions: [
+            { kind: 'modifyResource', target: 'target', resourceId: 'shield', amount: -10 },
+            { kind: 'heal', target: 'target', amount: 8 },
+            { kind: 'flashEffect', target: 'target', radius: 1.25, color: '#2fd17c' },
+          ],
+        },
+        {
+          id: 'lance-heat',
+          name: 'Lance Heat',
+          event: 'onCast',
+          conditions: [{ kind: 'abilityTag', tag: 'overcharge' }],
+          actions: [
+            { kind: 'modifyResource', target: 'source', resourceId: 'heat', amount: 26 },
+            { kind: 'applyStatus', target: 'source', statusId: 'overheated', durationTicks: 72 },
+            { kind: 'flashEffect', target: 'source', radius: 1.75, color: '#ff6b4a' },
+          ],
+        },
+        {
+          id: 'heated-lance-pop',
+          name: 'Heated Lance Pop',
+          event: 'onHit',
+          conditions: [
+            { kind: 'abilityTag', tag: 'overcharge' },
+            { kind: 'resourceAtLeast', target: 'source', resourceId: 'heat', amount: 40 },
+          ],
+          actions: [
+            { kind: 'modifyResource', target: 'source', resourceId: 'heat', amount: -30 },
+            { kind: 'dealDamage', target: 'target', amount: 12, color: '#ff6b4a' },
+            { kind: 'flashEffect', target: 'target', radius: 1.7, color: '#ff6b4a' },
+          ],
+        },
+      ],
+    },
     loadout: {
       abilityIds: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'],
     },

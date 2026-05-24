@@ -157,13 +157,14 @@ describe('rulesValidation', () => {
                 { kind: 'slow', multiplier: 0.5, durationTicks: 30 },
                 { kind: 'heal', target: 'self', amount: 12 },
                 { kind: 'selfDash', distance: 1.4 },
+                { kind: 'applyStatus', target: 'hit', statusId: 'shocked' },
               ],
             }
           : candidate,
       ),
     }).abilities[0];
 
-    expect(ability.effects).toHaveLength(4);
+    expect(ability.effects).toHaveLength(5);
   });
 
   it('rejects invalid ability effects', () => {
@@ -181,5 +182,68 @@ describe('rulesValidation', () => {
         ),
       }),
     ).toThrow(/ability\.effect\.multiplier/);
+  });
+
+  it('validates mechanics statuses, resources, triggers, and references', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      mechanics: {
+        statuses: [
+          ...ruleset.mechanics.statuses,
+          {
+            id: 'burning',
+            name: 'Burning',
+            color: '#ff6b4a',
+            durationTicks: 90,
+            tags: ['fire'],
+            movementMultiplier: 0.82,
+            periodic: {
+              everyTicks: 15,
+              actions: [{ kind: 'dealDamage', target: 'target', amount: 3, color: '#ff6b4a' }],
+            },
+          },
+        ],
+        resources: [...ruleset.mechanics.resources, { id: 'energy', name: 'Energy', color: '#62d2ff', max: 100, start: 40, regenPerTick: 0.5 }],
+        triggers: [
+          ...ruleset.mechanics.triggers,
+          {
+            id: 'burn-spend',
+            event: 'onHit',
+            conditions: [
+              { kind: 'hasStatus', target: 'target', statusId: 'burning' },
+              { kind: 'resourceAtLeast', target: 'source', resourceId: 'energy', amount: 10 },
+            ],
+            actions: [
+              { kind: 'modifyResource', target: 'source', resourceId: 'energy', amount: -10 },
+              { kind: 'flashEffect', target: 'target', radius: 1.2, color: '#ff6b4a' },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(parsed.mechanics.statuses.find((status) => status.id === 'burning')?.periodic?.actions).toHaveLength(1);
+    expect(parsed.mechanics.triggers.find((trigger) => trigger.id === 'burn-spend')?.actions).toHaveLength(2);
+  });
+
+  it('rejects invalid mechanics references', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        mechanics: {
+          ...ruleset.mechanics,
+          triggers: [
+            {
+              id: 'bad-trigger',
+              event: 'onHit',
+              conditions: [{ kind: 'hasStatus', target: 'target', statusId: 'missing-status' }],
+              actions: [{ kind: 'flashEffect', target: 'target', radius: 1, color: '#ffffff' }],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/unknown status/);
   });
 });

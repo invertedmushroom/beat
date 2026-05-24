@@ -1,4 +1,20 @@
-import type { Ability, AbilityCharge, AbilityEffect, MeleeAbility, ProjectileAbility, Ruleset } from './protocol';
+import type {
+  Ability,
+  AbilityCharge,
+  AbilityEffect,
+  MechanicAction,
+  MechanicCondition,
+  MechanicDirectionRef,
+  MechanicEventKind,
+  MechanicPlayerRef,
+  MechanicTrigger,
+  MechanicsConfig,
+  MeleeAbility,
+  ProjectileAbility,
+  ResourceDefinition,
+  Ruleset,
+  StatusDefinition,
+} from './protocol';
 
 export function parseRulesetJson(json: string): Ruleset {
   const parsed = JSON.parse(json) as unknown;
@@ -8,8 +24,10 @@ export function parseRulesetJson(json: string): Ruleset {
 export function validateRuleset(value: unknown): Ruleset {
   const ruleset = assertRecord(value, 'ruleset');
   const abilities = readArray(ruleset.abilities, 'abilities').map(validateAbility);
+  const mechanics = validateMechanics(ruleset.mechanics);
   const loadout = assertRecord(ruleset.loadout, 'loadout');
   const abilityIds = validateLoadoutAbilityIds(loadout.abilityIds, abilities);
+  validateMechanicReferences(abilities, mechanics);
 
   return {
     id: readId(ruleset.id, 'id'),
@@ -23,6 +41,7 @@ export function validateRuleset(value: unknown): Ruleset {
     player: validatePlayer(ruleset.player),
     obstacles: readArray(ruleset.obstacles, 'obstacles').map(validateObstacle),
     abilities,
+    mechanics,
     loadout: { abilityIds },
   };
 }
@@ -85,6 +104,246 @@ function validateObstacle(value: unknown): Ruleset['obstacles'][number] {
   };
 }
 
+function validateMechanics(value: unknown): MechanicsConfig {
+  if (value === undefined) {
+    return { statuses: [], resources: [], triggers: [] };
+  }
+  const mechanics = assertRecord(value, 'mechanics');
+  const statuses = readArray(mechanics.statuses, 'mechanics.statuses').map(validateStatusDefinition);
+  const resources = readArray(mechanics.resources, 'mechanics.resources').map(validateResourceDefinition);
+  const triggers = readArray(mechanics.triggers, 'mechanics.triggers').map(validateMechanicTrigger);
+  assertUniqueIds(statuses, 'mechanics.statuses');
+  assertUniqueIds(resources, 'mechanics.resources');
+  assertUniqueIds(triggers, 'mechanics.triggers');
+  return { statuses, resources, triggers };
+}
+
+function validateStatusDefinition(value: unknown): StatusDefinition {
+  const status = assertRecord(value, 'mechanics.status');
+  const stacking = status.stacking === undefined ? undefined : validateStatusStacking(status.stacking);
+  const maxStacks = status.maxStacks === undefined ? undefined : readInt(status.maxStacks, 'mechanics.status.maxStacks', 1, 50);
+  const movementMultiplier = readOptionalNumber(status.movementMultiplier, 'mechanics.status.movementMultiplier', 0.05, 5);
+  const damageDealtMultiplier = readOptionalNumber(status.damageDealtMultiplier, 'mechanics.status.damageDealtMultiplier', 0, 10);
+  const damageTakenMultiplier = readOptionalNumber(status.damageTakenMultiplier, 'mechanics.status.damageTakenMultiplier', 0, 10);
+  return {
+    id: readId(status.id, 'mechanics.status.id'),
+    name: clampString(readString(status.name, 'mechanics.status.name'), 1, 36, 'mechanics.status.name'),
+    color: readColor(status.color, 'mechanics.status.color'),
+    durationTicks: readInt(status.durationTicks, 'mechanics.status.durationTicks', 1, 3_600),
+    tags: validateTags(status.tags, 'mechanics.status.tags'),
+    ...(stacking === undefined ? {} : { stacking }),
+    ...(maxStacks === undefined ? {} : { maxStacks }),
+    ...(movementMultiplier === undefined ? {} : { movementMultiplier }),
+    ...(damageDealtMultiplier === undefined ? {} : { damageDealtMultiplier }),
+    ...(damageTakenMultiplier === undefined ? {} : { damageTakenMultiplier }),
+    periodic: validateStatusPeriodic(status.periodic),
+  };
+}
+
+function validateStatusStacking(value: unknown): StatusDefinition['stacking'] {
+  const stacking = readString(value, 'mechanics.status.stacking');
+  if (stacking === 'refresh' || stacking === 'stack') {
+    return stacking;
+  }
+  throw new Error('mechanics.status.stacking must be refresh or stack');
+}
+
+function validateStatusPeriodic(value: unknown): StatusDefinition['periodic'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  const periodic = assertRecord(value, 'mechanics.status.periodic');
+  const actions = readArray(periodic.actions, 'mechanics.status.periodic.actions').map((action) =>
+    validateMechanicAction(action, 'mechanics.status.periodic.action'),
+  );
+  if (actions.length === 0) {
+    throw new Error('mechanics.status.periodic.actions must contain at least one action');
+  }
+  return {
+    everyTicks: readInt(periodic.everyTicks, 'mechanics.status.periodic.everyTicks', 1, 1_200),
+    actions,
+  };
+}
+
+function validateResourceDefinition(value: unknown): ResourceDefinition {
+  const resource = assertRecord(value, 'mechanics.resource');
+  const max = readNumber(resource.max, 'mechanics.resource.max', 1, 100_000);
+  const start = readNumber(resource.start, 'mechanics.resource.start', 0, max);
+  return {
+    id: readId(resource.id, 'mechanics.resource.id'),
+    name: clampString(readString(resource.name, 'mechanics.resource.name'), 1, 36, 'mechanics.resource.name'),
+    color: readColor(resource.color, 'mechanics.resource.color'),
+    max,
+    start,
+    regenPerTick: readNumber(resource.regenPerTick, 'mechanics.resource.regenPerTick', -100, 100),
+  };
+}
+
+function validateMechanicTrigger(value: unknown): MechanicTrigger {
+  const trigger = assertRecord(value, 'mechanics.trigger');
+  const conditions =
+    trigger.conditions === undefined
+      ? undefined
+      : readArray(trigger.conditions, 'mechanics.trigger.conditions').map(validateMechanicCondition);
+  const actions = readArray(trigger.actions, 'mechanics.trigger.actions').map((action) => validateMechanicAction(action, 'mechanics.trigger.action'));
+  if (actions.length === 0) {
+    throw new Error('mechanics.trigger.actions must contain at least one action');
+  }
+  return {
+    id: readId(trigger.id, 'mechanics.trigger.id'),
+    name: trigger.name === undefined ? undefined : clampString(readString(trigger.name, 'mechanics.trigger.name'), 1, 48, 'mechanics.trigger.name'),
+    event: validateMechanicEvent(trigger.event),
+    ...(conditions === undefined || conditions.length === 0 ? {} : { conditions }),
+    actions,
+  };
+}
+
+function validateMechanicEvent(value: unknown): MechanicEventKind {
+  const event = readString(value, 'mechanics.trigger.event');
+  if (
+    event === 'onCast' ||
+    event === 'onHit' ||
+    event === 'onDamageTaken' ||
+    event === 'onStatusApplied' ||
+    event === 'onStatusExpired' ||
+    event === 'onKill' ||
+    event === 'onLowHp'
+  ) {
+    return event;
+  }
+  throw new Error('mechanics.trigger.event must be a supported event hook');
+}
+
+function validateMechanicCondition(value: unknown): MechanicCondition {
+  const condition = assertRecord(value, 'mechanics.trigger.condition');
+  const kind = readString(condition.kind, 'mechanics.trigger.condition.kind');
+  if (kind === 'hasStatus' || kind === 'missingStatus') {
+    return {
+      kind,
+      target: validatePlayerRef(condition.target, 'mechanics.trigger.condition.target'),
+      statusId: readId(condition.statusId, 'mechanics.trigger.condition.statusId'),
+    };
+  }
+  if (kind === 'hpBelow') {
+    return {
+      kind,
+      target: validatePlayerRef(condition.target, 'mechanics.trigger.condition.target'),
+      ratio: readNumber(condition.ratio, 'mechanics.trigger.condition.ratio', 0, 1),
+    };
+  }
+  if (kind === 'resourceAtLeast') {
+    return {
+      kind,
+      target: validatePlayerRef(condition.target, 'mechanics.trigger.condition.target'),
+      resourceId: readId(condition.resourceId, 'mechanics.trigger.condition.resourceId'),
+      amount: readNumber(condition.amount, 'mechanics.trigger.condition.amount', 0, 100_000),
+    };
+  }
+  if (kind === 'slotUsed') {
+    return {
+      kind,
+      slot: readInt(condition.slot, 'mechanics.trigger.condition.slot', 0, 3),
+    };
+  }
+  if (kind === 'abilityTag') {
+    return {
+      kind,
+      tag: readTag(condition.tag, 'mechanics.trigger.condition.tag'),
+    };
+  }
+  throw new Error('mechanics.trigger.condition.kind must be supported');
+}
+
+function validateMechanicAction(value: unknown, label: string): MechanicAction {
+  const action = assertRecord(value, label);
+  const kind = readString(action.kind, `${label}.kind`);
+  if (kind === 'applyStatus') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      statusId: readId(action.statusId, `${label}.statusId`),
+      ...(action.durationTicks === undefined ? {} : { durationTicks: readInt(action.durationTicks, `${label}.durationTicks`, 1, 3_600) }),
+      ...(action.stacks === undefined ? {} : { stacks: readInt(action.stacks, `${label}.stacks`, 1, 50) }),
+    };
+  }
+  if (kind === 'removeStatus') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      statusId: readId(action.statusId, `${label}.statusId`),
+    };
+  }
+  if (kind === 'dealDamage') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      amount: readNumber(action.amount, `${label}.amount`, 0, 10_000),
+      ...(action.color === undefined ? {} : { color: readColor(action.color, `${label}.color`) }),
+    };
+  }
+  if (kind === 'heal') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      amount: readNumber(action.amount, `${label}.amount`, 0, 10_000),
+    };
+  }
+  if (kind === 'knockback') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      force: readNumber(action.force, `${label}.force`, 0.05, 12),
+      direction: validateDirectionRef(action.direction),
+      ...(action.color === undefined ? {} : { color: readColor(action.color, `${label}.color`) }),
+    };
+  }
+  if (kind === 'slow') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      multiplier: readNumber(action.multiplier, `${label}.multiplier`, 0.05, 1),
+      durationTicks: readInt(action.durationTicks, `${label}.durationTicks`, 1, 1_200),
+      ...(action.color === undefined ? {} : { color: readColor(action.color, `${label}.color`) }),
+    };
+  }
+  if (kind === 'modifyResource') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      resourceId: readId(action.resourceId, `${label}.resourceId`),
+      amount: readNumber(action.amount, `${label}.amount`, -100_000, 100_000),
+    };
+  }
+  if (kind === 'flashEffect') {
+    return {
+      kind,
+      target: validatePlayerRef(action.target, `${label}.target`),
+      radius: readNumber(action.radius, `${label}.radius`, 0.05, 30),
+      ...(action.color === undefined ? {} : { color: readColor(action.color, `${label}.color`) }),
+    };
+  }
+  throw new Error(`${label}.kind must be supported`);
+}
+
+function validatePlayerRef(value: unknown, label: string): MechanicPlayerRef {
+  const target = readString(value, label);
+  if (target === 'source' || target === 'target') {
+    return target;
+  }
+  throw new Error(`${label} must be source or target`);
+}
+
+function validateDirectionRef(value: unknown): MechanicDirectionRef | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const direction = readString(value, 'mechanics.action.direction');
+  if (direction === 'sourceToTarget' || direction === 'targetToSource' || direction === 'aim') {
+    return direction;
+  }
+  throw new Error('mechanics.action.direction must be sourceToTarget, targetToSource, or aim');
+}
+
 function validateLoadoutAbilityIds(value: unknown, abilities: Ability[]): string[] {
   const abilityIds = readArray(value, 'loadout.abilityIds');
   if (abilityIds.length !== 4) {
@@ -105,6 +364,7 @@ function validateAbility(value: unknown): Ability {
     id: readId(ability.id, 'ability.id'),
     name: clampString(readString(ability.name, 'ability.name'), 1, 36, 'ability.name'),
     targeting: validateTargeting(ability.targeting),
+    tags: validateTags(ability.tags, 'ability.tags'),
     charge: validateCharge(ability.charge),
     effects: validateEffects(ability.effects),
     damage: readNumber(ability.damage, 'ability.damage', 0, 10_000),
@@ -204,10 +464,27 @@ function validateEffect(value: unknown): AbilityEffect {
       distance: readNumber(effect.distance, 'ability.effect.distance', 0.05, 12),
     };
   }
-  throw new Error('ability.effect.kind must be knockback, slow, heal, or selfDash');
+  if (kind === 'applyStatus') {
+    return {
+      kind,
+      target: validateApplyStatusTarget(effect.target),
+      statusId: readId(effect.statusId, 'ability.effect.statusId'),
+      ...(effect.durationTicks === undefined ? {} : { durationTicks: readInt(effect.durationTicks, 'ability.effect.durationTicks', 1, 3_600) }),
+      ...(effect.stacks === undefined ? {} : { stacks: readInt(effect.stacks, 'ability.effect.stacks', 1, 50) }),
+    };
+  }
+  throw new Error('ability.effect.kind must be knockback, slow, heal, selfDash, or applyStatus');
 }
 
 function validateHealTarget(value: unknown): 'self' | 'hit' {
+  const target = readString(value, 'ability.effect.target');
+  if (target === 'self' || target === 'hit') {
+    return target;
+  }
+  throw new Error('ability.effect.target must be self or hit');
+}
+
+function validateApplyStatusTarget(value: unknown): 'self' | 'hit' {
   const target = readString(value, 'ability.effect.target');
   if (target === 'self' || target === 'hit') {
     return target;
@@ -221,6 +498,67 @@ function validateTargeting(value: unknown): Ability['targeting'] {
     return targeting;
   }
   throw new Error('ability.targeting must be free-aim or aim-assist');
+}
+
+function validateTags(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const tags = readArray(value, label).map((tag, index) => readTag(tag, `${label}[${index}]`));
+  return tags.length > 0 ? Array.from(new Set(tags)) : undefined;
+}
+
+function validateMechanicReferences(abilities: Ability[], mechanics: MechanicsConfig): void {
+  const statusIds = new Set(mechanics.statuses.map((status) => status.id));
+  const resourceIds = new Set(mechanics.resources.map((resource) => resource.id));
+  for (const ability of abilities) {
+    for (const effect of ability.effects ?? []) {
+      if (effect.kind === 'applyStatus' && !statusIds.has(effect.statusId)) {
+        throw new Error(`ability.effects for ${ability.id} references unknown status ${effect.statusId}`);
+      }
+    }
+  }
+  for (const status of mechanics.statuses) {
+    for (const action of status.periodic?.actions ?? []) {
+      validateActionReferences(action, statusIds, resourceIds, `mechanics.status ${status.id}`);
+    }
+  }
+  for (const trigger of mechanics.triggers) {
+    for (const condition of trigger.conditions ?? []) {
+      validateConditionReferences(condition, statusIds, resourceIds, trigger.id);
+    }
+    for (const action of trigger.actions) {
+      validateActionReferences(action, statusIds, resourceIds, `mechanics.trigger ${trigger.id}`);
+    }
+  }
+}
+
+function validateConditionReferences(condition: MechanicCondition, statusIds: Set<string>, resourceIds: Set<string>, triggerId: string): void {
+  if ((condition.kind === 'hasStatus' || condition.kind === 'missingStatus') && !statusIds.has(condition.statusId)) {
+    throw new Error(`mechanics.trigger ${triggerId} references unknown status ${condition.statusId}`);
+  }
+  if (condition.kind === 'resourceAtLeast' && !resourceIds.has(condition.resourceId)) {
+    throw new Error(`mechanics.trigger ${triggerId} references unknown resource ${condition.resourceId}`);
+  }
+}
+
+function validateActionReferences(action: MechanicAction, statusIds: Set<string>, resourceIds: Set<string>, label: string): void {
+  if ((action.kind === 'applyStatus' || action.kind === 'removeStatus') && !statusIds.has(action.statusId)) {
+    throw new Error(`${label} references unknown status ${action.statusId}`);
+  }
+  if (action.kind === 'modifyResource' && !resourceIds.has(action.resourceId)) {
+    throw new Error(`${label} references unknown resource ${action.resourceId}`);
+  }
+}
+
+function assertUniqueIds(values: Array<{ id: string }>, label: string): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value.id)) {
+      throw new Error(`${label} contains duplicate id ${value.id}`);
+    }
+    seen.add(value.id);
+  }
 }
 
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
@@ -257,6 +595,14 @@ function readId(value: unknown, label: string): string {
     throw new Error(`${label} may only contain letters, numbers, colon, dash, and underscore`);
   }
   return id;
+}
+
+function readTag(value: unknown, label: string): string {
+  const tag = clampString(readString(value, label), 1, 32, label);
+  if (!/^[a-zA-Z0-9:_-]+$/.test(tag)) {
+    throw new Error(`${label} may only contain letters, numbers, colon, dash, and underscore`);
+  }
+  return tag;
 }
 
 function readColor(value: unknown, label: string): string {

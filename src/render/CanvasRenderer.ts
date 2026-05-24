@@ -146,6 +146,9 @@ export class CanvasRenderer {
       const x = originX + player.x * scale;
       const y = originY + player.y * scale;
       const radius = this.ruleset.player.radius * scale;
+      if (player.statuses.length > 0) {
+        this.drawStatusRings(x, y, radius, player.statuses);
+      }
       if (player.status?.slowTicks) {
         this.drawSlowAura(x, y, radius, player.status.slowColor, player.status.slowMultiplier);
       }
@@ -168,6 +171,7 @@ export class CanvasRenderer {
       this.ctx.fillStyle = '#f5f3ed';
       this.ctx.fillText(player.displayName, x, y - radius - 9);
       this.drawHpBar(x, y + radius + 9, radius * 2.6, player.hp, player.maxHp, player.alive);
+      this.drawResourceBars(x, y + radius + 16, radius * 2.6, player.resources);
       if (!player.alive) {
         this.drawDeathLabel(player, x, y, radius);
       }
@@ -184,7 +188,10 @@ export class CanvasRenderer {
       this.ctx.lineWidth = 3;
       this.ctx.strokeStyle = '#141414';
       this.ctx.fillStyle = text.color;
-      const label = `${text.kind === 'heal' ? '+' : '-'}${Math.round(text.amount)}`;
+      const label =
+        text.kind === 'resource'
+          ? `${text.amount > 0 ? '+' : ''}${Math.round(text.amount)}`
+          : `${text.kind === 'heal' ? '+' : '-'}${Math.round(text.amount)}`;
       this.ctx.strokeText(label, x, y - progress * 18);
       this.ctx.fillText(label, x, y - progress * 18);
       this.ctx.restore();
@@ -242,6 +249,44 @@ export class CanvasRenderer {
     this.ctx.beginPath();
     this.ctx.arc(x, y, radius * 1.75, 0, Math.PI * 2);
     this.ctx.stroke();
+    this.ctx.restore();
+  }
+
+  private drawStatusRings(x: number, y: number, radius: number, statuses: NonNullable<EngineSnapshot['players'][number]['statuses']>): void {
+    this.ctx.save();
+    statuses.slice(0, 4).forEach((status, index) => {
+      const ratio = status.durationTicks > 0 ? Math.max(0, Math.min(1, status.remainingTicks / status.durationTicks)) : 0;
+      const ringRadius = radius * (1.95 + index * 0.26);
+      this.ctx.globalAlpha = 0.48 + ratio * 0.32;
+      this.ctx.strokeStyle = status.color;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, ringRadius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+      this.ctx.stroke();
+      if (status.stacks > 1) {
+        this.ctx.fillStyle = status.color;
+        this.ctx.font = '700 9px ui-monospace, monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(String(status.stacks), x + ringRadius * 0.7, y - ringRadius * 0.7);
+      }
+    });
+    this.ctx.restore();
+  }
+
+  private drawResourceBars(x: number, y: number, width: number, resources: NonNullable<EngineSnapshot['players'][number]['resources']>): void {
+    if (resources.length === 0) {
+      return;
+    }
+    const height = 3;
+    this.ctx.save();
+    resources.slice(0, 3).forEach((resource, index) => {
+      const ratio = resource.max > 0 ? Math.max(0, Math.min(1, resource.value / resource.max)) : 0;
+      const barY = y + index * 5;
+      this.ctx.fillStyle = '#1b1b18';
+      this.ctx.fillRect(x - width / 2, barY, width, height);
+      this.ctx.fillStyle = resource.color;
+      this.ctx.fillRect(x - width / 2, barY, width * ratio, height);
+    });
     this.ctx.restore();
   }
 

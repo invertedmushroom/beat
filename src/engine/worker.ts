@@ -9,12 +9,18 @@ import type {
   EngineCommand,
   EngineEvent,
   EngineSnapshot,
+  MechanicAction,
+  MechanicCondition,
+  MechanicDirectionRef,
+  MechanicEventKind,
+  MechanicPlayerRef,
   MeleeAbility,
   PlayerInput,
   PlayerSpawn,
   ProjectileAbility,
   ProjectileSnapshot,
   Ruleset,
+  StatusDefinition,
 } from './protocol';
 
 type WorkerPort = {
@@ -38,7 +44,8 @@ type RuntimePlayer = {
   lastUsedSlot: number;
   lastHandledInputSequence: number;
   charging?: RuntimeCharge;
-  slow?: RuntimeSlow;
+  statuses: Map<string, RuntimeStatus>;
+  resources: Map<string, RuntimeResource>;
 };
 
 type RuntimeProjectile = {
@@ -92,10 +99,69 @@ type RuntimeCharge = {
   aim: Vec2;
 };
 
-type RuntimeSlow = {
-  multiplier: number;
-  untilTick: number;
+type RuntimeStatus = {
+  id: string;
+  name: string;
   color: string;
+  tags: string[];
+  durationTicks: number;
+  untilTick: number;
+  appliedTick: number;
+  stacks: number;
+  maxStacks: number;
+  movementMultiplier?: number;
+  damageDealtMultiplier?: number;
+  damageTakenMultiplier?: number;
+  sourceId?: string;
+  sourceAbilityId?: string;
+  periodic?: StatusDefinition['periodic'];
+};
+
+type RuntimeResource = {
+  id: string;
+  name: string;
+  color: string;
+  value: number;
+  max: number;
+  regenPerTick: number;
+};
+
+type MechanicEvent = {
+  event: MechanicEventKind;
+  sourceId?: string;
+  targetId?: string;
+  ability?: Ability;
+  slot?: number;
+  statusId?: string;
+  amount?: number;
+  direction?: Vec2;
+};
+
+type DamageContext = {
+  source?: RuntimePlayer;
+  ability?: Ability;
+  slot?: number;
+  direction?: Vec2;
+  color?: string;
+};
+
+type StatusContext = {
+  source?: RuntimePlayer;
+  ability?: Ability;
+  direction?: Vec2;
+  durationTicks?: number;
+  stacks?: number;
+};
+
+type DirectStatus = {
+  id: string;
+  name: string;
+  color: string;
+  tags?: string[];
+  durationTicks: number;
+  movementMultiplier?: number;
+  damageDealtMultiplier?: number;
+  damageTakenMultiplier?: number;
 };
 
 type Vec2 = { x: number; y: number };
@@ -116,8 +182,12 @@ let projectiles: RuntimeProjectile[] = [];
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
 let combatTexts: RuntimeCombatText[] = [];
+let mechanicEvents: MechanicEvent[] = [];
+let processingMechanics = false;
 
 const AIM_ASSIST_CONE_DEGREES = 70;
+const MAX_MECHANIC_EVENTS_PER_TICK = 48;
+const DIRECT_SLOW_STATUS_ID = '__direct_slow';
 
 port.addEventListener('message', (event) => {
   void dispatchCommand(event.data);
@@ -190,6 +260,8 @@ function initialize(nextRuleset: Ruleset): void {
   melees = [];
   effects = [];
   combatTexts = [];
+  mechanicEvents = [];
+  processingMechanics = false;
 
   addArenaWalls(nextRuleset);
   for (const obstacle of nextRuleset.obstacles) {
@@ -253,6 +325,8 @@ function addPlayer(spawn: PlayerSpawn): void {
     facing: { x: 1, y: 0 },
     lastUsedSlot: 0,
     lastHandledInputSequence: 0,
+    statuses: new Map(),
+    resources: initialResources(),
   });
 }
 
@@ -276,12 +350,14 @@ function step(): void {
     }
     if (!player.alive) {
       player.charging = undefined;
-      player.slow = undefined;
+      player.statuses.clear();
       player.body.setLinvel({ x: 0, y: 0 }, true);
       player.lastHandledInputSequence = player.input.sequence;
       continue;
     }
     clearExpiredStatuses(player);
+    tickStatusPeriodics(player);
+    regenerateResources(player);
 
     const hasNewInputEvents = player.input.sequence !== player.lastHandledInputSequence;
     const slotPresses = hasNewInputEvents ? player.input.slotPresses : [];
@@ -291,7 +367,7 @@ function step(): void {
     for (const slot of slotPresses) {
       handleSlotPress(player, slot);
     }
-    const speedMultiplier = (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) * activeSlowMultiplier(player);
+    const speedMultiplier = (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) * activeMovementMultiplier(player);
     updateMovementAndFacing(player, speedMultiplier);
     updateChargeAim(player);
     for (const slot of castSlots) {
@@ -370,6 +446,14 @@ function releaseActiveCharge(player: RuntimePlayer): void {
 
 function spawnAbility(player: RuntimePlayer, ability: Ability, aim: Vec2): void {
   applySelfEffects(player, ability, aim);
+  emitMechanicEvent({
+    event: 'onCast',
+    sourceId: player.spawn.playerId,
+    targetId: player.spawn.playerId,
+    ability,
+    slot: player.lastUsedSlot,
+    direction: aim,
+  });
   if (ability.shape === 'projectile') {
     spawnProjectile(player, ability, aim);
   } else {
@@ -443,11 +527,24 @@ function stepProjectiles(): void {
 
     const hitPlayer = findProjectileHit(projectile, from, to);
     if (hitPlayer) {
-      damagePlayer(hitPlayer, projectile.ability.damage);
+      const owner = players.get(projectile.ownerId);
+      const direction = { x: projectile.dx, y: projectile.dy };
+      damagePlayer(hitPlayer, projectile.ability.damage, {
+        source: owner,
+        ability: projectile.ability,
+        direction,
+      });
       addImpact(to.x, to.y, projectile.ability.radius * 3.4, projectile.ability.color);
       if (hitPlayer.alive) {
-        applyHitEffects(projectile.ability, hitPlayer, { x: projectile.dx, y: projectile.dy });
+        applyHitEffects(projectile.ability, owner, hitPlayer, direction);
       }
+      emitMechanicEvent({
+        event: 'onHit',
+        sourceId: projectile.ownerId,
+        targetId: hitPlayer.spawn.playerId,
+        ability: projectile.ability,
+        direction,
+      });
       continue;
     }
     if (
@@ -487,11 +584,23 @@ function stepMelees(): void {
         const minDot = Math.cos((melee.ability.arcDegrees * Math.PI) / 360);
         if (dot >= minDot) {
           melee.hitPlayers.add(target.spawn.playerId);
-          damagePlayer(target, melee.ability.damage);
+          const direction = normalized(dx, dy) ?? { x: melee.dx, y: melee.dy };
+          damagePlayer(target, melee.ability.damage, {
+            source: owner,
+            ability: melee.ability,
+            direction,
+          });
           addImpact(targetPos.x, targetPos.y, melee.ability.radius, melee.ability.color);
           if (target.alive) {
-            applyHitEffects(melee.ability, target, normalized(dx, dy) ?? { x: melee.dx, y: melee.dy });
+            applyHitEffects(melee.ability, owner, target, direction);
           }
+          emitMechanicEvent({
+            event: 'onHit',
+            sourceId: melee.ownerId,
+            targetId: target.spawn.playerId,
+            ability: melee.ability,
+            direction,
+          });
         }
       }
     }
@@ -502,23 +611,56 @@ function stepMelees(): void {
   melees = next;
 }
 
-function damagePlayer(player: RuntimePlayer, damage: number): void {
+function damagePlayer(player: RuntimePlayer, damage: number, context: DamageContext = {}): void {
   if (!ruleset || !player.alive) {
     return;
   }
   const pos = player.body.translation();
-  player.hp = Math.max(0, player.hp - damage);
-  addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'damage', damage, '#ffd166');
+  const finalDamage = Math.max(0, damage * damageDealtMultiplier(context.source) * damageTakenMultiplier(player));
+  if (finalDamage <= 0) {
+    return;
+  }
+  player.hp = Math.max(0, player.hp - finalDamage);
+  addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'damage', finalDamage, context.color ?? '#ffd166');
+  emitMechanicEvent({
+    event: 'onDamageTaken',
+    sourceId: context.source?.spawn.playerId,
+    targetId: player.spawn.playerId,
+    ability: context.ability,
+    slot: context.slot,
+    amount: finalDamage,
+    direction: context.direction,
+  });
   if (player.hp > 0) {
+    if (player.hp / ruleset.player.maxHp <= 0.35) {
+      emitMechanicEvent({
+        event: 'onLowHp',
+        sourceId: context.source?.spawn.playerId,
+        targetId: player.spawn.playerId,
+        ability: context.ability,
+        slot: context.slot,
+        amount: finalDamage,
+        direction: context.direction,
+      });
+    }
     return;
   }
   player.charging = undefined;
-  player.slow = undefined;
+  player.statuses.clear();
   player.alive = false;
   player.respawnTick = tick + ruleset.player.respawnTicks;
   player.body.setLinvel({ x: 0, y: 0 }, true);
   player.body.setEnabled(false);
   addEffect('death', pos.x, pos.y, ruleset.player.radius * 5, '#ffffff', 28);
+  emitMechanicEvent({
+    event: 'onKill',
+    sourceId: context.source?.spawn.playerId,
+    targetId: player.spawn.playerId,
+    ability: context.ability,
+    slot: context.slot,
+    amount: finalDamage,
+    direction: context.direction,
+  });
 }
 
 function respawnPlayer(player: RuntimePlayer): void {
@@ -529,7 +671,8 @@ function respawnPlayer(player: RuntimePlayer): void {
   player.hp = ruleset.player.maxHp;
   player.alive = true;
   player.respawnTick = 0;
-  player.slow = undefined;
+  player.statuses.clear();
+  player.resources = initialResources();
   player.cooldownUntil.clear();
   player.body.setEnabled(true);
   player.body.setTranslation(point, true);
@@ -554,16 +697,25 @@ function applySelfEffects(player: RuntimePlayer, ability: Ability, aim: Vec2): v
     if (effect.kind === 'selfDash') {
       dashPlayer(player, aim, effect.distance, ability.color);
     }
+    if (effect.kind === 'applyStatus' && effect.target === 'self') {
+      applyNamedStatus(player, effect.statusId, {
+        source: player,
+        ability,
+        direction: aim,
+        durationTicks: effect.durationTicks,
+        stacks: effect.stacks,
+      });
+    }
   }
 }
 
-function applyHitEffects(ability: Ability, target: RuntimePlayer, direction: Vec2): void {
+function applyHitEffects(ability: Ability, source: RuntimePlayer | undefined, target: RuntimePlayer, direction: Vec2): void {
   for (const effect of ability.effects ?? []) {
-    applyHitEffect(effect, target, direction, ability.color);
+    applyHitEffect(effect, ability, source, target, direction, ability.color);
   }
 }
 
-function applyHitEffect(effect: AbilityEffect, target: RuntimePlayer, direction: Vec2, color: string): void {
+function applyHitEffect(effect: AbilityEffect, ability: Ability, source: RuntimePlayer | undefined, target: RuntimePlayer, direction: Vec2, color: string): void {
   if (effect.kind === 'knockback') {
     knockbackPlayer(target, direction, effect.force, color);
     return;
@@ -574,6 +726,15 @@ function applyHitEffect(effect: AbilityEffect, target: RuntimePlayer, direction:
   }
   if (effect.kind === 'heal' && effect.target === 'hit') {
     healPlayer(target, effect.amount);
+  }
+  if (effect.kind === 'applyStatus' && effect.target === 'hit') {
+    applyNamedStatus(target, effect.statusId, {
+      source,
+      ability,
+      direction,
+      durationTicks: effect.durationTicks,
+      stacks: effect.stacks,
+    });
   }
 }
 
@@ -599,13 +760,14 @@ function slowPlayer(player: RuntimePlayer, multiplier: number, durationTicks: nu
   if (!player.alive || !ruleset) {
     return;
   }
-  const current = currentSlow(player);
-  const untilTick = tick + durationTicks;
-  player.slow = {
-    multiplier: Math.min(current?.multiplier ?? 1, multiplier),
-    untilTick: current && current.multiplier < multiplier ? Math.max(current.untilTick, untilTick) : untilTick,
-    color: current && current.multiplier < multiplier ? current.color : color,
-  };
+  applyDirectStatus(player, {
+    id: DIRECT_SLOW_STATUS_ID,
+    name: 'Slow',
+    color,
+    tags: ['slow'],
+    durationTicks,
+    movementMultiplier: multiplier,
+  });
   const pos = player.body.translation();
   addEffect('slow', pos.x, pos.y, ruleset.player.radius * 2.5, color, Math.min(34, Math.max(14, durationTicks)));
 }
@@ -623,6 +785,285 @@ function healPlayer(player: RuntimePlayer, amount: number): void {
   const pos = player.body.translation();
   addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'heal', healed, '#2fd17c');
   addEffect('heal', pos.x, pos.y, ruleset.player.radius * 2.7, '#2fd17c', 18);
+}
+
+function initialResources(): Map<string, RuntimeResource> {
+  const resources = new Map<string, RuntimeResource>();
+  for (const resource of ruleset?.mechanics.resources ?? []) {
+    resources.set(resource.id, {
+      id: resource.id,
+      name: resource.name,
+      color: resource.color,
+      value: resource.start,
+      max: resource.max,
+      regenPerTick: resource.regenPerTick,
+    });
+  }
+  return resources;
+}
+
+function applyNamedStatus(player: RuntimePlayer, statusId: string, context: StatusContext = {}): void {
+  const definition = ruleset?.mechanics.statuses.find((status) => status.id === statusId);
+  if (!definition) {
+    return;
+  }
+  applyRuntimeStatus(
+    player,
+    {
+      id: definition.id,
+      name: definition.name,
+      color: definition.color,
+      tags: definition.tags,
+      durationTicks: context.durationTicks ?? definition.durationTicks,
+      movementMultiplier: definition.movementMultiplier,
+      damageDealtMultiplier: definition.damageDealtMultiplier,
+      damageTakenMultiplier: definition.damageTakenMultiplier,
+    },
+    {
+      ...context,
+      stacks: context.stacks ?? 1,
+    },
+    definition,
+  );
+}
+
+function applyDirectStatus(player: RuntimePlayer, status: DirectStatus, context: StatusContext = {}): void {
+  applyRuntimeStatus(player, status, context);
+}
+
+function applyRuntimeStatus(player: RuntimePlayer, status: DirectStatus, context: StatusContext, definition?: StatusDefinition): void {
+  if (!player.alive || !ruleset) {
+    return;
+  }
+  const existing = player.statuses.get(status.id);
+  const maxStacks = definition?.maxStacks ?? 1;
+  const stackMode = definition?.stacking ?? 'refresh';
+  const incomingStacks = clamp(Math.floor(context.stacks ?? 1), 1, maxStacks);
+  const stacks =
+    existing && stackMode === 'stack'
+      ? clamp(existing.stacks + incomingStacks, 1, maxStacks)
+      : existing
+        ? clamp(Math.max(existing.stacks, incomingStacks), 1, maxStacks)
+        : incomingStacks;
+  const durationTicks = context.durationTicks ?? status.durationTicks;
+  const nextStatus: RuntimeStatus = {
+    id: status.id,
+    name: status.name,
+    color: status.color,
+    tags: status.tags ?? [],
+    durationTicks,
+    untilTick: tick + durationTicks,
+    appliedTick: tick,
+    stacks,
+    maxStacks,
+    movementMultiplier:
+      existing?.movementMultiplier !== undefined && status.movementMultiplier !== undefined
+        ? Math.min(existing.movementMultiplier, status.movementMultiplier)
+        : status.movementMultiplier ?? existing?.movementMultiplier,
+    damageDealtMultiplier: status.damageDealtMultiplier ?? existing?.damageDealtMultiplier,
+    damageTakenMultiplier: status.damageTakenMultiplier ?? existing?.damageTakenMultiplier,
+    sourceId: context.source?.spawn.playerId ?? existing?.sourceId,
+    sourceAbilityId: context.ability?.id ?? existing?.sourceAbilityId,
+    periodic: definition?.periodic ?? existing?.periodic,
+  };
+  player.statuses.set(status.id, nextStatus);
+  const pos = player.body.translation();
+  addEffect('status', pos.x, pos.y, ruleset.player.radius * (2.1 + stacks * 0.28), status.color, 18);
+  emitMechanicEvent({
+    event: 'onStatusApplied',
+    sourceId: nextStatus.sourceId,
+    targetId: player.spawn.playerId,
+    ability: context.ability,
+    statusId: status.id,
+    direction: context.direction,
+  });
+}
+
+function removeStatus(player: RuntimePlayer, statusId: string): void {
+  const removed = player.statuses.get(statusId);
+  if (!removed) {
+    return;
+  }
+  player.statuses.delete(statusId);
+  const pos = player.body.translation();
+  addEffect('status', pos.x, pos.y, (ruleset?.player.radius ?? 0.5) * 1.9, removed.color, 14);
+}
+
+function modifyResource(player: RuntimePlayer, resourceId: string, amount: number): void {
+  if (!player.alive || !ruleset || amount === 0) {
+    return;
+  }
+  const resource = player.resources.get(resourceId);
+  if (!resource) {
+    return;
+  }
+  const before = resource.value;
+  resource.value = clamp(resource.value + amount, 0, resource.max);
+  const changed = resource.value - before;
+  if (Math.abs(changed) < 0.001) {
+    return;
+  }
+  const pos = player.body.translation();
+  addCombatText(pos.x, pos.y - ruleset.player.radius * 2.35, 'resource', changed, resource.color);
+  addEffect('resource', pos.x, pos.y, ruleset.player.radius * 2.3, resource.color, 16);
+}
+
+function emitMechanicEvent(event: MechanicEvent): void {
+  if (!ruleset || ruleset.mechanics.triggers.length === 0) {
+    return;
+  }
+  mechanicEvents.push(event);
+  if (!processingMechanics) {
+    processMechanicEvents();
+  }
+}
+
+function processMechanicEvents(): void {
+  if (!ruleset) {
+    return;
+  }
+  processingMechanics = true;
+  let processed = 0;
+  while (mechanicEvents.length > 0 && processed < MAX_MECHANIC_EVENTS_PER_TICK) {
+    processed += 1;
+    const event = mechanicEvents.shift();
+    if (!event) {
+      continue;
+    }
+    const source = event.sourceId ? players.get(event.sourceId) : undefined;
+    const target = event.targetId ? players.get(event.targetId) : undefined;
+    for (const trigger of ruleset.mechanics.triggers) {
+      if (trigger.event !== event.event || !conditionsPass(trigger.conditions ?? [], event, source, target)) {
+        continue;
+      }
+      for (const action of trigger.actions) {
+        applyMechanicAction(action, event, source, target);
+      }
+    }
+  }
+  if (processed >= MAX_MECHANIC_EVENTS_PER_TICK) {
+    mechanicEvents = [];
+    port.postMessage({ type: 'notice', message: 'mechanics trigger loop guard cleared queued events' });
+  }
+  processingMechanics = false;
+}
+
+function conditionsPass(conditions: MechanicCondition[], event: MechanicEvent, source: RuntimePlayer | undefined, target: RuntimePlayer | undefined): boolean {
+  for (const condition of conditions) {
+    if (!conditionPasses(condition, event, source, target)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function conditionPasses(condition: MechanicCondition, event: MechanicEvent, source: RuntimePlayer | undefined, target: RuntimePlayer | undefined): boolean {
+  if (condition.kind === 'abilityTag') {
+    return Boolean(event.ability?.tags?.includes(condition.tag));
+  }
+  if (condition.kind === 'slotUsed') {
+    return event.slot === condition.slot;
+  }
+  const player = playerForRef(condition.target, source, target);
+  if (!player) {
+    return false;
+  }
+  if (condition.kind === 'hasStatus') {
+    return player.statuses.has(condition.statusId);
+  }
+  if (condition.kind === 'missingStatus') {
+    return !player.statuses.has(condition.statusId);
+  }
+  if (condition.kind === 'hpBelow') {
+    return ruleset ? player.hp / ruleset.player.maxHp <= condition.ratio : false;
+  }
+  if (condition.kind === 'resourceAtLeast') {
+    return (player.resources.get(condition.resourceId)?.value ?? 0) >= condition.amount;
+  }
+  return false;
+}
+
+function applyMechanicAction(
+  action: MechanicAction,
+  event: MechanicEvent,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer | undefined,
+): void {
+  const player = playerForRef(action.target, source, target);
+  if (!player) {
+    return;
+  }
+  const color = action.kind === 'knockback' || action.kind === 'slow' || action.kind === 'flashEffect' || action.kind === 'dealDamage' ? action.color : undefined;
+  if (action.kind === 'applyStatus') {
+    applyNamedStatus(player, action.statusId, {
+      source,
+      ability: event.ability,
+      direction: event.direction,
+      durationTicks: action.durationTicks,
+      stacks: action.stacks,
+    });
+    return;
+  }
+  if (action.kind === 'removeStatus') {
+    removeStatus(player, action.statusId);
+    return;
+  }
+  if (action.kind === 'dealDamage') {
+    damagePlayer(player, action.amount, {
+      source,
+      ability: event.ability,
+      slot: event.slot,
+      direction: directionForAction(undefined, event, source, target),
+      color: color ?? '#ffd166',
+    });
+    return;
+  }
+  if (action.kind === 'heal') {
+    healPlayer(player, action.amount);
+    return;
+  }
+  if (action.kind === 'knockback') {
+    knockbackPlayer(player, directionForAction(action.direction, event, source, target), action.force, color ?? event.ability?.color ?? '#f5f3ed');
+    return;
+  }
+  if (action.kind === 'slow') {
+    slowPlayer(player, action.multiplier, action.durationTicks, color ?? event.ability?.color ?? '#62d2ff');
+    return;
+  }
+  if (action.kind === 'modifyResource') {
+    modifyResource(player, action.resourceId, action.amount);
+    return;
+  }
+  if (action.kind === 'flashEffect') {
+    const pos = player.body.translation();
+    addEffect('trigger', pos.x, pos.y, action.radius, color ?? event.ability?.color ?? '#f5f3ed', 18);
+  }
+}
+
+function playerForRef(ref: MechanicPlayerRef, source: RuntimePlayer | undefined, target: RuntimePlayer | undefined): RuntimePlayer | undefined {
+  return ref === 'source' ? source : target;
+}
+
+function directionForAction(
+  direction: MechanicDirectionRef | undefined,
+  event: MechanicEvent,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer | undefined,
+): Vec2 {
+  if (direction === 'aim' && event.direction) {
+    return event.direction;
+  }
+  if ((direction === 'sourceToTarget' || direction === undefined) && source && target) {
+    const sourcePos = source.body.translation();
+    const targetPos = target.body.translation();
+    return normalized(targetPos.x - sourcePos.x, targetPos.y - sourcePos.y) ?? event.direction ?? { x: 1, y: 0 };
+  }
+  if (direction === 'targetToSource' && source && target) {
+    const sourcePos = source.body.translation();
+    const targetPos = target.body.translation();
+    return normalized(sourcePos.x - targetPos.x, sourcePos.y - targetPos.y) ?? event.direction ?? { x: 1, y: 0 };
+  }
+  return event.direction ?? source?.facing ?? { x: 1, y: 0 };
 }
 
 function movePlayerSafely(player: RuntimePlayer, direction: Vec2, distance: number): number {
@@ -730,17 +1171,82 @@ function pruneCombatTexts(): void {
 }
 
 function clearExpiredStatuses(player: RuntimePlayer): void {
-  if (player.slow && player.slow.untilTick <= tick) {
-    player.slow = undefined;
+  for (const status of Array.from(player.statuses.values())) {
+    if (status.untilTick > tick) {
+      continue;
+    }
+    player.statuses.delete(status.id);
+    emitMechanicEvent({
+      event: 'onStatusExpired',
+      sourceId: status.sourceId,
+      targetId: player.spawn.playerId,
+      statusId: status.id,
+    });
   }
 }
 
-function currentSlow(player: RuntimePlayer): RuntimeSlow | undefined {
-  return player.slow && player.slow.untilTick > tick ? player.slow : undefined;
+function tickStatusPeriodics(player: RuntimePlayer): void {
+  for (const status of player.statuses.values()) {
+    if (!status.periodic || status.untilTick <= tick) {
+      continue;
+    }
+    const elapsed = tick - status.appliedTick;
+    if (elapsed <= 0 || elapsed % status.periodic.everyTicks !== 0) {
+      continue;
+    }
+    const source = status.sourceId ? players.get(status.sourceId) : undefined;
+    const event: MechanicEvent = {
+      event: 'onStatusApplied',
+      sourceId: status.sourceId,
+      targetId: player.spawn.playerId,
+      statusId: status.id,
+    };
+    for (const action of status.periodic.actions) {
+      applyMechanicAction(action, event, source, player);
+    }
+  }
 }
 
-function activeSlowMultiplier(player: RuntimePlayer): number {
-  return currentSlow(player)?.multiplier ?? 1;
+function regenerateResources(player: RuntimePlayer): void {
+  for (const resource of player.resources.values()) {
+    if (resource.regenPerTick === 0) {
+      continue;
+    }
+    resource.value = clamp(resource.value + resource.regenPerTick, 0, resource.max);
+  }
+}
+
+function activeMovementMultiplier(player: RuntimePlayer): number {
+  let multiplier = 1;
+  for (const status of player.statuses.values()) {
+    if (status.untilTick > tick && status.movementMultiplier !== undefined) {
+      multiplier = Math.min(multiplier, status.movementMultiplier);
+    }
+  }
+  return multiplier;
+}
+
+function damageDealtMultiplier(player: RuntimePlayer | undefined): number {
+  if (!player) {
+    return 1;
+  }
+  let multiplier = 1;
+  for (const status of player.statuses.values()) {
+    if (status.untilTick > tick && status.damageDealtMultiplier !== undefined) {
+      multiplier *= status.damageDealtMultiplier;
+    }
+  }
+  return multiplier;
+}
+
+function damageTakenMultiplier(player: RuntimePlayer): number {
+  let multiplier = 1;
+  for (const status of player.statuses.values()) {
+    if (status.untilTick > tick && status.damageTakenMultiplier !== undefined) {
+      multiplier *= status.damageTakenMultiplier;
+    }
+  }
+  return multiplier;
 }
 
 function updateMovementAndFacing(player: RuntimePlayer, speedMultiplier: number): void {
@@ -821,6 +1327,8 @@ function readSnapshot(): EngineSnapshot {
         facingDx: player.facing.x,
         facingDy: player.facing.y,
         status: toStatusSnapshot(player),
+        statuses: toStatusSnapshots(player),
+        resources: toResourceSnapshots(player),
         charging: player.charging ? toChargingSnapshot(player.charging) : undefined,
         lastInputSequence: player.input.sequence,
       };
@@ -829,15 +1337,55 @@ function readSnapshot(): EngineSnapshot {
 }
 
 function toStatusSnapshot(player: RuntimePlayer): NonNullable<EngineSnapshot['players'][number]['status']> | undefined {
-  const slow = currentSlow(player);
+  const slow = strongestMovementSlow(player);
   if (!slow) {
     return undefined;
   }
   return {
-    slowMultiplier: slow.multiplier,
+    slowMultiplier: slow.movementMultiplier ?? 1,
     slowTicks: Math.max(0, slow.untilTick - tick),
     slowColor: slow.color,
   };
+}
+
+function toStatusSnapshots(player: RuntimePlayer): NonNullable<EngineSnapshot['players'][number]['statuses']> {
+  return Array.from(player.statuses.values())
+    .filter((status) => status.untilTick > tick)
+    .map((status) => ({
+      id: status.id,
+      name: status.name,
+      color: status.color,
+      tags: status.tags,
+      stacks: status.stacks,
+      remainingTicks: Math.max(0, status.untilTick - tick),
+      durationTicks: status.durationTicks,
+      movementMultiplier: status.movementMultiplier,
+      damageDealtMultiplier: status.damageDealtMultiplier,
+      damageTakenMultiplier: status.damageTakenMultiplier,
+    }));
+}
+
+function toResourceSnapshots(player: RuntimePlayer): NonNullable<EngineSnapshot['players'][number]['resources']> {
+  return Array.from(player.resources.values()).map((resource) => ({
+    id: resource.id,
+    name: resource.name,
+    color: resource.color,
+    value: resource.value,
+    max: resource.max,
+  }));
+}
+
+function strongestMovementSlow(player: RuntimePlayer): RuntimeStatus | undefined {
+  let slow: RuntimeStatus | undefined;
+  for (const status of player.statuses.values()) {
+    if (status.untilTick <= tick || status.movementMultiplier === undefined || status.movementMultiplier >= 1) {
+      continue;
+    }
+    if (!slow || status.movementMultiplier < (slow.movementMultiplier ?? 1)) {
+      slow = status;
+    }
+  }
+  return slow;
 }
 
 function toChargingSnapshot(charge: RuntimeCharge): NonNullable<EngineSnapshot['players'][number]['charging']> {
@@ -904,6 +1452,8 @@ function stop(): void {
   melees = [];
   effects = [];
   combatTexts = [];
+  mechanicEvents = [];
+  processingMechanics = false;
 }
 
 function neutralInput(): PlayerInput {

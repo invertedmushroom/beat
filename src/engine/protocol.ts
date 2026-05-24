@@ -14,6 +14,7 @@ export type BaseAbility = {
   name: string;
   shape: AbilityShape;
   targeting: AbilityTargeting;
+  tags?: string[];
   charge?: AbilityCharge;
   effects?: AbilityEffect[];
   damage: number;
@@ -35,7 +36,7 @@ export type AbilityCharge = {
   autoRelease: true;
 };
 
-export type AbilityEffect = KnockbackEffect | SlowEffect | HealEffect | SelfDashEffect;
+export type AbilityEffect = KnockbackEffect | SlowEffect | HealEffect | SelfDashEffect | ApplyStatusEffect;
 
 export type KnockbackEffect = {
   kind: 'knockback';
@@ -57,6 +58,14 @@ export type HealEffect = {
 export type SelfDashEffect = {
   kind: 'selfDash';
   distance: number;
+};
+
+export type ApplyStatusEffect = {
+  kind: 'applyStatus';
+  target: 'self' | 'hit';
+  statusId: string;
+  durationTicks?: number;
+  stacks?: number;
 };
 
 export type ProjectileAbility = BaseAbility & {
@@ -86,6 +95,79 @@ export type PlayerAimConfig = {
   mode: PlayerAimMode;
 };
 
+export type MechanicsConfig = {
+  statuses: StatusDefinition[];
+  resources: ResourceDefinition[];
+  triggers: MechanicTrigger[];
+};
+
+export type StatusDefinition = {
+  id: string;
+  name: string;
+  color: string;
+  durationTicks: number;
+  tags?: string[];
+  stacking?: 'refresh' | 'stack';
+  maxStacks?: number;
+  movementMultiplier?: number;
+  damageDealtMultiplier?: number;
+  damageTakenMultiplier?: number;
+  periodic?: StatusPeriodic;
+};
+
+export type StatusPeriodic = {
+  everyTicks: number;
+  actions: MechanicAction[];
+};
+
+export type ResourceDefinition = {
+  id: string;
+  name: string;
+  color: string;
+  max: number;
+  start: number;
+  regenPerTick: number;
+};
+
+export type MechanicEventKind =
+  | 'onCast'
+  | 'onHit'
+  | 'onDamageTaken'
+  | 'onStatusApplied'
+  | 'onStatusExpired'
+  | 'onKill'
+  | 'onLowHp';
+
+export type MechanicPlayerRef = 'source' | 'target';
+
+export type MechanicTrigger = {
+  id: string;
+  name?: string;
+  event: MechanicEventKind;
+  conditions?: MechanicCondition[];
+  actions: MechanicAction[];
+};
+
+export type MechanicCondition =
+  | { kind: 'hasStatus'; target: MechanicPlayerRef; statusId: string }
+  | { kind: 'missingStatus'; target: MechanicPlayerRef; statusId: string }
+  | { kind: 'hpBelow'; target: MechanicPlayerRef; ratio: number }
+  | { kind: 'resourceAtLeast'; target: MechanicPlayerRef; resourceId: string; amount: number }
+  | { kind: 'slotUsed'; slot: number }
+  | { kind: 'abilityTag'; tag: string };
+
+export type MechanicAction =
+  | { kind: 'applyStatus'; target: MechanicPlayerRef; statusId: string; durationTicks?: number; stacks?: number }
+  | { kind: 'removeStatus'; target: MechanicPlayerRef; statusId: string }
+  | { kind: 'dealDamage'; target: MechanicPlayerRef; amount: number; color?: string }
+  | { kind: 'heal'; target: MechanicPlayerRef; amount: number }
+  | { kind: 'knockback'; target: MechanicPlayerRef; force: number; direction?: MechanicDirectionRef; color?: string }
+  | { kind: 'slow'; target: MechanicPlayerRef; multiplier: number; durationTicks: number; color?: string }
+  | { kind: 'modifyResource'; target: MechanicPlayerRef; resourceId: string; amount: number }
+  | { kind: 'flashEffect'; target: MechanicPlayerRef; radius: number; color?: string };
+
+export type MechanicDirectionRef = 'sourceToTarget' | 'targetToSource' | 'aim';
+
 export type Ruleset = {
   id: string;
   name: string;
@@ -109,6 +191,7 @@ export type Ruleset = {
   };
   obstacles: RectObstacle[];
   abilities: Ability[];
+  mechanics: MechanicsConfig;
   loadout: {
     abilityIds: string[];
   };
@@ -152,6 +235,8 @@ export type PlayerSnapshot = {
   facingDx: number;
   facingDy: number;
   status?: PlayerStatusSnapshot;
+  statuses: StatusSnapshot[];
+  resources: ResourceSnapshot[];
   charging?: ChargingSnapshot;
   lastInputSequence: number;
 };
@@ -160,6 +245,27 @@ export type PlayerStatusSnapshot = {
   slowMultiplier: number;
   slowTicks: number;
   slowColor: string;
+};
+
+export type StatusSnapshot = {
+  id: string;
+  name: string;
+  color: string;
+  tags: string[];
+  stacks: number;
+  remainingTicks: number;
+  durationTicks: number;
+  movementMultiplier?: number;
+  damageDealtMultiplier?: number;
+  damageTakenMultiplier?: number;
+};
+
+export type ResourceSnapshot = {
+  id: string;
+  name: string;
+  color: string;
+  value: number;
+  max: number;
 };
 
 export type ChargingSnapshot = {
@@ -184,7 +290,7 @@ export type ProjectileSnapshot = {
 
 export type EffectSnapshot = {
   effectId: string;
-  kind: 'impact' | 'melee' | 'spawn' | 'death' | 'knockback' | 'slow' | 'dash' | 'heal';
+  kind: 'impact' | 'melee' | 'spawn' | 'death' | 'knockback' | 'slow' | 'dash' | 'heal' | 'status' | 'trigger' | 'resource';
   x: number;
   y: number;
   radius: number;
@@ -195,7 +301,7 @@ export type EffectSnapshot = {
 
 export type CombatTextSnapshot = {
   textId: string;
-  kind: 'damage' | 'heal';
+  kind: 'damage' | 'heal' | 'resource';
   x: number;
   y: number;
   amount: number;

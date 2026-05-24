@@ -94,6 +94,7 @@ h2 {
 .brand p,
 .menu-status,
 .rules-hash,
+.rules-validation,
 .room-row__meta,
 .room-empty {
   color: #b9b4a8;
@@ -118,6 +119,102 @@ h2 {
 
 .menu-section--rules {
   min-height: min(680px, calc(100vh - 120px));
+}
+
+.rules-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 260px);
+  gap: 12px;
+  align-items: start;
+}
+
+.rules-editor {
+  min-width: 0;
+}
+
+.rules-validation {
+  margin: 3px 0 8px;
+}
+
+.rules-validation.is-error {
+  color: #ff9a82;
+}
+
+.rules-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rules-examples {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.rules-inspector {
+  display: grid;
+  gap: 12px;
+  max-height: min(560px, calc(100vh - 250px));
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.inspector-group {
+  display: grid;
+  gap: 7px;
+}
+
+.inspector-group h3 {
+  margin: 0;
+  color: #f5f3ed;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.inspector-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #34332f;
+  border-radius: 6px;
+  background: #1d1d1a;
+}
+
+.inspector-swatch {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--swatch, #ffe66d);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--swatch, #ffe66d), transparent 35%);
+}
+
+.inspector-row__main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.inspector-row strong,
+.inspector-row small,
+.inspector-empty {
+  overflow-wrap: anywhere;
+}
+
+.inspector-row strong {
+  color: #f5f3ed;
+  font-size: 12px;
+}
+
+.inspector-row small,
+.inspector-empty {
+  color: #b9b4a8;
+  font-size: 11px;
 }
 
 .field {
@@ -513,6 +610,18 @@ h2 {
 
   .menu-section--rules {
     min-height: 0;
+  }
+
+  .rules-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .rules-examples {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .rules-inspector {
+    max-height: none;
   }
 
   .rules-json {

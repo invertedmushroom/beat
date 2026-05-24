@@ -40,9 +40,12 @@ export class BeatApp {
   private menuView!: HTMLElement;
   private arenaView!: HTMLElement;
   private rulesJsonInput!: HTMLTextAreaElement;
+  private rulesValidationLine!: HTMLDivElement;
+  private rulesInspector!: HTMLDivElement;
   private resetRulesButton!: HTMLButtonElement;
   private applyRulesButton!: HTMLButtonElement;
   private copyRulesButton!: HTMLButtonElement;
+  private rulesExampleButtons!: HTMLButtonElement[];
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
   private fullscreenButton!: HTMLButtonElement;
@@ -58,6 +61,7 @@ export class BeatApp {
   private previousSlotCooldowns?: number[];
   private editableRuleset: Ruleset = createDefaultRuleset();
   private editableRulesetHash = '';
+  private rulesInspectorRefreshId = 0;
 
   constructor(container: HTMLElement) {
     this.root = container;
@@ -79,10 +83,14 @@ export class BeatApp {
     this.resetRulesButton.addEventListener('click', () => void this.resetRules());
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
+    this.rulesJsonInput.addEventListener('input', () => void this.refreshRulesInspector());
+    for (const button of this.rulesExampleButtons) {
+      button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
+    }
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     window.addEventListener('beforeunload', this.beforeUnloadHandler);
     this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
-    void this.refreshRulesHash();
+    void this.refreshRulesInspector();
     this.syncFullscreenButton();
     this.showMenu();
     this.setStatus('idle: local directory ready');
@@ -117,10 +125,13 @@ export class BeatApp {
     this.peerLine = requireNode<HTMLDivElement>('#peer-line');
     this.logRoot = requireNode<HTMLDivElement>('#log');
     this.rulesJsonInput = requireNode<HTMLTextAreaElement>('#rules-json');
+    this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
+    this.rulesInspector = requireNode<HTMLDivElement>('#rules-inspector');
     this.fullscreenButton = requireNode<HTMLButtonElement>('#fullscreen-toggle');
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
+    this.rulesExampleButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.rules-example'));
     this.skillButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.skill-slot'));
     if (this.skillButtons.length !== 4) {
       throw new Error('missing skill slots');
@@ -353,7 +364,7 @@ export class BeatApp {
   private currentRuleset(): Ruleset {
     this.editableRuleset = parseRulesetJson(this.rulesJsonInput.value);
     this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
-    void this.refreshRulesHash();
+    void this.refreshRulesInspector();
     return this.editableRuleset;
   }
 
@@ -392,8 +403,42 @@ export class BeatApp {
   }
 
   private async refreshRulesHash(): Promise<void> {
-    this.editableRulesetHash = await hashRuleset(parseRulesetJson(this.rulesJsonInput.value));
-    this.rulesHashLine.textContent = `${this.editableRuleset.name} · ${shortHash(this.editableRulesetHash)}`;
+    await this.refreshRulesInspector();
+  }
+
+  private async refreshRulesInspector(): Promise<void> {
+    const refreshId = ++this.rulesInspectorRefreshId;
+    try {
+      const ruleset = parseRulesetJson(this.rulesJsonInput.value);
+      const hash = await hashRuleset(ruleset);
+      if (refreshId !== this.rulesInspectorRefreshId) {
+        return;
+      }
+      this.editableRulesetHash = hash;
+      this.rulesHashLine.textContent = `${ruleset.name} · ${shortHash(hash)}`;
+      this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers`;
+      this.rulesValidationLine.classList.remove('is-error');
+      this.rulesInspector.innerHTML = rulesInspectorHtml(ruleset);
+    } catch (error) {
+      if (refreshId !== this.rulesInspectorRefreshId) {
+        return;
+      }
+      this.rulesValidationLine.textContent = `invalid · ${readError(error)}`;
+      this.rulesValidationLine.classList.add('is-error');
+      this.rulesInspector.innerHTML = '<div class="inspector-empty">Invalid JSON</div>';
+    }
+  }
+
+  private async insertRulesExample(example: string): Promise<void> {
+    try {
+      const ruleset = parseRulesetJson(this.rulesJsonInput.value);
+      const nextRuleset = applyRulesExample(ruleset, example);
+      this.rulesJsonInput.value = stringifyRuleset(validateRuleset(nextRuleset));
+      await this.refreshRulesInspector();
+      this.log(`rules example applied: ${example}`);
+    } catch (error) {
+      this.log(`rules example rejected: ${readError(error)}`);
+    }
   }
 
   private showMenu(): void {
@@ -453,6 +498,9 @@ export class BeatApp {
     this.resetRulesButton.disabled = locked;
     this.applyRulesButton.disabled = locked;
     this.copyRulesButton.disabled = locked;
+    for (const button of this.rulesExampleButtons) {
+      button.disabled = locked;
+    }
   }
 
   private updateAimOrigin(snapshot: EngineSnapshot): void {
@@ -543,12 +591,25 @@ function shellHtml(): string {
           </section>
           <section class="menu-section menu-section--rules">
             <h2>Rules JSON</h2>
-            <div id="rules-hash-line" class="rules-hash">rules hash</div>
-            <textarea id="rules-json" class="rules-json" spellcheck="false"></textarea>
-            <div class="button-grid button-grid--rules">
-              <button id="apply-rules" class="button button--primary" type="button">Apply</button>
-              <button id="copy-rules" class="button" type="button">Copy</button>
-              <button id="reset-rules" class="button button--danger" type="button">Reset</button>
+            <div class="rules-workbench">
+              <div class="rules-editor">
+                <div id="rules-hash-line" class="rules-hash">rules hash</div>
+                <div id="rules-validation-line" class="rules-validation">validating</div>
+                <textarea id="rules-json" class="rules-json" spellcheck="false"></textarea>
+                <div class="button-grid button-grid--rules">
+                  <button id="apply-rules" class="button button--primary" type="button">Apply</button>
+                  <button id="copy-rules" class="button" type="button">Copy</button>
+                  <button id="reset-rules" class="button button--danger" type="button">Reset</button>
+                </div>
+              </div>
+              <aside class="rules-panel">
+                <div class="rules-examples">
+                  <button class="button rules-example" type="button" data-example="combo-preset">Combo Preset</button>
+                  <button class="button rules-example" type="button" data-example="bleed-dot">Bleed DOT</button>
+                  <button class="button rules-example" type="button" data-example="execute">Execute</button>
+                </div>
+                <div id="rules-inspector" class="rules-inspector"></div>
+              </aside>
             </div>
           </section>
         </div>
@@ -639,4 +700,126 @@ function escapeHtml(value: string): string {
         return '&#039;';
     }
   });
+}
+
+function rulesInspectorHtml(ruleset: Ruleset): string {
+  return [
+    inspectorGroup(
+      'Abilities',
+      ruleset.abilities.map((ability) =>
+        inspectorRow(
+          ability.name,
+          [ability.shape, ability.targeting, ...(ability.tags ?? [])].join(' · '),
+          `${ability.damage} dmg · ${ability.cooldownTicks} cd · ${(ability.effects ?? []).length} effects`,
+          ability.color,
+        ),
+      ),
+    ),
+    inspectorGroup(
+      'Statuses',
+      ruleset.mechanics.statuses.map((status) =>
+        inspectorRow(
+          status.name,
+          [`${status.durationTicks} ticks`, ...(status.tags ?? [])].join(' · '),
+          [
+            status.movementMultiplier === undefined ? undefined : `move x${status.movementMultiplier}`,
+            status.damageDealtMultiplier === undefined ? undefined : `deal x${status.damageDealtMultiplier}`,
+            status.damageTakenMultiplier === undefined ? undefined : `taken x${status.damageTakenMultiplier}`,
+            status.periodic ? `periodic ${status.periodic.everyTicks}` : undefined,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'marker',
+          status.color,
+        ),
+      ),
+    ),
+    inspectorGroup(
+      'Resources',
+      ruleset.mechanics.resources.map((resource) =>
+        inspectorRow(resource.name, `${resource.start}/${resource.max}`, `regen ${resource.regenPerTick}`, resource.color),
+      ),
+    ),
+    inspectorGroup(
+      'Triggers',
+      ruleset.mechanics.triggers.map((trigger) =>
+        inspectorRow(
+          trigger.name ?? trigger.id,
+          trigger.event,
+          `${trigger.conditions?.length ?? 0} conditions · ${trigger.actions.length} actions`,
+          '#ffe66d',
+        ),
+      ),
+    ),
+  ].join('');
+}
+
+function inspectorGroup(title: string, rows: string[]): string {
+  const body = rows.length > 0 ? rows.join('') : '<div class="inspector-empty">None</div>';
+  return `<section class="inspector-group"><h3>${escapeHtml(title)}</h3>${body}</section>`;
+}
+
+function inspectorRow(title: string, meta: string, detail: string, color: string): string {
+  return `
+    <div class="inspector-row">
+      <span class="inspector-swatch" style="--swatch:${escapeHtml(color)}"></span>
+      <span class="inspector-row__main">
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(meta)}</small>
+        <small>${escapeHtml(detail)}</small>
+      </span>
+    </div>
+  `;
+}
+
+function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
+  if (example === 'combo-preset') {
+    return createDefaultRuleset();
+  }
+  const next = structuredClone(ruleset) as Ruleset;
+  if (example === 'bleed-dot') {
+    upsertById(next.mechanics.statuses, {
+      id: 'bleeding',
+      name: 'Bleeding',
+      color: '#e0524d',
+      durationTicks: 120,
+      tags: ['bleed'],
+      periodic: {
+        everyTicks: 24,
+        actions: [{ kind: 'dealDamage', target: 'target', amount: 4, color: '#e0524d' }],
+      },
+    });
+    const arcSlash = next.abilities.find((ability) => ability.id === 'arc-slash');
+    if (arcSlash) {
+      arcSlash.effects = [...(arcSlash.effects ?? []).filter((effect) => effect.kind !== 'applyStatus' || effect.statusId !== 'bleeding'), {
+        kind: 'applyStatus',
+        target: 'hit',
+        statusId: 'bleeding',
+      }];
+      arcSlash.tags = Array.from(new Set([...(arcSlash.tags ?? []), 'bleed']));
+    }
+    return next;
+  }
+  if (example === 'execute') {
+    upsertById(next.mechanics.triggers, {
+      id: 'low-hp-execute',
+      name: 'Low HP Execute',
+      event: 'onHit',
+      conditions: [{ kind: 'hpBelow', target: 'target', ratio: 0.3 }],
+      actions: [
+        { kind: 'dealDamage', target: 'target', amount: 16, color: '#ffffff' },
+        { kind: 'flashEffect', target: 'target', radius: 1.8, color: '#ffffff' },
+      ],
+    });
+    return next;
+  }
+  return next;
+}
+
+function upsertById<T extends { id: string }>(values: T[], value: T): void {
+  const index = values.findIndex((candidate) => candidate.id === value.id);
+  if (index >= 0) {
+    values[index] = value;
+    return;
+  }
+  values.push(value);
 }

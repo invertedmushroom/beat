@@ -45,7 +45,7 @@ test('solo mode initializes Rapier and advances snapshots without console noise'
   await page.keyboard.press('Digit2');
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[1] ?? 0)).toBeGreaterThan(0);
 
-  await page.locator('.skill-slot[data-slot="3"]').click();
+  await page.keyboard.press('Digit4');
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[3] ?? 0)).toBeGreaterThan(0);
 
   expect(consoleMessages.filter((line) => /rawintegrationparameters_new|deprecated parameters|Cannot read/.test(line))).toEqual([]);
@@ -228,6 +228,74 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
   await page.keyboard.down('ArrowUp');
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.vy ?? 0)).toBeGreaterThan(0.5);
   await page.keyboard.up('ArrowUp');
+});
+
+test('rules inspector validates mechanics examples and updates hash', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#rules-validation-line')).toContainText('valid');
+  await expect(page.locator('#rules-inspector')).toContainText('Shock Bonus');
+  const beforeHash = await page.locator('#rules-hash-line').textContent();
+
+  await page.getByRole('button', { name: 'Bleed DOT' }).click();
+  await expect(page.locator('#rules-validation-line')).toContainText('valid');
+  await expect(page.locator('#rules-inspector')).toContainText('Bleeding');
+  await expect
+    .poll(async () => page.locator('#rules-hash-line').textContent())
+    .not.toBe(beforeHash);
+
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Solo' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.resources.length ?? 0)).toBeGreaterThan(0);
+});
+
+test('mechanics status combo is visible in multiplayer combat', async ({ context, page: host }) => {
+  const roomName = `Mechanics Lab ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  const patchedRules = await host.locator('#rules-json').evaluate((node) => {
+    const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
+      obstacles: unknown[];
+      abilities: Array<Record<string, unknown>>;
+    };
+    rules.obstacles = [];
+    const pulse = rules.abilities.find((ability) => ability.id === 'pulse-bolt');
+    if (!pulse) {
+      throw new Error('pulse-bolt missing');
+    }
+    Object.assign(pulse, {
+      targeting: 'aim-assist',
+      damage: 12,
+      cooldownTicks: 6,
+      radius: 1.4,
+      range: 60,
+      speed: 3,
+      lifetimeTicks: 40,
+    });
+    return `${JSON.stringify(rules, null, 2)}\n`;
+  });
+  await host.locator('#rules-json').fill(patchedRules);
+  await host.getByRole('button', { name: 'Apply' }).click();
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  await host.bringToFront();
+  await aimCanvas(host, 'right');
+  await pressGameKey(host, 'Space');
+  await expect
+    .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.statuses.some((status) => status.id === 'shocked') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.effects.some((effect) => effect.kind === 'trigger') ?? false))
+    .toBeTruthy();
 });
 
 test('authored effects are visible in multiplayer combat', async ({ context, page: host }) => {
