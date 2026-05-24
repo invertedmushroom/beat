@@ -3,6 +3,7 @@ import type {
   AbilityCharge,
   AbilityEffect,
   DragBodyEffect,
+  MatchConfig,
   MechanicAction,
   MechanicCondition,
   MechanicDirectionRef,
@@ -15,6 +16,8 @@ import type {
   NpcBehaviorMode,
   NpcConfig,
   NpcSpawn,
+  ObjectiveDefinition,
+  ObjectiveScoreZone,
   PhysicsBodySpec,
   ProjectileAbility,
   ProjectileWorldCollision,
@@ -34,10 +37,12 @@ export function validateRuleset(value: unknown): Ruleset {
   const ruleset = assertRecord(value, 'ruleset');
   const abilities = readArray(ruleset.abilities, 'abilities').map(validateAbility);
   const mechanics = validateMechanics(ruleset.mechanics);
+  const match = validateMatch(ruleset.match);
+  const objectives = validateObjectives(ruleset.objectives, match);
   const npcs = validateNpcs(ruleset.npcs, abilities);
   const loadout = assertRecord(ruleset.loadout, 'loadout');
   const abilityIds = validateLoadoutAbilityIds(loadout.abilityIds, abilities);
-  validateMechanicReferences(abilities, mechanics);
+  validateMechanicReferences(abilities, mechanics, match, objectives);
 
   return {
     id: readId(ruleset.id, 'id'),
@@ -52,6 +57,8 @@ export function validateRuleset(value: unknown): Ruleset {
     obstacles: readArray(ruleset.obstacles, 'obstacles').map(validateObstacle),
     abilities,
     mechanics,
+    match,
+    objectives,
     npcs,
     loadout: { abilityIds },
   };
@@ -218,7 +225,10 @@ function validateMechanicEvent(value: unknown): MechanicEventKind {
     event === 'onStatusApplied' ||
     event === 'onStatusExpired' ||
     event === 'onKill' ||
-    event === 'onLowHp'
+    event === 'onLowHp' ||
+    event === 'onObjectiveEnter' ||
+    event === 'onObjectiveTick' ||
+    event === 'onScore'
   ) {
     return event;
   }
@@ -262,7 +272,102 @@ function validateMechanicCondition(value: unknown): MechanicCondition {
       tag: readTag(condition.tag, 'mechanics.trigger.condition.tag'),
     };
   }
+  if (kind === 'objectiveId') {
+    return {
+      kind,
+      objectiveId: readId(condition.objectiveId, 'mechanics.trigger.condition.objectiveId'),
+    };
+  }
+  if (kind === 'scoringTeam') {
+    return {
+      kind,
+      teamId: readId(condition.teamId, 'mechanics.trigger.condition.teamId'),
+    };
+  }
   throw new Error('mechanics.trigger.condition.kind must be supported');
+}
+
+function validateMatch(value: unknown): MatchConfig {
+  const match = assertRecord(value, 'match');
+  const teams = readArray(match.teams, 'match.teams').map(validateMatchTeam);
+  assertUniqueIds(teams, 'match.teams');
+  if (teams.length === 0) {
+    throw new Error('match.teams must contain at least one team');
+  }
+  return {
+    teams,
+    durationTicks: readInt(match.durationTicks, 'match.durationTicks', 300, 36_000),
+    scoreLimit: readInt(match.scoreLimit, 'match.scoreLimit', 1, 1_000),
+    friendlyFire: match.friendlyFire === undefined ? true : readBoolean(match.friendlyFire, 'match.friendlyFire'),
+    respawnMode: validateRespawnMode(match.respawnMode),
+  };
+}
+
+function validateMatchTeam(value: unknown): MatchConfig['teams'][number] {
+  const team = assertRecord(value, 'match.team');
+  return {
+    id: readId(team.id, 'match.team.id'),
+    name: clampString(readString(team.name, 'match.team.name'), 1, 28, 'match.team.name'),
+    color: readColor(team.color, 'match.team.color'),
+  };
+}
+
+function validateRespawnMode(value: unknown): MatchConfig['respawnMode'] {
+  const mode = readString(value, 'match.respawnMode');
+  if (mode === 'timed') {
+    return mode;
+  }
+  throw new Error('match.respawnMode must be timed');
+}
+
+function validateObjectives(value: unknown, match: MatchConfig): ObjectiveDefinition[] {
+  const objectives = readArray(value, 'objectives').map((objective) => validateObjective(objective, match));
+  assertUniqueIds(objectives, 'objectives');
+  return objectives;
+}
+
+function validateObjective(value: unknown, match: MatchConfig): ObjectiveDefinition {
+  const objective = assertRecord(value, 'objective');
+  const kind = readString(objective.kind, 'objective.kind');
+  if (kind === 'relicPush') {
+    const scoreZones = readArray(objective.scoreZones, 'objective.scoreZones').map((zone) => validateObjectiveScoreZone(zone, match));
+    assertUniqueIds(scoreZones, 'objective.scoreZones');
+    if (scoreZones.length === 0) {
+      throw new Error('objective.scoreZones must contain at least one zone');
+    }
+    const spawn = assertRecord(objective.spawn, 'objective.spawn');
+    return {
+      id: readId(objective.id, 'objective.id'),
+      name: clampString(readString(objective.name, 'objective.name'), 1, 36, 'objective.name'),
+      kind,
+      spawn: {
+        x: readNumber(spawn.x, 'objective.spawn.x', -200, 200),
+        y: readNumber(spawn.y, 'objective.spawn.y', -200, 200),
+      },
+      body: validatePhysicsBodySpec(objective.body, 'objective.body'),
+      scoreZones,
+      scoreCooldownTicks: readOptionalInt(objective.scoreCooldownTicks, 'objective.scoreCooldownTicks', 0, 1_200) ?? 30,
+      resetOnScore: objective.resetOnScore === undefined ? true : readBoolean(objective.resetOnScore, 'objective.resetOnScore'),
+    };
+  }
+  throw new Error('objective.kind must be relicPush');
+}
+
+function validateObjectiveScoreZone(value: unknown, match: MatchConfig): ObjectiveScoreZone {
+  const zone = assertRecord(value, 'objective.scoreZone');
+  const team = readId(zone.team, 'objective.scoreZone.team');
+  if (!match.teams.some((candidate) => candidate.id === team)) {
+    throw new Error('objective.scoreZone.team must reference a match team');
+  }
+  return {
+    id: readId(zone.id, 'objective.scoreZone.id'),
+    team,
+    x: readNumber(zone.x, 'objective.scoreZone.x', -200, 200),
+    y: readNumber(zone.y, 'objective.scoreZone.y', -200, 200),
+    radius: readNumber(zone.radius, 'objective.scoreZone.radius', 0.2, 30),
+    points: readInt(zone.points, 'objective.scoreZone.points', 1, 100),
+    ...(zone.color === undefined ? {} : { color: readColor(zone.color, 'objective.scoreZone.color') }),
+  };
 }
 
 function validateMechanicAction(value: unknown, label: string): MechanicAction {
@@ -724,9 +829,11 @@ function validateTags(value: unknown, label: string): string[] | undefined {
   return tags.length > 0 ? Array.from(new Set(tags)) : undefined;
 }
 
-function validateMechanicReferences(abilities: Ability[], mechanics: MechanicsConfig): void {
+function validateMechanicReferences(abilities: Ability[], mechanics: MechanicsConfig, match: MatchConfig, objectives: ObjectiveDefinition[]): void {
   const statusIds = new Set(mechanics.statuses.map((status) => status.id));
   const resourceIds = new Set(mechanics.resources.map((resource) => resource.id));
+  const teamIds = new Set(match.teams.map((team) => team.id));
+  const objectiveIds = new Set(objectives.map((objective) => objective.id));
   for (const ability of abilities) {
     for (const effect of ability.effects ?? []) {
       if (effect.kind === 'applyStatus' && !statusIds.has(effect.statusId)) {
@@ -741,7 +848,7 @@ function validateMechanicReferences(abilities: Ability[], mechanics: MechanicsCo
   }
   for (const trigger of mechanics.triggers) {
     for (const condition of trigger.conditions ?? []) {
-      validateConditionReferences(condition, statusIds, resourceIds, trigger.id);
+      validateConditionReferences(condition, statusIds, resourceIds, objectiveIds, teamIds, trigger.id);
     }
     for (const action of trigger.actions) {
       validateActionReferences(action, statusIds, resourceIds, `mechanics.trigger ${trigger.id}`);
@@ -749,12 +856,25 @@ function validateMechanicReferences(abilities: Ability[], mechanics: MechanicsCo
   }
 }
 
-function validateConditionReferences(condition: MechanicCondition, statusIds: Set<string>, resourceIds: Set<string>, triggerId: string): void {
+function validateConditionReferences(
+  condition: MechanicCondition,
+  statusIds: Set<string>,
+  resourceIds: Set<string>,
+  objectiveIds: Set<string>,
+  teamIds: Set<string>,
+  triggerId: string,
+): void {
   if ((condition.kind === 'hasStatus' || condition.kind === 'missingStatus') && !statusIds.has(condition.statusId)) {
     throw new Error(`mechanics.trigger ${triggerId} references unknown status ${condition.statusId}`);
   }
   if (condition.kind === 'resourceAtLeast' && !resourceIds.has(condition.resourceId)) {
     throw new Error(`mechanics.trigger ${triggerId} references unknown resource ${condition.resourceId}`);
+  }
+  if (condition.kind === 'objectiveId' && !objectiveIds.has(condition.objectiveId)) {
+    throw new Error(`mechanics.trigger ${triggerId} references unknown objective ${condition.objectiveId}`);
+  }
+  if (condition.kind === 'scoringTeam' && !teamIds.has(condition.teamId)) {
+    throw new Error(`mechanics.trigger ${triggerId} references unknown team ${condition.teamId}`);
   }
 }
 
@@ -849,6 +969,13 @@ function readInt(value: unknown, label: string, min: number, max: number): numbe
     throw new Error(`${label} must be an integer`);
   }
   return number;
+}
+
+function readOptionalInt(value: unknown, label: string, min: number, max: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readInt(value, label, min, max);
 }
 
 function validateOptionalMultiplierPair(min: number | undefined, max: number | undefined, label: string): void {

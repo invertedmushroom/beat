@@ -174,6 +174,7 @@ export class HostSession {
             displayName: message.displayName,
             hue: hueFromString(peer.playerId),
             local: false,
+            team: this.options.ruleset.match.teams[0]?.id ?? 'players',
           });
         }
         channel.send(encodeMessage({ type: 'welcome', playerId: peer.playerId, room: this.options.room, ruleset: this.options.ruleset }));

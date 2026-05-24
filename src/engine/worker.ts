@@ -20,6 +20,8 @@ import type {
   MechanicTraceSnapshot,
   MechanicTraceKind,
   MeleeAbility,
+  ObjectiveDefinition,
+  ObjectiveSnapshot,
   PhysicsBodySnapshot,
   PhysicsBodySpec,
   PhysicsTraceKind,
@@ -81,6 +83,7 @@ type RuntimePhysicsBody = {
   color: string;
   createdTick: number;
   lifetimeTicks: number;
+  expires: boolean;
 };
 
 type RuntimeConstraint = {
@@ -97,6 +100,14 @@ type RuntimeConstraint = {
   color: string;
   createdTick: number;
   lifetimeTicks: number;
+};
+
+type RuntimeObjective = {
+  definition: ObjectiveDefinition;
+  bodyId?: string;
+  activeZoneId?: string;
+  lastScoreTick: number;
+  lastScoredTeamId?: string;
 };
 
 type RuntimeMelee = {
@@ -181,6 +192,9 @@ type MechanicEvent = {
   ability?: Ability;
   slot?: number;
   statusId?: string;
+  objectiveId?: string;
+  zoneId?: string;
+  scoringTeamId?: string;
   amount?: number;
   direction?: Vec2;
 };
@@ -233,6 +247,10 @@ let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
 let physicsBodies = new Map<string, RuntimePhysicsBody>();
 let constraints = new Map<string, RuntimeConstraint>();
+let objectives = new Map<string, RuntimeObjective>();
+let matchScores = new Map<string, number>();
+let matchFinished = false;
+let winnerTeamId: string | undefined;
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
 let combatTexts: RuntimeCombatText[] = [];
@@ -302,6 +320,9 @@ function handleCommand(command: EngineCommand): void {
     case 'set-paused':
       paused = command.paused;
       return;
+    case 'reset-objectives':
+      resetObjectives(true);
+      return;
     case 'clear-trace':
       mechanicTraces = [];
       aiTraces = [];
@@ -329,6 +350,10 @@ function initialize(nextRuleset: Ruleset): void {
   projectiles = [];
   physicsBodies = new Map();
   constraints = new Map();
+  objectives = new Map();
+  matchScores = initialMatchScores(nextRuleset);
+  matchFinished = false;
+  winnerTeamId = undefined;
   melees = [];
   effects = [];
   combatTexts = [];
@@ -342,6 +367,7 @@ function initialize(nextRuleset: Ruleset): void {
   for (const obstacle of nextRuleset.obstacles) {
     addStaticBox(obstacle.x, obstacle.y, obstacle.halfWidth, obstacle.halfHeight);
   }
+  resetObjectives(false);
 
   const intervalMs = 1000 / nextRuleset.tickRate;
   tickHandle = setInterval(step, intervalMs) as unknown as number;
@@ -487,6 +513,7 @@ function step(): void {
 
   world.step();
   enforceActiveConstraints();
+  stepObjectives();
   stepProjectiles();
   stepMelees();
   pruneConstraints();
@@ -1181,12 +1208,49 @@ function spawnBodyFromEffect(
   return createPhysicsBody(spec, position, velocity, owner?.spawn.playerId, ability.id);
 }
 
+function initialMatchScores(activeRuleset: Ruleset): Map<string, number> {
+  return new Map(activeRuleset.match.teams.map((team) => [team.id, 0]));
+}
+
+function resetObjectives(resetScores: boolean): void {
+  if (!ruleset) {
+    return;
+  }
+  for (const objective of objectives.values()) {
+    if (objective.bodyId) {
+      removePhysicsBody(objective.bodyId, 'cleanup');
+    }
+  }
+  objectives = new Map();
+  if (resetScores) {
+    matchScores = initialMatchScores(ruleset);
+    matchFinished = false;
+    winnerTeamId = undefined;
+  }
+  for (const definition of ruleset.objectives) {
+    const body = createObjectiveBody(definition);
+    objectives.set(definition.id, {
+      definition,
+      bodyId: body?.bodyId,
+      lastScoreTick: -definition.scoreCooldownTicks,
+    });
+  }
+}
+
+function createObjectiveBody(definition: ObjectiveDefinition): RuntimePhysicsBody | undefined {
+  if (definition.kind === 'relicPush') {
+    return createPhysicsBody(definition.body, definition.spawn, { x: 0, y: 0 }, undefined, undefined, false);
+  }
+  return undefined;
+}
+
 function createPhysicsBody(
   spec: PhysicsBodySpec,
   position: Vec2,
   velocity: Vec2,
   ownerId: string | undefined,
   sourceAbilityId: string | undefined,
+  expires = true,
 ): RuntimePhysicsBody | undefined {
   if (!world || !ruleset) {
     return undefined;
@@ -1217,6 +1281,7 @@ function createPhysicsBody(
     color: spec.color,
     createdTick: tick,
     lifetimeTicks: spec.lifetimeTicks,
+    expires,
   };
   physicsBodies.set(physicsBody.bodyId, physicsBody);
   addEffect('physics', spawnPoint.x, spawnPoint.y, spec.radius * 2.5, spec.color, 18);
@@ -1342,6 +1407,152 @@ function createSpringJoint(
   return joint;
 }
 
+function stepObjectives(): void {
+  if (!ruleset) {
+    return;
+  }
+  if (!matchFinished && tick >= ruleset.match.durationTicks) {
+    finishMatch();
+  }
+  for (const objective of objectives.values()) {
+    if (objective.definition.kind === 'relicPush') {
+      stepRelicPushObjective(objective);
+    }
+  }
+}
+
+function stepRelicPushObjective(objective: RuntimeObjective): void {
+  if (!ruleset || objective.definition.kind !== 'relicPush') {
+    return;
+  }
+  let body = objective.bodyId ? physicsBodies.get(objective.bodyId) : undefined;
+  if (!body) {
+    body = createObjectiveBody(objective.definition);
+    objective.bodyId = body?.bodyId;
+  }
+  if (!body) {
+    return;
+  }
+  const pos = body.body.translation();
+  const zone = objective.definition.scoreZones.find((candidate) => {
+    const distance = Math.hypot(pos.x - candidate.x, pos.y - candidate.y);
+    return distance <= candidate.radius + body.radius * 0.55;
+  });
+  if (zone?.id !== objective.activeZoneId) {
+    objective.activeZoneId = zone?.id;
+    if (zone) {
+      const source = closestAlivePlayerTo({ x: pos.x, y: pos.y });
+      emitMechanicEvent({
+        event: 'onObjectiveEnter',
+        sourceId: source?.spawn.playerId,
+        targetId: source?.spawn.playerId,
+        objectiveId: objective.definition.id,
+        zoneId: zone.id,
+        scoringTeamId: zone.team,
+      });
+    }
+  }
+  if (!zone || matchFinished) {
+    return;
+  }
+  if (tick % Math.max(10, Math.floor((ruleset.tickRate ?? 30) / 2)) === 0) {
+    const source = closestAlivePlayerTo({ x: pos.x, y: pos.y });
+    emitMechanicEvent({
+      event: 'onObjectiveTick',
+      sourceId: source?.spawn.playerId,
+      targetId: source?.spawn.playerId,
+      objectiveId: objective.definition.id,
+      zoneId: zone.id,
+      scoringTeamId: zone.team,
+    });
+  }
+  if (tick - objective.lastScoreTick < objective.definition.scoreCooldownTicks) {
+    return;
+  }
+  scoreObjective(objective, zone.id);
+}
+
+function scoreObjective(objective: RuntimeObjective, zoneId: string): void {
+  if (!ruleset || objective.definition.kind !== 'relicPush' || matchFinished) {
+    return;
+  }
+  const zone = objective.definition.scoreZones.find((candidate) => candidate.id === zoneId);
+  if (!zone) {
+    return;
+  }
+  const body = objective.bodyId ? physicsBodies.get(objective.bodyId) : undefined;
+  const pos = body?.body.translation() ?? objective.definition.spawn;
+  const nextScore = (matchScores.get(zone.team) ?? 0) + zone.points;
+  matchScores.set(zone.team, nextScore);
+  objective.lastScoreTick = tick;
+  objective.lastScoredTeamId = zone.team;
+  addEffect('trigger', pos.x, pos.y, zone.radius, teamColor(zone.team, zone.color), 28);
+  addCombatText(pos.x, pos.y - zone.radius * 0.55, 'resource', zone.points, teamColor(zone.team, zone.color));
+  const source = closestAlivePlayerTo({ x: pos.x, y: pos.y }, zone.team);
+  emitMechanicEvent({
+    event: 'onScore',
+    sourceId: source?.spawn.playerId,
+    targetId: source?.spawn.playerId,
+    objectiveId: objective.definition.id,
+    zoneId: zone.id,
+    scoringTeamId: zone.team,
+    amount: zone.points,
+  });
+  if (objective.definition.resetOnScore && body) {
+    body.body.setTranslation(objective.definition.spawn, true);
+    body.body.setLinvel({ x: 0, y: 0 }, true);
+    objective.activeZoneId = undefined;
+  }
+  if (nextScore >= ruleset.match.scoreLimit) {
+    finishMatch(zone.team);
+  }
+}
+
+function finishMatch(preferredWinner?: string): void {
+  if (!ruleset || matchFinished) {
+    return;
+  }
+  matchFinished = true;
+  winnerTeamId = preferredWinner ?? leadingTeamId();
+  const team = winnerTeamId ? ruleset.match.teams.find((candidate) => candidate.id === winnerTeamId) : undefined;
+  addEffect('trigger', 0, 0, Math.min(ruleset.arena.width, ruleset.arena.height) * 0.24, team?.color ?? '#ffffff', 60);
+}
+
+function leadingTeamId(): string | undefined {
+  let best: { teamId: string; score: number } | undefined;
+  let tied = false;
+  for (const [teamId, score] of matchScores) {
+    if (!best || score > best.score) {
+      best = { teamId, score };
+      tied = false;
+      continue;
+    }
+    if (best && score === best.score) {
+      tied = true;
+    }
+  }
+  return tied ? undefined : best?.teamId;
+}
+
+function closestAlivePlayerTo(point: Vec2, preferredTeam?: string): RuntimePlayer | undefined {
+  let best: { player: RuntimePlayer; distance: number } | undefined;
+  for (const player of players.values()) {
+    if (!player.alive || (preferredTeam && player.team !== preferredTeam)) {
+      continue;
+    }
+    const pos = player.body.translation();
+    const distance = Math.hypot(pos.x - point.x, pos.y - point.y);
+    if (!best || distance < best.distance || (distance === best.distance && player.spawn.playerId < best.player.spawn.playerId)) {
+      best = { player, distance };
+    }
+  }
+  return best?.player;
+}
+
+function teamColor(teamId: string, fallback?: string): string {
+  return fallback ?? ruleset?.match.teams.find((team) => team.id === teamId)?.color ?? '#f5f3ed';
+}
+
 function activePhysicsConstraintMovementMultiplier(player: RuntimePlayer): number {
   let multiplier = 1;
   for (const constraint of constraints.values()) {
@@ -1408,7 +1619,7 @@ function pruneConstraints(): void {
 
 function prunePhysicsBodies(): void {
   for (const physicsBody of Array.from(physicsBodies.values())) {
-    if (tick - physicsBody.createdTick >= physicsBody.lifetimeTicks) {
+    if (physicsBody.expires && tick - physicsBody.createdTick >= physicsBody.lifetimeTicks) {
       removePhysicsBody(physicsBody.bodyId, 'expire');
     }
   }
@@ -1741,6 +1952,10 @@ function addMechanicTrace(
     abilityId: event.ability?.id,
     abilityName: event.ability?.name,
     statusId: event.statusId,
+    objectiveId: event.objectiveId,
+    objectiveName: event.objectiveId ? objectives.get(event.objectiveId)?.definition.name : undefined,
+    zoneId: event.zoneId,
+    scoringTeamId: event.scoringTeamId,
     amount: event.amount,
     ...extra,
   });
@@ -1769,6 +1984,12 @@ function conditionPasses(condition: MechanicCondition, event: MechanicEvent, sou
   }
   if (condition.kind === 'slotUsed') {
     return event.slot === condition.slot;
+  }
+  if (condition.kind === 'objectiveId') {
+    return event.objectiveId === condition.objectiveId;
+  }
+  if (condition.kind === 'scoringTeam') {
+    return event.scoringTeamId === condition.teamId;
   }
   const player = playerForRef(condition.target, source, target);
   if (!player) {
@@ -2108,6 +2329,8 @@ function readSnapshot(): EngineSnapshot {
     tick,
     nowMs: performance.now(),
     rulesetId: activeRuleset.id,
+    match: toMatchSnapshot(activeRuleset),
+    objectives: Array.from(objectives.values()).map(toObjectiveSnapshot),
     projectiles: projectiles.map(toProjectileSnapshot),
     physicsBodies: Array.from(physicsBodies.values()).map(toPhysicsBodySnapshot),
     constraints: Array.from(constraints.values()).map(toConstraintSnapshot),
@@ -2228,6 +2451,52 @@ function toProjectileSnapshot(projectile: RuntimeProjectile): ProjectileSnapshot
   };
 }
 
+function toMatchSnapshot(activeRuleset: Ruleset): EngineSnapshot['match'] {
+  return {
+    elapsedTicks: tick,
+    remainingTicks: Math.max(0, activeRuleset.match.durationTicks - tick),
+    durationTicks: activeRuleset.match.durationTicks,
+    scoreLimit: activeRuleset.match.scoreLimit,
+    finished: matchFinished,
+    winnerTeamId,
+    teams: activeRuleset.match.teams.map((team) => ({
+      ...team,
+      score: matchScores.get(team.id) ?? 0,
+    })),
+  };
+}
+
+function toObjectiveSnapshot(objective: RuntimeObjective): ObjectiveSnapshot {
+  const definition = objective.definition;
+  const body = objective.bodyId ? physicsBodies.get(objective.bodyId) : undefined;
+  const pos = body?.body.translation() ?? definition.spawn;
+  const vel = body?.body.linvel() ?? { x: 0, y: 0 };
+  return {
+    objectiveId: definition.id,
+    name: definition.name,
+    kind: definition.kind,
+    bodyId: body?.bodyId,
+    x: pos.x,
+    y: pos.y,
+    vx: vel.x,
+    vy: vel.y,
+    radius: definition.body.radius,
+    color: definition.body.color,
+    activeZoneId: objective.activeZoneId,
+    lastScoredTeamId: objective.lastScoredTeamId,
+    scoreCooldownTicks: Math.max(0, objective.lastScoreTick + definition.scoreCooldownTicks - tick),
+    zones: definition.scoreZones.map((zone) => ({
+      zoneId: zone.id,
+      team: zone.team,
+      x: zone.x,
+      y: zone.y,
+      radius: zone.radius,
+      points: zone.points,
+      color: teamColor(zone.team, zone.color),
+    })),
+  };
+}
+
 function toPhysicsBodySnapshot(physicsBody: RuntimePhysicsBody): PhysicsBodySnapshot {
   const pos = physicsBody.body.translation();
   const vel = physicsBody.body.linvel();
@@ -2241,7 +2510,7 @@ function toPhysicsBodySnapshot(physicsBody: RuntimePhysicsBody): PhysicsBodySnap
     vy: vel.y,
     radius: physicsBody.radius,
     color: physicsBody.color,
-    remainingTicks: Math.max(0, physicsBody.createdTick + physicsBody.lifetimeTicks - tick),
+    remainingTicks: physicsBody.expires ? Math.max(0, physicsBody.createdTick + physicsBody.lifetimeTicks - tick) : 999_999,
   };
 }
 
@@ -2299,6 +2568,10 @@ function stop(): void {
   projectiles = [];
   physicsBodies = new Map();
   constraints = new Map();
+  objectives = new Map();
+  matchScores = new Map();
+  matchFinished = false;
+  winnerTeamId = undefined;
   melees = [];
   effects = [];
   combatTexts = [];
@@ -2394,6 +2667,9 @@ function aimForPlayer(player: RuntimePlayer): Vec2 {
 }
 
 function sameTeam(a: RuntimePlayer | undefined, b: RuntimePlayer | undefined): boolean {
+  if (ruleset?.match.friendlyFire && (a?.spawn.role ?? 'player') === 'player' && (b?.spawn.role ?? 'player') === 'player') {
+    return false;
+  }
   return Boolean(a && b && a.team.length > 0 && a.team === b.team);
 }
 

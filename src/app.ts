@@ -48,6 +48,7 @@ export class BeatApp {
   private hashLine!: HTMLDivElement;
   private rulesHashLine!: HTMLDivElement;
   private peerLine!: HTMLDivElement;
+  private matchLine!: HTMLDivElement;
   private localMechanicsRoot!: HTMLDivElement;
   private traceRoot!: HTMLDivElement;
   private logRoot!: HTMLDivElement;
@@ -154,6 +155,7 @@ export class BeatApp {
     this.hashLine = requireNode<HTMLDivElement>('#hash-line');
     this.rulesHashLine = requireNode<HTMLDivElement>('#rules-hash-line');
     this.peerLine = requireNode<HTMLDivElement>('#peer-line');
+    this.matchLine = requireNode<HTMLDivElement>('#match-line');
     this.localMechanicsRoot = requireNode<HTMLDivElement>('#local-mechanics');
     this.traceRoot = requireNode<HTMLDivElement>('#trace-log');
     this.logRoot = requireNode<HTMLDivElement>('#log');
@@ -203,7 +205,7 @@ export class BeatApp {
       displayName: this.displayName(),
       hue: 150,
       local: true,
-      team: 'players',
+      team: this.ruleset.match.teams[0]?.id ?? 'players',
     });
     this.spawnNpcSpawns(this.ruleset.npcs.sessionSpawns, 'session');
     this.unsubscribeSnapshot = this.engine.onSnapshot((snapshot) => {
@@ -264,7 +266,7 @@ export class BeatApp {
       displayName: this.displayName(),
       hue: 150,
       local: true,
-      team: 'players',
+      team: this.ruleset.match.teams[0]?.id ?? 'players',
       spawnPoint: lab ? { x: -10, y: -7 } : undefined,
     });
     if (lab) {
@@ -351,6 +353,7 @@ export class BeatApp {
     this.input.setAimOrigin(undefined);
     this.updateSkillBar(undefined);
     this.updateLocalMechanics(undefined);
+    this.updateMatchHud(undefined);
     this.renderTrace([], []);
     this.mode = 'idle';
     this.setRulesLocked(false);
@@ -447,6 +450,7 @@ export class BeatApp {
     this.updateAimOrigin(snapshot);
     this.updateSkillBar(snapshot);
     this.updateLocalMechanics(snapshot);
+    this.updateMatchHud(snapshot);
     this.renderTrace(snapshot.mechanicTraces, snapshot.aiTraces);
     this.setStatus(status);
   }
@@ -486,6 +490,7 @@ export class BeatApp {
       return;
     }
     this.clearLabActors();
+    this.engine?.resetObjectives();
     this.spawnNpcSpawns(this.ruleset.npcs.labSpawns, 'lab');
     this.clearLabTrace();
     this.log('lab actors reset');
@@ -587,7 +592,7 @@ export class BeatApp {
       }
       this.editableRulesetHash = hash;
       this.rulesHashLine.textContent = `${ruleset.name} · ${shortHash(hash)}`;
-      this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers · ${ruleset.npcs.archetypes.length} NPCs`;
+      this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.objectives.length} objectives · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers · ${ruleset.npcs.archetypes.length} NPCs`;
       this.rulesValidationLine.classList.remove('is-error');
       this.rulesInspector.innerHTML = rulesInspectorHtml(ruleset);
       this.syncLabControls();
@@ -737,6 +742,19 @@ export class BeatApp {
     this.localMechanicsRoot.innerHTML = chips.length > 0 ? chips.join('') : '<span class="mechanic-chip mechanic-chip--empty">No statuses</span>';
   }
 
+  private updateMatchHud(snapshot: EngineSnapshot | undefined): void {
+    if (!snapshot) {
+      this.matchLine.textContent = 'match idle';
+      return;
+    }
+    const seconds = Math.ceil(snapshot.match.remainingTicks / (this.ruleset?.tickRate ?? 30));
+    const scores = snapshot.match.teams.map((team) => `${team.name} ${team.score}`).join(' · ');
+    const winner = snapshot.match.winnerTeamId ? snapshot.match.teams.find((team) => team.id === snapshot.match.winnerTeamId)?.name : undefined;
+    this.matchLine.textContent = snapshot.match.finished
+      ? `${winner ? `${winner} wins` : 'draw'} · ${scores}`
+      : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} · ${scores}`;
+  }
+
   private renderTrace(mechanicTraces: MechanicTraceSnapshot[], aiTraces: AiTraceSnapshot[]): void {
     const visible = [
       ...mechanicTraces.map((trace) => ({ tick: trace.tick, type: 'mechanic' as const, trace })),
@@ -833,6 +851,7 @@ function shellHtml(): string {
         <canvas id="arena" class="arena" aria-label="Beat arena"></canvas>
         <div class="hud">
           <div id="status-line">starting</div>
+          <div id="match-line">match idle</div>
           <div id="hash-line">rules idle</div>
           <div id="peer-line">peer</div>
           <div id="local-mechanics" class="local-mechanics"></div>
@@ -941,6 +960,28 @@ function blurActiveElement(): void {
 
 function rulesInspectorHtml(ruleset: Ruleset): string {
   return [
+    inspectorGroup(
+      'Match',
+      [
+        inspectorRow(
+          ruleset.name,
+          `${Math.ceil(ruleset.match.durationTicks / ruleset.tickRate)}s · score ${ruleset.match.scoreLimit}`,
+          `teams ${ruleset.match.teams.map((team) => team.name).join(', ')} · friendly fire ${ruleset.match.friendlyFire ? 'on' : 'off'}`,
+          '#f5f3ed',
+        ),
+      ],
+    ),
+    inspectorGroup(
+      'Objectives',
+      ruleset.objectives.map((objective) =>
+        inspectorRow(
+          objective.name,
+          `${objective.kind} · ${objective.scoreZones.length} zones`,
+          objective.scoreZones.map((zone) => `${zone.team} +${zone.points} at ${zone.x}, ${zone.y}`).join(' · '),
+          objective.body.color,
+        ),
+      ),
+    ),
     inspectorGroup(
       'Abilities',
       ruleset.abilities.map((ability) =>
@@ -1085,6 +1126,12 @@ function conditionLabel(condition: MechanicCondition): string {
   if (condition.kind === 'slotUsed') {
     return `slot ${condition.slot + 1}`;
   }
+  if (condition.kind === 'objectiveId') {
+    return `objective ${condition.objectiveId}`;
+  }
+  if (condition.kind === 'scoringTeam') {
+    return `team ${condition.teamId}`;
+  }
   return `tag ${condition.tag}`;
 }
 
@@ -1119,7 +1166,9 @@ function traceLabel(trace: MechanicTraceSnapshot): string {
     return `${trace.tick} physics ${trace.physicsKind ?? 'event'} ${ability ? `via ${ability}` : ''}${target ? ` ${source}->${target}` : ` ${source}`}`.trim();
   }
   if (trace.kind === 'event') {
-    return `${trace.tick} ${trace.event ?? 'event'} ${ability ? `via ${ability}` : ''} ${target ? `${source}->${target}` : source}`.trim();
+    const objective = trace.objectiveName ?? trace.objectiveId;
+    const scored = trace.scoringTeamId ? ` team ${trace.scoringTeamId}` : '';
+    return `${trace.tick} ${trace.event ?? 'event'} ${objective ? objective : ability ? `via ${ability}` : ''}${scored} ${target ? `${source}->${target}` : source}`.trim();
   }
   if (trace.kind === 'trigger') {
     return `${trace.tick} trigger ${trace.triggerName ?? trace.triggerId ?? 'unknown'} fired`;

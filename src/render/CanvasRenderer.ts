@@ -105,6 +105,8 @@ export class CanvasRenderer {
       this.ctx.strokeRect(x, y, obstacle.halfWidth * 2 * scale, obstacle.halfHeight * 2 * scale);
     }
 
+    this.drawObjectives(originX, originY, scale);
+
     const local = this.snapshot?.players.find((player) => player.playerId === this.localPlayerId);
     if (local?.alive) {
       this.drawLocalTelegraph(local, originX, originY, scale);
@@ -343,6 +345,45 @@ export class CanvasRenderer {
     this.ctx.arc(x, y, radius * 2.2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
     this.ctx.stroke();
     this.ctx.restore();
+  }
+
+  private drawObjectives(originX: number, originY: number, scale: number): void {
+    for (const objective of this.snapshot?.objectives ?? []) {
+      for (const zone of objective.zones) {
+        const x = originX + zone.x * scale;
+        const y = originY + zone.y * scale;
+        const active = objective.activeZoneId === zone.zoneId;
+        this.ctx.save();
+        this.ctx.globalAlpha = active ? 0.2 : 0.1;
+        this.ctx.fillStyle = zone.color;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, zone.radius * scale, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.globalAlpha = active ? 0.82 : 0.48;
+        this.ctx.strokeStyle = zone.color;
+        this.ctx.lineWidth = active ? 3 : 2;
+        this.ctx.setLineDash(active ? [] : [9, 6]);
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, zone.radius * scale, 0, Math.PI * 2);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+        this.ctx.fillStyle = '#f5f3ed';
+        this.ctx.font = '700 11px ui-monospace, monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText(`${zone.team} +${zone.points}`, x, y + 4);
+        this.ctx.restore();
+      }
+      const relicX = originX + objective.x * scale;
+      const relicY = originY + objective.y * scale;
+      this.ctx.save();
+      this.ctx.strokeStyle = objective.color;
+      this.ctx.globalAlpha = objective.scoreCooldownTicks > 0 ? 0.35 : 0.72;
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.arc(relicX, relicY, Math.max(7, objective.radius * scale * 1.55), 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
   }
 
   private drawConstraints(originX: number, originY: number, scale: number): void {

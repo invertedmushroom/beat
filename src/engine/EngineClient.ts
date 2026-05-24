@@ -41,6 +41,10 @@ export class EngineClient {
     this.post({ type: 'set-paused', paused });
   }
 
+  resetObjectives(): void {
+    this.post({ type: 'reset-objectives' });
+  }
+
   clearTrace(): void {
     this.post({ type: 'clear-trace' });
   }

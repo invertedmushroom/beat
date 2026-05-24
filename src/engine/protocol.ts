@@ -188,7 +188,10 @@ export type MechanicEventKind =
   | 'onStatusApplied'
   | 'onStatusExpired'
   | 'onKill'
-  | 'onLowHp';
+  | 'onLowHp'
+  | 'onObjectiveEnter'
+  | 'onObjectiveTick'
+  | 'onScore';
 
 export type MechanicPlayerRef = 'source' | 'target';
 
@@ -206,7 +209,9 @@ export type MechanicCondition =
   | { kind: 'hpBelow'; target: MechanicPlayerRef; ratio: number }
   | { kind: 'resourceAtLeast'; target: MechanicPlayerRef; resourceId: string; amount: number }
   | { kind: 'slotUsed'; slot: number }
-  | { kind: 'abilityTag'; tag: string };
+  | { kind: 'abilityTag'; tag: string }
+  | { kind: 'objectiveId'; objectiveId: string }
+  | { kind: 'scoringTeam'; teamId: string };
 
 export type MechanicAction =
   | { kind: 'applyStatus'; target: MechanicPlayerRef; statusId: string; durationTicks?: number; stacks?: number }
@@ -219,6 +224,46 @@ export type MechanicAction =
   | { kind: 'flashEffect'; target: MechanicPlayerRef; radius: number; color?: string };
 
 export type MechanicDirectionRef = 'sourceToTarget' | 'targetToSource' | 'aim';
+
+export type MatchConfig = {
+  teams: MatchTeam[];
+  durationTicks: number;
+  scoreLimit: number;
+  friendlyFire: boolean;
+  respawnMode: 'timed';
+};
+
+export type MatchTeam = {
+  id: string;
+  name: string;
+  color: string;
+};
+
+export type ObjectiveDefinition = RelicPushObjective;
+
+export type RelicPushObjective = {
+  id: string;
+  name: string;
+  kind: 'relicPush';
+  spawn: {
+    x: number;
+    y: number;
+  };
+  body: PhysicsBodySpec;
+  scoreZones: ObjectiveScoreZone[];
+  scoreCooldownTicks: number;
+  resetOnScore: boolean;
+};
+
+export type ObjectiveScoreZone = {
+  id: string;
+  team: string;
+  x: number;
+  y: number;
+  radius: number;
+  points: number;
+  color?: string;
+};
 
 export type Ruleset = {
   id: string;
@@ -244,6 +289,8 @@ export type Ruleset = {
   obstacles: RectObstacle[];
   abilities: Ability[];
   mechanics: MechanicsConfig;
+  match: MatchConfig;
+  objectives: ObjectiveDefinition[];
   npcs: NpcConfig;
   loadout: {
     abilityIds: string[];
@@ -486,6 +533,10 @@ export type MechanicTraceSnapshot = {
   abilityName?: string;
   statusId?: string;
   resourceId?: string;
+  objectiveId?: string;
+  objectiveName?: string;
+  zoneId?: string;
+  scoringTeamId?: string;
   amount?: number;
 };
 
@@ -510,6 +561,8 @@ export type EngineSnapshot = {
   tick: number;
   nowMs: number;
   rulesetId: string;
+  match: MatchSnapshot;
+  objectives: ObjectiveSnapshot[];
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
   physicsBodies: PhysicsBodySnapshot[];
@@ -520,12 +573,54 @@ export type EngineSnapshot = {
   aiTraces: AiTraceSnapshot[];
 };
 
+export type MatchSnapshot = {
+  elapsedTicks: number;
+  remainingTicks: number;
+  durationTicks: number;
+  scoreLimit: number;
+  finished: boolean;
+  winnerTeamId?: string;
+  teams: MatchTeamSnapshot[];
+};
+
+export type MatchTeamSnapshot = MatchTeam & {
+  score: number;
+};
+
+export type ObjectiveSnapshot = {
+  objectiveId: string;
+  name: string;
+  kind: ObjectiveDefinition['kind'];
+  bodyId?: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  color: string;
+  activeZoneId?: string;
+  lastScoredTeamId?: string;
+  scoreCooldownTicks: number;
+  zones: ObjectiveZoneSnapshot[];
+};
+
+export type ObjectiveZoneSnapshot = {
+  zoneId: string;
+  team: string;
+  x: number;
+  y: number;
+  radius: number;
+  points: number;
+  color: string;
+};
+
 export type EngineCommand =
   | { type: 'init'; ruleset: Ruleset; seed: number }
   | { type: 'add-player'; player: PlayerSpawn }
   | { type: 'remove-player'; playerId: string }
   | { type: 'input'; playerId: string; input: PlayerInput }
   | { type: 'set-paused'; paused: boolean }
+  | { type: 'reset-objectives' }
   | { type: 'clear-trace' }
   | { type: 'stop' };
 

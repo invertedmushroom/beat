@@ -42,7 +42,7 @@ test('solo mode initializes Rapier and advances snapshots without console noise'
     )
     .toBeLessThan(0);
 
-  await page.keyboard.press('Digit2');
+  await pressGameKey(page, 'Digit2');
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[1] ?? 0)).toBeGreaterThan(0);
 
   expect(consoleMessages.filter((line) => /rawintegrationparameters_new|deprecated parameters|Cannot read/.test(line))).toEqual([]);
@@ -230,6 +230,7 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
 test('rules inspector validates mechanics examples and updates hash', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#rules-validation-line')).toContainText('valid');
+  await expect(page.locator('#rules-inspector')).toContainText('Center Relic');
   await expect(page.locator('#rules-inspector')).toContainText('Shock Bonus');
   const beforeHash = await page.locator('#rules-hash-line').textContent();
 
@@ -243,6 +244,46 @@ test('rules inspector validates mechanics examples and updates hash', async ({ p
   await page.getByRole('button', { name: 'Apply' }).click();
   await page.getByRole('button', { name: 'Solo' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.resources.length ?? 0)).toBeGreaterThan(0);
+});
+
+test('relic push objective scores and ends a match', async ({ page }) => {
+  await page.goto('/');
+  const patchedRules = await page.locator('#rules-json').evaluate((node) => {
+    const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
+      obstacles: unknown[];
+      match: {
+        durationTicks: number;
+        scoreLimit: number;
+      };
+      objectives: Array<{
+        id: string;
+        scoreCooldownTicks: number;
+        scoreZones: Array<Record<string, unknown>>;
+      }>;
+    };
+    rules.obstacles = [];
+    rules.match.durationTicks = 300;
+    rules.match.scoreLimit = 1;
+    const relic = rules.objectives.find((objective) => objective.id === 'center-relic');
+    if (!relic) {
+      throw new Error('center relic missing');
+    }
+    relic.scoreCooldownTicks = 1;
+    relic.scoreZones = [{ id: 'instant-goal', team: 'players', x: 0, y: 0, radius: 3, points: 1, color: '#2fd17c' }];
+    return `${JSON.stringify(rules, null, 2)}\n`;
+  });
+  await page.locator('#rules-json').fill(patchedRules);
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Solo' }).click();
+
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.match.teams.find((team) => team.id === 'players')?.score ?? 0))
+    .toBe(1);
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.match.finished ?? false)).toBeTruthy();
+  await expect(page.locator('#match-line')).toContainText('Players wins');
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_TRACE__?.some((trace) => trace.event === 'onScore' && trace.objectiveId === 'center-relic') ?? false))
+    .toBeTruthy();
 });
 
 test('lab spawns rules-authored actors and explains mechanics in trace', async ({ page }) => {

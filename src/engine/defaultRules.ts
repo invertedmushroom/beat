@@ -3,13 +3,13 @@ import { validateRuleset } from './rulesValidation';
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({
-    id: 'beat-arena-v9',
-    name: 'Beat Arena Physics Lab V9',
-    version: 9,
+    id: 'beat-arena-v10',
+    name: 'Beat Arena Relic Push V10',
+    version: 10,
     tickRate: 30,
     maxPlayers: 6,
     mapBundleId: 'local-grid-arena',
-    contentHash: 'local-content-v9',
+    contentHash: 'local-content-v10',
     arena: {
       width: 38,
       height: 24,
@@ -334,8 +334,76 @@ export function createDefaultRuleset(): Ruleset {
             { kind: 'flashEffect', target: 'target', radius: 1.7, color: '#ff6b4a' },
           ],
         },
+        {
+          id: 'relic-score-flash',
+          name: 'Relic Score Flash',
+          event: 'onScore',
+          conditions: [{ kind: 'objectiveId', objectiveId: 'center-relic' }],
+          actions: [{ kind: 'flashEffect', target: 'source', radius: 2.1, color: '#ffffff' }],
+        },
       ],
     },
+    match: {
+      teams: [
+        {
+          id: 'players',
+          name: 'Players',
+          color: '#2fd17c',
+        },
+        {
+          id: 'hostile',
+          name: 'Hostile',
+          color: '#ff6b4a',
+        },
+      ],
+      durationTicks: 2_700,
+      scoreLimit: 3,
+      friendlyFire: true,
+      respawnMode: 'timed',
+    },
+    objectives: [
+      {
+        id: 'center-relic',
+        name: 'Center Relic',
+        kind: 'relicPush',
+        spawn: {
+          x: 0,
+          y: 0,
+        },
+        body: {
+          shape: 'ball',
+          radius: 0.72,
+          mass: 12,
+          friction: 0.78,
+          restitution: 0.18,
+          linearDamping: 1.15,
+          lifetimeTicks: 3_600,
+          color: '#f5f3ed',
+        },
+        scoreZones: [
+          {
+            id: 'players-goal',
+            team: 'players',
+            x: 15,
+            y: 0,
+            radius: 2.45,
+            points: 1,
+            color: '#2fd17c',
+          },
+          {
+            id: 'hostile-goal',
+            team: 'hostile',
+            x: -15,
+            y: 0,
+            radius: 2.45,
+            points: 1,
+            color: '#ff6b4a',
+          },
+        ],
+        scoreCooldownTicks: 36,
+        resetOnScore: true,
+      },
+    ],
     npcs: {
       archetypes: [
         {

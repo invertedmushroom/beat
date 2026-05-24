@@ -369,6 +369,93 @@ describe('rulesValidation', () => {
     expect(parsed.mechanics.triggers.find((trigger) => trigger.id === 'burn-spend')?.actions).toHaveLength(2);
   });
 
+  it('validates match teams and relic objectives', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      match: {
+        ...ruleset.match,
+        scoreLimit: 5,
+        teams: [
+          ...ruleset.match.teams,
+          {
+            id: 'specters',
+            name: 'Specters',
+            color: '#62d2ff',
+          },
+        ],
+      },
+      objectives: [
+        ...ruleset.objectives,
+        {
+          id: 'side-relic',
+          name: 'Side Relic',
+          kind: 'relicPush',
+          spawn: { x: 3, y: 0 },
+          body: {
+            shape: 'ball',
+            radius: 0.55,
+            mass: 8,
+            friction: 0.7,
+            restitution: 0.2,
+            linearDamping: 1,
+            lifetimeTicks: 1_200,
+            color: '#62d2ff',
+          },
+          scoreZones: [
+            {
+              id: 'specter-goal',
+              team: 'specters',
+              x: 8,
+              y: 0,
+              radius: 2,
+              points: 2,
+            },
+          ],
+          scoreCooldownTicks: 24,
+          resetOnScore: true,
+        },
+      ],
+    });
+
+    expect(parsed.match.scoreLimit).toBe(5);
+    expect(parsed.objectives.find((objective) => objective.id === 'side-relic')?.scoreZones[0]?.team).toBe('specters');
+  });
+
+  it('rejects invalid match objective references', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        objectives: ruleset.objectives.map((objective, index) =>
+          index === 0
+            ? {
+                ...objective,
+                scoreZones: objective.scoreZones.map((zone, zoneIndex) => (zoneIndex === 0 ? { ...zone, team: 'missing-team' } : zone)),
+              }
+            : objective,
+        ),
+      }),
+    ).toThrow(/objective\.scoreZone\.team/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        mechanics: {
+          ...ruleset.mechanics,
+          triggers: [
+            {
+              id: 'bad-objective-trigger',
+              event: 'onScore',
+              conditions: [{ kind: 'objectiveId', objectiveId: 'missing-objective' }],
+              actions: [{ kind: 'flashEffect', target: 'source', radius: 1, color: '#ffffff' }],
+            },
+          ],
+        },
+      }),
+    ).toThrow(/unknown objective/);
+  });
+
   it('validates NPC archetypes, spawns, teams, behavior, and loadouts', () => {
     const ruleset = createDefaultRuleset();
     const parsed = validateRuleset({

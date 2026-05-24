@@ -66,6 +66,23 @@ describe('rulesetFingerprint', () => {
     expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
   });
 
+  it('changes when objective config changes', () => {
+    const a = createDefaultRuleset();
+    const b = {
+      ...a,
+      objectives: a.objectives.map((objective) =>
+        objective.id === 'center-relic'
+          ? {
+              ...objective,
+              scoreZones: objective.scoreZones.map((zone) => (zone.id === 'players-goal' ? { ...zone, radius: zone.radius + 0.25 } : zone)),
+            }
+          : objective,
+      ),
+    };
+
+    expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
+  });
+
   it('changes when physics ability config changes', () => {
     const a = createDefaultRuleset();
     const b = {
