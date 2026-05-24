@@ -278,6 +278,8 @@ export class ClientSession {
   private localPlayerId?: string;
   private disconnected = false;
   private lastHostMessageAt = 0;
+  private sawRoomInDirectory = false;
+  private receivedFirstSnapshot = false;
 
   constructor(
     private readonly options: {
@@ -291,6 +293,8 @@ export class ClientSession {
     this.currentRoom = room;
     this.disconnected = false;
     this.lastHostMessageAt = Date.now();
+    this.sawRoomInDirectory = false;
+    this.receivedFirstSnapshot = false;
     this.connection = new RTCPeerConnection(RTC_CONFIG);
     this.channel = this.connection.createDataChannel('beat');
     this.bindConnectionLogs(this.connection, `client->${shortPeer(room.hostPeerId)}`);
@@ -351,14 +355,23 @@ export class ClientSession {
   }
 
   private handleRooms(rooms: RoomInfo[]): void {
-    if (this.disconnected || !this.currentRoom || !this.localPlayerId) {
+    if (this.disconnected || !this.currentRoom) {
       return;
     }
     const roomOpen = rooms.some((room) => room.roomId === this.currentRoom?.roomId && room.status !== 'closed');
-    if (!roomOpen) {
-      this.log('room closed');
-      this.notifyDisconnect();
+    if (roomOpen) {
+      this.sawRoomInDirectory = true;
+      return;
     }
+    // Only treat the room list as authoritative once we've actually observed the
+    // room here at least once. Otherwise an early/empty directory snapshot can
+    // tear down a perfectly healthy WebRTC session before the room subscription
+    // catches up (common on mobile / slow networks).
+    if (!this.sawRoomInDirectory || !this.localPlayerId) {
+      return;
+    }
+    this.log('room closed');
+    this.notifyDisconnect();
   }
 
   private async handleSignal(signal: RoomSignal): Promise<void> {
@@ -428,6 +441,7 @@ export class ClientSession {
         return;
       }
       if (message.type === 'snapshot') {
+        this.receivedFirstSnapshot = true;
         for (const listener of this.snapshotListeners) {
           listener(message.snapshot);
         }
@@ -440,10 +454,14 @@ export class ClientSession {
   }
 
   private checkHostSilence(): void {
-    if (this.disconnected || !this.localPlayerId) {
+    // Only arm the silence watchdog once the host has actually started streaming
+    // snapshots. The handshake itself (welcome + first ICE/datachannel ramp-up)
+    // can take many seconds on mobile, and we don't want to bail out before the
+    // session is really running.
+    if (this.disconnected || !this.localPlayerId || !this.receivedFirstSnapshot) {
       return;
     }
-    if (Date.now() - this.lastHostMessageAt > 5_000) {
+    if (Date.now() - this.lastHostMessageAt > 15_000) {
       this.log('host timed out');
       this.notifyDisconnect();
     }
