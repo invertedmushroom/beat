@@ -262,6 +262,10 @@ h2 {
   gap: 8px;
 }
 
+.button-grid--lobby {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .button-grid--rules {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 10px;
@@ -356,6 +360,36 @@ h2 {
   gap: 4px;
   max-width: min(560px, calc(100% - 96px));
   padding: 10px 12px;
+}
+
+.local-mechanics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: 100%;
+}
+
+.mechanic-chip {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 6px;
+  color: #f5f3ed;
+  border: 1px solid color-mix(in srgb, var(--chip-color, #6a6760), #f5f3ed 25%);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chip-color, #6a6760), transparent 78%);
+  font: 11px ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.mechanic-chip strong,
+.mechanic-chip small {
+  min-width: 0;
+}
+
+.mechanic-chip--empty {
+  --chip-color: #6a6760;
+  color: #b9b4a8;
 }
 
 .arena-actions {
@@ -515,7 +549,16 @@ h2 {
   font-weight: 700;
 }
 
-.log {
+.arena-log__title {
+  margin-top: 8px;
+  color: #f5f3ed;
+  font-size: 11px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.log,
+.trace-log {
   display: grid;
   gap: 6px;
   margin-top: 8px;
@@ -523,8 +566,27 @@ h2 {
   font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.log-line {
+.trace-log {
+  max-height: 25vh;
+  overflow: auto;
+}
+
+.log-line,
+.trace-line {
   overflow-wrap: anywhere;
+}
+
+.trace-line--trigger,
+.trace-line--action {
+  color: #ffe66d;
+}
+
+.trace-line--condition-failed {
+  color: #b9b4a8;
+}
+
+.trace-line--guard {
+  color: #ff9a82;
 }
 
 .touch-controls {

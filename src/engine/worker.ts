@@ -14,6 +14,8 @@ import type {
   MechanicDirectionRef,
   MechanicEventKind,
   MechanicPlayerRef,
+  MechanicTraceSnapshot,
+  MechanicTraceKind,
   MeleeAbility,
   PlayerInput,
   PlayerSpawn,
@@ -177,16 +179,19 @@ let spawnIndex = 0;
 let projectileIndex = 0;
 let effectIndex = 0;
 let combatTextIndex = 0;
+let traceIndex = 0;
 let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
 let combatTexts: RuntimeCombatText[] = [];
 let mechanicEvents: MechanicEvent[] = [];
+let mechanicTraces: MechanicTraceSnapshot[] = [];
 let processingMechanics = false;
 
 const AIM_ASSIST_CONE_DEGREES = 70;
 const MAX_MECHANIC_EVENTS_PER_TICK = 48;
+const MAX_MECHANIC_TRACES = 64;
 const DIRECT_SLOW_STATUS_ID = '__direct_slow';
 
 port.addEventListener('message', (event) => {
@@ -255,12 +260,14 @@ function initialize(nextRuleset: Ruleset): void {
   projectileIndex = 0;
   effectIndex = 0;
   combatTextIndex = 0;
+  traceIndex = 0;
   players = new Map();
   projectiles = [];
   melees = [];
   effects = [];
   combatTexts = [];
   mechanicEvents = [];
+  mechanicTraces = [];
   processingMechanics = false;
 
   addArenaWalls(nextRuleset);
@@ -296,8 +303,8 @@ function addPlayer(spawn: PlayerSpawn): void {
     return;
   }
 
-  const point = spawnPointForIndex(spawnIndex++);
-  const spawnSlot = spawnIndex - 1;
+  const spawnSlot = spawnIndex++;
+  const point = spawn.spawnPoint ?? spawnPointForIndex(spawnSlot);
   const body = world.createRigidBody(
     RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(point.x, point.y)
@@ -667,7 +674,7 @@ function respawnPlayer(player: RuntimePlayer): void {
   if (!ruleset) {
     return;
   }
-  const point = spawnPointForIndex(player.spawnSlot);
+  const point = player.spawn.spawnPoint ?? spawnPointForIndex(player.spawnSlot);
   player.hp = ruleset.player.maxHp;
   player.alive = true;
   player.respawnTick = 0;
@@ -909,7 +916,11 @@ function modifyResource(player: RuntimePlayer, resourceId: string, amount: numbe
 }
 
 function emitMechanicEvent(event: MechanicEvent): void {
-  if (!ruleset || ruleset.mechanics.triggers.length === 0) {
+  if (!ruleset) {
+    return;
+  }
+  addMechanicTrace('event', 'queued', event);
+  if (ruleset.mechanics.triggers.length === 0) {
     return;
   }
   mechanicEvents.push(event);
@@ -933,28 +944,86 @@ function processMechanicEvents(): void {
     const source = event.sourceId ? players.get(event.sourceId) : undefined;
     const target = event.targetId ? players.get(event.targetId) : undefined;
     for (const trigger of ruleset.mechanics.triggers) {
-      if (trigger.event !== event.event || !conditionsPass(trigger.conditions ?? [], event, source, target)) {
+      if (trigger.event !== event.event) {
         continue;
       }
+      const failedCondition = firstFailedCondition(trigger.conditions ?? [], event, source, target);
+      if (failedCondition) {
+        addMechanicTrace('condition-failed', 'skipped', event, {
+          triggerId: trigger.id,
+          triggerName: trigger.name,
+          conditionKind: failedCondition.kind,
+        });
+        continue;
+      }
+      addMechanicTrace('trigger', 'fired', event, {
+        triggerId: trigger.id,
+        triggerName: trigger.name,
+      });
       for (const action of trigger.actions) {
+        addMechanicTrace('action', 'applied', event, {
+          triggerId: trigger.id,
+          triggerName: trigger.name,
+          actionKind: action.kind,
+          statusId: 'statusId' in action ? action.statusId : event.statusId,
+          resourceId: 'resourceId' in action ? action.resourceId : undefined,
+          amount: 'amount' in action ? action.amount : undefined,
+        });
         applyMechanicAction(action, event, source, target);
       }
     }
   }
   if (processed >= MAX_MECHANIC_EVENTS_PER_TICK) {
     mechanicEvents = [];
+    addMechanicTrace('guard', 'blocked', {
+      event: 'onCast',
+    });
     port.postMessage({ type: 'notice', message: 'mechanics trigger loop guard cleared queued events' });
   }
   processingMechanics = false;
 }
 
-function conditionsPass(conditions: MechanicCondition[], event: MechanicEvent, source: RuntimePlayer | undefined, target: RuntimePlayer | undefined): boolean {
+function addMechanicTrace(
+  kind: MechanicTraceKind,
+  result: MechanicTraceSnapshot['result'],
+  event: MechanicEvent,
+  extra: Partial<Omit<MechanicTraceSnapshot, 'traceId' | 'tick' | 'kind' | 'result' | 'event'>> = {},
+): void {
+  const source = event.sourceId ? players.get(event.sourceId) : undefined;
+  const target = event.targetId ? players.get(event.targetId) : undefined;
+  mechanicTraces.push({
+    traceId: `trace-${++traceIndex}`,
+    tick,
+    kind,
+    event: event.event,
+    result,
+    sourceId: event.sourceId,
+    sourceName: source?.spawn.displayName,
+    targetId: event.targetId,
+    targetName: target?.spawn.displayName,
+    abilityId: event.ability?.id,
+    abilityName: event.ability?.name,
+    statusId: event.statusId,
+    amount: event.amount,
+    ...extra,
+  });
+  if (mechanicTraces.length > MAX_MECHANIC_TRACES) {
+    mechanicTraces = mechanicTraces.slice(-MAX_MECHANIC_TRACES);
+  }
+}
+
+function firstFailedCondition(
+  conditions: MechanicCondition[],
+  event: MechanicEvent,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer | undefined,
+): MechanicCondition | undefined {
   for (const condition of conditions) {
     if (!conditionPasses(condition, event, source, target)) {
-      return false;
+      return condition;
     }
   }
-  return true;
+  return undefined;
 }
 
 function conditionPasses(condition: MechanicCondition, event: MechanicEvent, source: RuntimePlayer | undefined, target: RuntimePlayer | undefined): boolean {
@@ -1304,6 +1373,7 @@ function readSnapshot(): EngineSnapshot {
     projectiles: projectiles.map(toProjectileSnapshot),
     effects: effects.map(toEffectSnapshot),
     combatTexts: combatTexts.map(toCombatTextSnapshot),
+    mechanicTraces,
     players: Array.from(players.values()).map((player) => {
       const pos = player.body.translation();
       const vel = player.body.linvel();
@@ -1326,6 +1396,7 @@ function readSnapshot(): EngineSnapshot {
         aimDy: aim.y,
         facingDx: player.facing.x,
         facingDy: player.facing.y,
+        role: player.spawn.role ?? 'player',
         status: toStatusSnapshot(player),
         statuses: toStatusSnapshots(player),
         resources: toResourceSnapshots(player),
@@ -1453,6 +1524,7 @@ function stop(): void {
   effects = [];
   combatTexts = [];
   mechanicEvents = [];
+  mechanicTraces = [];
   processingMechanics = false;
 }
 

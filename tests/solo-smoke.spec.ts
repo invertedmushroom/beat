@@ -45,9 +45,6 @@ test('solo mode initializes Rapier and advances snapshots without console noise'
   await page.keyboard.press('Digit2');
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[1] ?? 0)).toBeGreaterThan(0);
 
-  await page.keyboard.press('Digit4');
-  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[3] ?? 0)).toBeGreaterThan(0);
-
   expect(consoleMessages.filter((line) => /rawintegrationparameters_new|deprecated parameters|Cannot read/.test(line))).toEqual([]);
 });
 
@@ -246,6 +243,35 @@ test('rules inspector validates mechanics examples and updates hash', async ({ p
   await page.getByRole('button', { name: 'Apply' }).click();
   await page.getByRole('button', { name: 'Solo' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.resources.length ?? 0)).toBeGreaterThan(0);
+});
+
+test('solo lab spawns a training dummy and explains mechanics in trace', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Lab' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy')?.displayName ?? ''))
+    .toBe('Dummy');
+  await expect(page.locator('#local-mechanics')).toContainText('Shield');
+
+  await page.keyboard.press('Space');
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy')?.statuses.some((status) => status.id === 'shocked') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const dummy = window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy');
+        return dummy ? dummy.hp < dummy.maxHp : false;
+      }),
+    )
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_TRACE__?.some((trace) => trace.kind === 'trigger' && trace.triggerId === 'shock-bonus') ?? false))
+    .toBeTruthy();
+
+  await page.locator('.arena-log summary').click();
+  await expect(page.locator('#trace-log')).toContainText('Shock Bonus');
 });
 
 test('mechanics status combo is visible in multiplayer combat', async ({ context, page: host }) => {

@@ -2,7 +2,7 @@ import { createDefaultRuleset } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
 import { hashRuleset } from './engine/rulesHash';
 import { parseRulesetJson, stringifyRuleset, validateRuleset } from './engine/rulesValidation';
-import type { EngineSnapshot, PlayerInput, Ruleset } from './engine/protocol';
+import type { EngineSnapshot, MechanicAction, MechanicCondition, MechanicTraceSnapshot, PlayerInput, Ruleset } from './engine/protocol';
 import { InputController, type TouchControlElements } from './input/InputController';
 import { HostSession, ClientSession } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
@@ -11,7 +11,7 @@ import { createRoomDirectory } from './rooms/directoryFactory';
 import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 
-type Mode = 'idle' | 'solo' | 'host' | 'client';
+type Mode = 'idle' | 'solo' | 'lab' | 'host' | 'client';
 
 export class BeatApp {
   private readonly directoryRuntime = createRoomDirectory();
@@ -29,6 +29,7 @@ export class BeatApp {
   private roomNameInput!: HTMLInputElement;
   private hostButton!: HTMLButtonElement;
   private soloButton!: HTMLButtonElement;
+  private labButton!: HTMLButtonElement;
   private leaveButton!: HTMLButtonElement;
   private roomList!: HTMLDivElement;
   private statusLine!: HTMLDivElement;
@@ -36,6 +37,8 @@ export class BeatApp {
   private hashLine!: HTMLDivElement;
   private rulesHashLine!: HTMLDivElement;
   private peerLine!: HTMLDivElement;
+  private localMechanicsRoot!: HTMLDivElement;
+  private traceRoot!: HTMLDivElement;
   private logRoot!: HTMLDivElement;
   private menuView!: HTMLElement;
   private arenaView!: HTMLElement;
@@ -77,7 +80,8 @@ export class BeatApp {
     this.unsubscribeInput = this.input.onInput((input) => this.handleInput(input));
     this.unsubscribeRooms = this.directory.subscribeRooms((rooms) => this.renderRooms(rooms));
     this.hostButton.addEventListener('click', () => void this.hostRoom());
-    this.soloButton.addEventListener('click', () => void this.startSolo());
+    this.soloButton.addEventListener('click', () => void this.startSolo(false));
+    this.labButton.addEventListener('click', () => void this.startSolo(true));
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
     this.fullscreenButton.addEventListener('click', () => void this.toggleFullscreen());
     this.resetRulesButton.addEventListener('click', () => void this.resetRules());
@@ -116,6 +120,7 @@ export class BeatApp {
     this.roomNameInput = requireNode<HTMLInputElement>('#room-name');
     this.hostButton = requireNode<HTMLButtonElement>('#host-room');
     this.soloButton = requireNode<HTMLButtonElement>('#solo-room');
+    this.labButton = requireNode<HTMLButtonElement>('#lab-room');
     this.leaveButton = requireNode<HTMLButtonElement>('#leave-room');
     this.roomList = requireNode<HTMLDivElement>('#room-list');
     this.statusLine = requireNode<HTMLDivElement>('#status-line');
@@ -123,6 +128,8 @@ export class BeatApp {
     this.hashLine = requireNode<HTMLDivElement>('#hash-line');
     this.rulesHashLine = requireNode<HTMLDivElement>('#rules-hash-line');
     this.peerLine = requireNode<HTMLDivElement>('#peer-line');
+    this.localMechanicsRoot = requireNode<HTMLDivElement>('#local-mechanics');
+    this.traceRoot = requireNode<HTMLDivElement>('#trace-log');
     this.logRoot = requireNode<HTMLDivElement>('#log');
     this.rulesJsonInput = requireNode<HTMLTextAreaElement>('#rules-json');
     this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
@@ -165,13 +172,8 @@ export class BeatApp {
       local: true,
     });
     this.unsubscribeSnapshot = this.engine.onSnapshot((snapshot) => {
-      this.lastSnapshot = snapshot;
-      window.__BEAT_SNAPSHOT__ = snapshot;
-      this.renderer.update(snapshot);
-      this.updateAimOrigin(snapshot);
-      this.updateSkillBar(snapshot);
+      this.consumeSnapshot(snapshot, `hosting: ${room.name}`);
       this.hostSession?.broadcastSnapshot(snapshot);
-      this.setStatus(`hosting: ${room.name}`);
     });
 
     const room: RoomInfo = {
@@ -204,13 +206,13 @@ export class BeatApp {
     this.log(`room open: ${room.roomId}`);
   }
 
-  private async startSolo(): Promise<void> {
+  private async startSolo(lab: boolean): Promise<void> {
     const selectedRuleset = this.readRulesForStart();
     if (!selectedRuleset) {
       return;
     }
     this.stopActiveMode();
-    this.mode = 'solo';
+    this.mode = lab ? 'lab' : 'solo';
     this.ruleset = selectedRuleset;
     const rulesetHash = await hashRuleset(this.ruleset);
     const playerId = createId('player');
@@ -227,17 +229,16 @@ export class BeatApp {
       displayName: this.displayName(),
       hue: 150,
       local: true,
+      spawnPoint: lab ? { x: -10, y: -7 } : undefined,
     });
+    if (lab) {
+      this.addTrainingDummy('dummy-a', 'Dummy', 44, { x: -2.8, y: -7 });
+    }
     this.unsubscribeSnapshot = this.engine.onSnapshot((snapshot) => {
-      this.lastSnapshot = snapshot;
-      window.__BEAT_SNAPSHOT__ = snapshot;
-      this.renderer.update(snapshot);
-      this.updateAimOrigin(snapshot);
-      this.updateSkillBar(snapshot);
-      this.setStatus('solo: browser worker authority');
+      this.consumeSnapshot(snapshot, lab ? 'lab: training target' : 'solo: browser worker authority');
     });
     this.hashLine.textContent = `rules ${shortHash(rulesetHash)} · content ${shortHash(this.ruleset.contentHash)}`;
-    this.setStatus('solo: browser worker authority');
+    this.setStatus(lab ? 'lab: training target' : 'solo: browser worker authority');
   }
 
   private async joinRoom(room: RoomInfo): Promise<void> {
@@ -267,12 +268,7 @@ export class BeatApp {
       this.setStatus(`joined: ${joinedRoom.name}`);
     });
     this.clientSession.onSnapshot((snapshot) => {
-      this.lastSnapshot = snapshot;
-      window.__BEAT_SNAPSHOT__ = snapshot;
-      this.renderer.update(snapshot);
-      this.updateAimOrigin(snapshot);
-      this.updateSkillBar(snapshot);
-      this.setStatus(`joined: ${room.name}`);
+      this.consumeSnapshot(snapshot, `joined: ${room.name}`);
     });
     await this.clientSession.connect(room);
     this.setStatus(`joining: ${room.name}`);
@@ -282,7 +278,7 @@ export class BeatApp {
     if (!this.localPlayerId) {
       return;
     }
-    if (this.mode === 'host' || this.mode === 'solo') {
+    if (this.mode === 'host' || this.mode === 'solo' || this.mode === 'lab') {
       this.engine?.submitInput(this.localPlayerId, input);
       return;
     }
@@ -306,11 +302,14 @@ export class BeatApp {
     this.lastSnapshot = undefined;
     this.previousSlotCooldowns = undefined;
     window.__BEAT_SNAPSHOT__ = undefined;
+    window.__BEAT_TRACE__ = undefined;
     this.renderer.setRuleset(undefined);
     this.renderer.setEmptyMessage('No room active');
     this.renderer.setLocalPlayer(undefined);
     this.input.setAimOrigin(undefined);
     this.updateSkillBar(undefined);
+    this.updateLocalMechanics(undefined);
+    this.renderTrace([]);
     this.mode = 'idle';
     this.setRulesLocked(false);
     void this.exitFullscreen();
@@ -366,6 +365,29 @@ export class BeatApp {
     this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
     void this.refreshRulesInspector();
     return this.editableRuleset;
+  }
+
+  private addTrainingDummy(idSuffix: string, name: string, hue: number, spawnPoint: { x: number; y: number }): void {
+    this.engine?.addPlayer({
+      playerId: `lab-${idSuffix}`,
+      displayName: name,
+      hue,
+      local: false,
+      role: 'dummy',
+      spawnPoint,
+    });
+  }
+
+  private consumeSnapshot(snapshot: EngineSnapshot, status: string): void {
+    this.lastSnapshot = snapshot;
+    window.__BEAT_SNAPSHOT__ = snapshot;
+    window.__BEAT_TRACE__ = snapshot.mechanicTraces;
+    this.renderer.update(snapshot);
+    this.updateAimOrigin(snapshot);
+    this.updateSkillBar(snapshot);
+    this.updateLocalMechanics(snapshot);
+    this.renderTrace(snapshot.mechanicTraces);
+    this.setStatus(status);
   }
 
   private readRulesForStart(): Ruleset | undefined {
@@ -545,6 +567,31 @@ export class BeatApp {
     this.previousSlotCooldowns = snapshot ? nextCooldowns : undefined;
   }
 
+  private updateLocalMechanics(snapshot: EngineSnapshot | undefined): void {
+    const local = this.localPlayerId ? snapshot?.players.find((player) => player.playerId === this.localPlayerId) : undefined;
+    if (!local) {
+      this.localMechanicsRoot.replaceChildren();
+      return;
+    }
+    const chips = [
+      ...local.resources.map((resource) =>
+        mechanicsChipHtml(resource.name, `${Math.round(resource.value)}/${Math.round(resource.max)}`, resource.color),
+      ),
+      ...local.statuses.map((status) =>
+        mechanicsChipHtml(status.name, status.stacks > 1 ? `${status.stacks}x` : `${Math.ceil(status.remainingTicks / (this.ruleset?.tickRate ?? 30))}s`, status.color),
+      ),
+    ];
+    this.localMechanicsRoot.innerHTML = chips.length > 0 ? chips.join('') : '<span class="mechanic-chip mechanic-chip--empty">No statuses</span>';
+  }
+
+  private renderTrace(traces: MechanicTraceSnapshot[]): void {
+    const visible = traces.slice(-18).reverse();
+    this.traceRoot.innerHTML =
+      visible.length > 0
+        ? visible.map((trace) => `<div class="trace-line trace-line--${trace.kind}">${escapeHtml(traceLabel(trace))}</div>`).join('')
+        : '<div class="trace-line trace-line--empty">No mechanics yet</div>';
+  }
+
   private touchControls(): TouchControlElements {
     return {
       root: requireNode<HTMLElement>('#touch-controls'),
@@ -579,9 +626,10 @@ function shellHtml(): string {
               <span>Room</span>
               <input id="room-name" value="Beat room" autocomplete="off" maxlength="36" />
             </label>
-            <div class="button-grid">
+            <div class="button-grid button-grid--lobby">
               <button id="host-room" class="button button--primary" type="button">Host</button>
               <button id="solo-room" class="button" type="button">Solo</button>
+              <button id="lab-room" class="button" type="button">Lab</button>
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
             <section class="room-section">
@@ -621,6 +669,7 @@ function shellHtml(): string {
           <div id="status-line">starting</div>
           <div id="hash-line">rules idle</div>
           <div id="peer-line">peer</div>
+          <div id="local-mechanics" class="local-mechanics"></div>
         </div>
         <div class="arena-actions">
           <button id="fullscreen-toggle" class="button arena-action-button" type="button" aria-pressed="false">Fullscreen</button>
@@ -665,7 +714,10 @@ function shellHtml(): string {
           </div>
         </div>
         <details class="arena-log">
-          <summary>Log</summary>
+          <summary>Trace / Log</summary>
+          <div class="arena-log__title">Mechanics</div>
+          <div id="trace-log" class="trace-log"></div>
+          <div class="arena-log__title">Session</div>
           <div id="log" class="log"></div>
         </details>
       </section>
@@ -745,7 +797,7 @@ function rulesInspectorHtml(ruleset: Ruleset): string {
         inspectorRow(
           trigger.name ?? trigger.id,
           trigger.event,
-          `${trigger.conditions?.length ?? 0} conditions · ${trigger.actions.length} actions`,
+          triggerDetail(trigger),
           '#ffe66d',
         ),
       ),
@@ -769,6 +821,74 @@ function inspectorRow(title: string, meta: string, detail: string, color: string
       </span>
     </div>
   `;
+}
+
+function triggerDetail(trigger: Ruleset['mechanics']['triggers'][number]): string {
+  const conditions = trigger.conditions?.map(conditionLabel).join(' + ') ?? 'always';
+  const actions = trigger.actions.map(actionLabel).join(' + ');
+  return `${conditions} -> ${actions}`;
+}
+
+function conditionLabel(condition: MechanicCondition): string {
+  if (condition.kind === 'hasStatus' || condition.kind === 'missingStatus') {
+    return `${condition.target} ${condition.kind} ${condition.statusId}`;
+  }
+  if (condition.kind === 'hpBelow') {
+    return `${condition.target} hp < ${Math.round(condition.ratio * 100)}%`;
+  }
+  if (condition.kind === 'resourceAtLeast') {
+    return `${condition.target} ${condition.resourceId} >= ${condition.amount}`;
+  }
+  if (condition.kind === 'slotUsed') {
+    return `slot ${condition.slot + 1}`;
+  }
+  return `tag ${condition.tag}`;
+}
+
+function actionLabel(action: MechanicAction): string {
+  if (action.kind === 'applyStatus' || action.kind === 'removeStatus') {
+    return `${action.kind} ${action.statusId}`;
+  }
+  if (action.kind === 'modifyResource') {
+    return `${action.resourceId} ${action.amount > 0 ? '+' : ''}${action.amount}`;
+  }
+  if (action.kind === 'dealDamage' || action.kind === 'heal') {
+    return `${action.kind} ${action.amount}`;
+  }
+  if (action.kind === 'knockback') {
+    return `knockback ${action.force}`;
+  }
+  if (action.kind === 'slow') {
+    return `slow x${action.multiplier}`;
+  }
+  return `flash ${action.radius}`;
+}
+
+function mechanicsChipHtml(label: string, value: string, color: string): string {
+  return `<span class="mechanic-chip" style="--chip-color:${escapeHtml(color)}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(value)}</small></span>`;
+}
+
+function traceLabel(trace: MechanicTraceSnapshot): string {
+  const source = trace.sourceName ?? shortTraceId(trace.sourceId) ?? 'system';
+  const target = trace.targetName ?? shortTraceId(trace.targetId);
+  const ability = trace.abilityName ?? trace.abilityId;
+  if (trace.kind === 'event') {
+    return `${trace.tick} ${trace.event ?? 'event'} ${ability ? `via ${ability}` : ''} ${target ? `${source}->${target}` : source}`.trim();
+  }
+  if (trace.kind === 'trigger') {
+    return `${trace.tick} trigger ${trace.triggerName ?? trace.triggerId ?? 'unknown'} fired`;
+  }
+  if (trace.kind === 'condition-failed') {
+    return `${trace.tick} skip ${trace.triggerName ?? trace.triggerId ?? 'trigger'}: ${trace.conditionKind ?? 'condition'}`;
+  }
+  if (trace.kind === 'action') {
+    return `${trace.tick} action ${trace.actionKind ?? 'action'}${trace.statusId ? ` ${trace.statusId}` : ''}${trace.resourceId ? ` ${trace.resourceId}` : ''}${trace.amount === undefined ? '' : ` ${Math.round(trace.amount)}`}`;
+  }
+  return `${trace.tick} mechanics guard blocked queued events`;
+}
+
+function shortTraceId(value: string | undefined): string | undefined {
+  return value ? value.slice(-8) : undefined;
 }
 
 function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {

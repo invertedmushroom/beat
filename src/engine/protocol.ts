@@ -214,6 +214,11 @@ export type PlayerSpawn = {
   displayName: string;
   hue: number;
   local: boolean;
+  role?: 'player' | 'dummy';
+  spawnPoint?: {
+    x: number;
+    y: number;
+  };
 };
 
 export type PlayerSnapshot = {
@@ -234,6 +239,7 @@ export type PlayerSnapshot = {
   aimDy: number;
   facingDx: number;
   facingDy: number;
+  role: 'player' | 'dummy';
   status?: PlayerStatusSnapshot;
   statuses: StatusSnapshot[];
   resources: ResourceSnapshot[];
@@ -310,6 +316,29 @@ export type CombatTextSnapshot = {
   lifetimeTicks: number;
 };
 
+export type MechanicTraceKind = 'event' | 'trigger' | 'condition-failed' | 'action' | 'guard';
+
+export type MechanicTraceSnapshot = {
+  traceId: string;
+  tick: number;
+  kind: MechanicTraceKind;
+  event?: MechanicEventKind;
+  triggerId?: string;
+  triggerName?: string;
+  conditionKind?: MechanicCondition['kind'];
+  actionKind?: MechanicAction['kind'];
+  result: 'queued' | 'fired' | 'skipped' | 'applied' | 'blocked';
+  sourceId?: string;
+  sourceName?: string;
+  targetId?: string;
+  targetName?: string;
+  abilityId?: string;
+  abilityName?: string;
+  statusId?: string;
+  resourceId?: string;
+  amount?: number;
+};
+
 export type EngineSnapshot = {
   tick: number;
   nowMs: number;
@@ -318,6 +347,7 @@ export type EngineSnapshot = {
   projectiles: ProjectileSnapshot[];
   effects: EffectSnapshot[];
   combatTexts: CombatTextSnapshot[];
+  mechanicTraces: MechanicTraceSnapshot[];
 };
 
 export type EngineCommand =

@@ -156,12 +156,16 @@ export class CanvasRenderer {
         this.drawChargeAura(x, y, radius, player.charging.ratio, player.charging.abilityId);
       }
       this.ctx.beginPath();
-      this.ctx.fillStyle = player.alive ? `hsl(${player.hue} 76% 58%)` : '#55524a';
+      this.ctx.fillStyle = player.alive ? `hsl(${player.hue} ${player.role === 'dummy' ? '52%' : '76%'} ${player.role === 'dummy' ? '48%' : '58%'})` : '#55524a';
       this.ctx.arc(x, y, radius, 0, Math.PI * 2);
       this.ctx.fill();
       this.ctx.lineWidth = player.playerId === this.localPlayerId ? 3 : 1.5;
-      this.ctx.strokeStyle = player.playerId === this.localPlayerId ? '#ffe66d' : player.alive ? '#0a0a0a' : '#252521';
+      this.ctx.strokeStyle = player.playerId === this.localPlayerId ? '#ffe66d' : player.role === 'dummy' ? '#ffe66d' : player.alive ? '#0a0a0a' : '#252521';
+      if (player.role === 'dummy') {
+        this.ctx.setLineDash([4, 3]);
+      }
       this.ctx.stroke();
+      this.ctx.setLineDash([]);
       if (player.alive) {
         this.drawFacingPointer(x, y, radius, player.facingDx, player.facingDy);
       }
