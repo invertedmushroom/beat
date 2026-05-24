@@ -15,6 +15,7 @@ export type BaseAbility = {
   shape: AbilityShape;
   targeting: AbilityTargeting;
   charge?: AbilityCharge;
+  effects?: AbilityEffect[];
   damage: number;
   cooldownTicks: number;
   radius: number;
@@ -32,6 +33,30 @@ export type AbilityCharge = {
   radiusMultiplierMin?: number;
   radiusMultiplierMax?: number;
   autoRelease: true;
+};
+
+export type AbilityEffect = KnockbackEffect | SlowEffect | HealEffect | SelfDashEffect;
+
+export type KnockbackEffect = {
+  kind: 'knockback';
+  force: number;
+};
+
+export type SlowEffect = {
+  kind: 'slow';
+  multiplier: number;
+  durationTicks: number;
+};
+
+export type HealEffect = {
+  kind: 'heal';
+  target: 'self' | 'hit';
+  amount: number;
+};
+
+export type SelfDashEffect = {
+  kind: 'selfDash';
+  distance: number;
 };
 
 export type ProjectileAbility = BaseAbility & {
@@ -110,8 +135,15 @@ export type PlayerSnapshot = {
   lastUsedSlot: number;
   aimDx: number;
   aimDy: number;
+  status?: PlayerStatusSnapshot;
   charging?: ChargingSnapshot;
   lastInputSequence: number;
+};
+
+export type PlayerStatusSnapshot = {
+  slowMultiplier: number;
+  slowTicks: number;
+  slowColor: string;
 };
 
 export type ChargingSnapshot = {
@@ -136,7 +168,7 @@ export type ProjectileSnapshot = {
 
 export type EffectSnapshot = {
   effectId: string;
-  kind: 'impact' | 'melee' | 'spawn' | 'death';
+  kind: 'impact' | 'melee' | 'spawn' | 'death' | 'knockback' | 'slow' | 'dash' | 'heal';
   x: number;
   y: number;
   radius: number;

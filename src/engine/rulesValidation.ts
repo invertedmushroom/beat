@@ -1,4 +1,4 @@
-import type { Ability, AbilityCharge, MeleeAbility, ProjectileAbility, Ruleset } from './protocol';
+import type { Ability, AbilityCharge, AbilityEffect, MeleeAbility, ProjectileAbility, Ruleset } from './protocol';
 
 export function parseRulesetJson(json: string): Ruleset {
   const parsed = JSON.parse(json) as unknown;
@@ -82,6 +82,7 @@ function validateAbility(value: unknown): Ability {
     name: clampString(readString(ability.name, 'ability.name'), 1, 36, 'ability.name'),
     targeting: validateTargeting(ability.targeting),
     charge: validateCharge(ability.charge),
+    effects: validateEffects(ability.effects),
     damage: readNumber(ability.damage, 'ability.damage', 0, 10_000),
     cooldownTicks: readInt(ability.cooldownTicks, 'ability.cooldownTicks', 1, 3_600),
     radius: readNumber(ability.radius, 'ability.radius', 0.05, 10),
@@ -140,6 +141,54 @@ function validateCharge(value: unknown): AbilityCharge | undefined {
     ...(radiusMultiplierMax === undefined ? {} : { radiusMultiplierMax }),
     autoRelease,
   };
+}
+
+function validateEffects(value: unknown): AbilityEffect[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const effects = readArray(value, 'ability.effects').map(validateEffect);
+  return effects.length > 0 ? effects : undefined;
+}
+
+function validateEffect(value: unknown): AbilityEffect {
+  const effect = assertRecord(value, 'ability.effect');
+  const kind = readString(effect.kind, 'ability.effect.kind');
+  if (kind === 'knockback') {
+    return {
+      kind,
+      force: readNumber(effect.force, 'ability.effect.force', 0.05, 12),
+    };
+  }
+  if (kind === 'slow') {
+    return {
+      kind,
+      multiplier: readNumber(effect.multiplier, 'ability.effect.multiplier', 0.05, 1),
+      durationTicks: readInt(effect.durationTicks, 'ability.effect.durationTicks', 1, 1_200),
+    };
+  }
+  if (kind === 'heal') {
+    return {
+      kind,
+      target: validateHealTarget(effect.target),
+      amount: readNumber(effect.amount, 'ability.effect.amount', 0, 10_000),
+    };
+  }
+  if (kind === 'selfDash') {
+    return {
+      kind,
+      distance: readNumber(effect.distance, 'ability.effect.distance', 0.05, 12),
+    };
+  }
+  throw new Error('ability.effect.kind must be knockback, slow, heal, or selfDash');
+}
+
+function validateHealTarget(value: unknown): 'self' | 'hit' {
+  const target = readString(value, 'ability.effect.target');
+  if (target === 'self' || target === 'hit') {
+    return target;
+  }
+  throw new Error('ability.effect.target must be self or hit');
 }
 
 function validateTargeting(value: unknown): Ability['targeting'] {

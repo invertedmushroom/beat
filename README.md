@@ -34,7 +34,7 @@ The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or 
 - arena size and static obstacles
 - player speed, HP, radius, damping, and respawn time
 - a four-slot loadout
-- projectile and melee ability definitions with targeting, optional charge tuning, damage, cooldown, range, radius, color, and shape-specific timing
+- projectile and melee ability definitions with targeting, optional charge tuning, damage, cooldown, range, radius, color, effects, and shape-specific timing
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 

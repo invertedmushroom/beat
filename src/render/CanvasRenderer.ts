@@ -118,10 +118,11 @@ export class CanvasRenderer {
       this.ctx.globalAlpha = Math.max(0, 1 - progress);
       this.ctx.beginPath();
       this.ctx.strokeStyle = effect.color;
-      this.ctx.lineWidth = effect.kind === 'melee' ? 2 : effect.kind === 'death' ? 4 : 3;
-      this.ctx.arc(x, y, effect.radius * scale * (0.7 + progress * 0.55), 0, Math.PI * 2);
+      this.ctx.lineWidth = effect.kind === 'melee' ? 2 : effect.kind === 'death' ? 4 : effect.kind === 'slow' ? 2 : 3;
+      const pulseScale = effect.kind === 'dash' || effect.kind === 'knockback' ? 0.85 + progress * 0.95 : 0.7 + progress * 0.55;
+      this.ctx.arc(x, y, effect.radius * scale * pulseScale, 0, Math.PI * 2);
       this.ctx.stroke();
-      if (effect.kind === 'death') {
+      if (effect.kind === 'death' || effect.kind === 'heal') {
         this.ctx.globalAlpha = Math.max(0, 0.28 - progress * 0.28);
         this.ctx.fillStyle = effect.color;
         this.ctx.fill();
@@ -145,6 +146,9 @@ export class CanvasRenderer {
       const x = originX + player.x * scale;
       const y = originY + player.y * scale;
       const radius = this.ruleset.player.radius * scale;
+      if (player.status?.slowTicks) {
+        this.drawSlowAura(x, y, radius, player.status.slowColor, player.status.slowMultiplier);
+      }
       if (player.charging) {
         this.drawChargeAura(x, y, radius, player.charging.ratio, player.charging.abilityId);
       }
@@ -196,6 +200,24 @@ export class CanvasRenderer {
     this.ctx.fillRect(x - width / 2, y, width, height);
     this.ctx.fillStyle = alive ? '#2fd17c' : '#6a6760';
     this.ctx.fillRect(x - width / 2, y, width * ratio, height);
+  }
+
+  private drawSlowAura(x: number, y: number, radius: number, color: string, multiplier: number): void {
+    const strength = Math.max(0, Math.min(1, 1 - multiplier));
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.12 + strength * 0.2;
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * 1.45, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.globalAlpha = 0.55 + strength * 0.25;
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([4, 4]);
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * 1.75, 0, Math.PI * 2);
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 
   private drawLocalTelegraph(player: NonNullable<EngineSnapshot['players'][number]>, originX: number, originY: number, scale: number): void {

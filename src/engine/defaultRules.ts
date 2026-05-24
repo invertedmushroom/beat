@@ -3,13 +3,13 @@ import { validateRuleset } from './rulesValidation';
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({
-    id: 'beat-arena-v3',
-    name: 'Beat Arena Skills V3',
-    version: 3,
+    id: 'beat-arena-v4',
+    name: 'Beat Arena Skills V4',
+    version: 4,
     tickRate: 30,
     maxPlayers: 6,
     mapBundleId: 'local-grid-arena',
-    contentHash: 'local-content-v4',
+    contentHash: 'local-content-v5',
     arena: {
       width: 38,
       height: 24,
@@ -38,6 +38,12 @@ export function createDefaultRuleset(): Ruleset {
         radius: 0.22,
         range: 22,
         color: '#ffe66d',
+        effects: [
+          {
+            kind: 'knockback',
+            force: 1.55,
+          },
+        ],
         speed: 1.05,
         lifetimeTicks: 34,
       },
@@ -51,6 +57,13 @@ export function createDefaultRuleset(): Ruleset {
         radius: 1.3,
         range: 1.65,
         color: '#ff6b4a',
+        effects: [
+          {
+            kind: 'slow',
+            multiplier: 0.48,
+            durationTicks: 42,
+          },
+        ],
         arcDegrees: 105,
         windupTicks: 2,
         activeTicks: 3,
@@ -65,6 +78,13 @@ export function createDefaultRuleset(): Ruleset {
         radius: 0.18,
         range: 18,
         color: '#62d2ff',
+        effects: [
+          {
+            kind: 'heal',
+            target: 'self',
+            amount: 18,
+          },
+        ],
         speed: 0.82,
         lifetimeTicks: 32,
       },
@@ -78,6 +98,12 @@ export function createDefaultRuleset(): Ruleset {
         radius: 0.16,
         range: 28,
         color: '#c79bff',
+        effects: [
+          {
+            kind: 'selfDash',
+            distance: 2.2,
+          },
+        ],
         charge: {
           maxTicks: 30,
           moveSpeedMultiplier: 0.55,

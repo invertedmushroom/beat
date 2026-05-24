@@ -3,6 +3,7 @@ import { chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
 import type {
   Ability,
+  AbilityEffect,
   CombatTextSnapshot,
   EffectSnapshot,
   EngineCommand,
@@ -37,6 +38,7 @@ type RuntimePlayer = {
   lastUsedSlot: number;
   lastHandledInputSequence: number;
   charging?: RuntimeCharge;
+  slow?: RuntimeSlow;
 };
 
 type RuntimeProjectile = {
@@ -88,6 +90,12 @@ type RuntimeCharge = {
   ability: Ability;
   startedTick: number;
   aim: Vec2;
+};
+
+type RuntimeSlow = {
+  multiplier: number;
+  untilTick: number;
+  color: string;
 };
 
 type Vec2 = { x: number; y: number };
@@ -268,10 +276,12 @@ function step(): void {
     }
     if (!player.alive) {
       player.charging = undefined;
+      player.slow = undefined;
       player.body.setLinvel({ x: 0, y: 0 }, true);
       player.lastHandledInputSequence = player.input.sequence;
       continue;
     }
+    clearExpiredStatuses(player);
 
     const hasNewInputEvents = player.input.sequence !== player.lastHandledInputSequence;
     const slotPresses = hasNewInputEvents ? player.input.slotPresses : [];
@@ -285,7 +295,7 @@ function step(): void {
     const axisX = clamp(player.input.moveX, -1, 1);
     const axisY = clamp(player.input.moveY, -1, 1);
     const mag = Math.hypot(axisX, axisY) || 1;
-    const speedMultiplier = player.charging?.ability.charge?.moveSpeedMultiplier ?? 1;
+    const speedMultiplier = (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) * activeSlowMultiplier(player);
     const speed = ruleset.player.speed * speedMultiplier;
     player.body.setLinvel({ x: (axisX / mag) * speed, y: (axisY / mag) * speed }, true);
     player.facing = aimForPlayer(player);
@@ -364,6 +374,7 @@ function releaseActiveCharge(player: RuntimePlayer): void {
 }
 
 function spawnAbility(player: RuntimePlayer, ability: Ability, aim: Vec2): void {
+  applySelfEffects(player, ability, aim);
   if (ability.shape === 'projectile') {
     spawnProjectile(player, ability, aim);
   } else {
@@ -439,6 +450,9 @@ function stepProjectiles(): void {
     if (hitPlayer) {
       damagePlayer(hitPlayer, projectile.ability.damage);
       addImpact(to.x, to.y, projectile.ability.radius * 3.4, projectile.ability.color);
+      if (hitPlayer.alive) {
+        applyHitEffects(projectile.ability, hitPlayer, { x: projectile.dx, y: projectile.dy });
+      }
       continue;
     }
     if (
@@ -480,6 +494,9 @@ function stepMelees(): void {
           melee.hitPlayers.add(target.spawn.playerId);
           damagePlayer(target, melee.ability.damage);
           addImpact(targetPos.x, targetPos.y, melee.ability.radius, melee.ability.color);
+          if (target.alive) {
+            applyHitEffects(melee.ability, target, normalized(dx, dy) ?? { x: melee.dx, y: melee.dy });
+          }
         }
       }
     }
@@ -501,6 +518,7 @@ function damagePlayer(player: RuntimePlayer, damage: number): void {
     return;
   }
   player.charging = undefined;
+  player.slow = undefined;
   player.alive = false;
   player.respawnTick = tick + ruleset.player.respawnTicks;
   player.body.setLinvel({ x: 0, y: 0 }, true);
@@ -516,6 +534,7 @@ function respawnPlayer(player: RuntimePlayer): void {
   player.hp = ruleset.player.maxHp;
   player.alive = true;
   player.respawnTick = 0;
+  player.slow = undefined;
   player.cooldownUntil.clear();
   player.body.setEnabled(true);
   player.body.setTranslation(point, true);
@@ -530,6 +549,118 @@ function respawnPlayer(player: RuntimePlayer): void {
     createdTick: tick,
     lifetimeTicks: 24,
   });
+}
+
+function applySelfEffects(player: RuntimePlayer, ability: Ability, aim: Vec2): void {
+  for (const effect of ability.effects ?? []) {
+    if (effect.kind === 'heal' && effect.target === 'self') {
+      healPlayer(player, effect.amount);
+    }
+    if (effect.kind === 'selfDash') {
+      dashPlayer(player, aim, effect.distance, ability.color);
+    }
+  }
+}
+
+function applyHitEffects(ability: Ability, target: RuntimePlayer, direction: Vec2): void {
+  for (const effect of ability.effects ?? []) {
+    applyHitEffect(effect, target, direction, ability.color);
+  }
+}
+
+function applyHitEffect(effect: AbilityEffect, target: RuntimePlayer, direction: Vec2, color: string): void {
+  if (effect.kind === 'knockback') {
+    knockbackPlayer(target, direction, effect.force, color);
+    return;
+  }
+  if (effect.kind === 'slow') {
+    slowPlayer(target, effect.multiplier, effect.durationTicks, color);
+    return;
+  }
+  if (effect.kind === 'heal' && effect.target === 'hit') {
+    healPlayer(target, effect.amount);
+  }
+}
+
+function dashPlayer(player: RuntimePlayer, direction: Vec2, distance: number, color: string): void {
+  const moved = movePlayerSafely(player, direction, distance);
+  if (moved <= 0 || !ruleset) {
+    return;
+  }
+  const pos = player.body.translation();
+  addEffect('dash', pos.x, pos.y, ruleset.player.radius * 3.1, color, 16);
+}
+
+function knockbackPlayer(player: RuntimePlayer, direction: Vec2, force: number, color: string): void {
+  const moved = movePlayerSafely(player, direction, force);
+  if (moved <= 0 || !ruleset) {
+    return;
+  }
+  const pos = player.body.translation();
+  addEffect('knockback', pos.x, pos.y, ruleset.player.radius * 2.8, color, 16);
+}
+
+function slowPlayer(player: RuntimePlayer, multiplier: number, durationTicks: number, color: string): void {
+  if (!player.alive || !ruleset) {
+    return;
+  }
+  const current = currentSlow(player);
+  const untilTick = tick + durationTicks;
+  player.slow = {
+    multiplier: Math.min(current?.multiplier ?? 1, multiplier),
+    untilTick: current && current.multiplier < multiplier ? Math.max(current.untilTick, untilTick) : untilTick,
+    color: current && current.multiplier < multiplier ? current.color : color,
+  };
+  const pos = player.body.translation();
+  addEffect('slow', pos.x, pos.y, ruleset.player.radius * 2.5, color, Math.min(34, Math.max(14, durationTicks)));
+}
+
+function healPlayer(player: RuntimePlayer, amount: number): void {
+  if (!player.alive || !ruleset || amount <= 0) {
+    return;
+  }
+  const before = player.hp;
+  player.hp = Math.min(ruleset.player.maxHp, player.hp + amount);
+  const healed = player.hp - before;
+  if (healed <= 0) {
+    return;
+  }
+  const pos = player.body.translation();
+  addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'heal', healed, '#2fd17c');
+  addEffect('heal', pos.x, pos.y, ruleset.player.radius * 2.7, '#2fd17c', 18);
+}
+
+function movePlayerSafely(player: RuntimePlayer, direction: Vec2, distance: number): number {
+  if (!ruleset || !player.alive) {
+    return 0;
+  }
+  const unit = normalized(direction.x, direction.y);
+  if (!unit) {
+    return 0;
+  }
+  const radius = ruleset.player.radius;
+  const stepDistance = Math.max(0.08, radius * 0.45);
+  let remaining = clamp(distance, 0, 12);
+  let moved = 0;
+  const start = player.body.translation();
+  let current: Vec2 = { x: start.x, y: start.y };
+  while (remaining > 0.001) {
+    const nextDistance = Math.min(stepDistance, remaining);
+    const candidate = {
+      x: current.x + unit.x * nextDistance,
+      y: current.y + unit.y * nextDistance,
+    };
+    if (hitsArenaOrObstacle(candidate, radius)) {
+      break;
+    }
+    current = candidate;
+    moved += nextDistance;
+    remaining -= nextDistance;
+  }
+  if (moved > 0) {
+    player.body.setTranslation(current, true);
+  }
+  return moved;
 }
 
 function findProjectileHit(projectile: RuntimeProjectile, from: Vec2, to: Vec2): RuntimePlayer | undefined {
@@ -603,6 +734,20 @@ function pruneCombatTexts(): void {
   combatTexts = combatTexts.filter((text) => tick - text.createdTick < text.lifetimeTicks);
 }
 
+function clearExpiredStatuses(player: RuntimePlayer): void {
+  if (player.slow && player.slow.untilTick <= tick) {
+    player.slow = undefined;
+  }
+}
+
+function currentSlow(player: RuntimePlayer): RuntimeSlow | undefined {
+  return player.slow && player.slow.untilTick > tick ? player.slow : undefined;
+}
+
+function activeSlowMultiplier(player: RuntimePlayer): number {
+  return currentSlow(player)?.multiplier ?? 1;
+}
+
 function readSnapshot(): EngineSnapshot {
   const activeRuleset = ruleset;
   if (!activeRuleset) {
@@ -636,10 +781,23 @@ function readSnapshot(): EngineSnapshot {
         lastUsedSlot: player.lastUsedSlot,
         aimDx: aim.x,
         aimDy: aim.y,
+        status: toStatusSnapshot(player),
         charging: player.charging ? toChargingSnapshot(player.charging) : undefined,
         lastInputSequence: player.input.sequence,
       };
     }),
+  };
+}
+
+function toStatusSnapshot(player: RuntimePlayer): NonNullable<EngineSnapshot['players'][number]['status']> | undefined {
+  const slow = currentSlow(player);
+  if (!slow) {
+    return undefined;
+  }
+  return {
+    slowMultiplier: slow.multiplier,
+    slowTicks: Math.max(0, slow.untilTick - tick),
+    slowColor: slow.color,
   };
 }
 

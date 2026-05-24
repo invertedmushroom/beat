@@ -30,7 +30,7 @@ type HostToClient =
   | { type: 'notice'; message: string };
 ```
 
-Snapshots include players, active projectiles, short-lived visual effects, and combat text. Player snapshots include HP, alive/respawn state, last input sequence, four loadout slot cooldowns, aim direction, last-used slot, and optional charge state.
+Snapshots include players, active projectiles, short-lived visual effects, and combat text. Player snapshots include HP, alive/respawn state, last input sequence, four loadout slot cooldowns, aim direction, last-used slot, optional status effects, and optional charge state.
 
 ## Authority
 
@@ -39,7 +39,7 @@ The host's worker is the authority for:
 - entity spawn/removal
 - collision and movement
 - hit detection
-- ability cooldowns, charge timing, projectile/melee resolution, HP, death, and respawn
+- ability cooldowns, charge timing, ability effects, projectile/melee resolution, HP, death, and respawn
 - tick number
 - snapshot publication
 

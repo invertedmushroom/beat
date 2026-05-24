@@ -90,4 +90,43 @@ describe('rulesValidation', () => {
       }),
     ).toThrow(/damageMultiplierMax/);
   });
+
+  it('validates ability effects', () => {
+    const ruleset = createDefaultRuleset();
+    const ability = validateRuleset({
+      ...ruleset,
+      abilities: ruleset.abilities.map((candidate, index) =>
+        index === 0
+          ? {
+              ...candidate,
+              effects: [
+                { kind: 'knockback', force: 1.2 },
+                { kind: 'slow', multiplier: 0.5, durationTicks: 30 },
+                { kind: 'heal', target: 'self', amount: 12 },
+                { kind: 'selfDash', distance: 1.4 },
+              ],
+            }
+          : candidate,
+      ),
+    }).abilities[0];
+
+    expect(ability.effects).toHaveLength(4);
+  });
+
+  it('rejects invalid ability effects', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        abilities: ruleset.abilities.map((ability, index) =>
+          index === 0
+            ? {
+                ...ability,
+                effects: [{ kind: 'slow', multiplier: 1.4, durationTicks: 30 }],
+              }
+            : ability,
+        ),
+      }),
+    ).toThrow(/ability\.effect\.multiplier/);
+  });
 });
