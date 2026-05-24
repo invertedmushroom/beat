@@ -3,7 +3,7 @@ import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
 import type { RoomDirectory, RoomInfo, RoomSignal } from '../rooms/directory';
 import { createId } from '../utils/ids';
 import { decodeClientMessage, decodeHostMessage, encodeMessage } from './messages';
-import { RTC_CONFIG } from './rtcConfig';
+import { describeRtcConfig, getRtcConfig } from './rtcConfig';
 
 type LogListener = (message: string) => void;
 type SnapshotListener = (snapshot: EngineSnapshot) => void;
@@ -37,6 +37,7 @@ export class HostSession {
   ) {}
 
   async start(): Promise<void> {
+    this.log(describeRtcConfig(await getRtcConfig()));
     try {
       await this.options.directory.advertiseRoom(this.options.room);
     } catch (error: unknown) {
@@ -114,7 +115,7 @@ export class HostSession {
     const sessionId = offerPayload.sessionId ?? signal.signalId;
     this.replacePeer(signal.fromPeerId);
 
-    const connection = new RTCPeerConnection(RTC_CONFIG);
+    const connection = new RTCPeerConnection(await getRtcConfig());
     const peerState: PeerState = {
       connection,
       sessionId,
@@ -132,6 +133,9 @@ export class HostSession {
           ),
         ).catch((error: unknown) => this.log(`ice send failed: ${readError(error)}`));
       }
+    };
+    connection.onicecandidateerror = (event) => {
+      this.log(`${shortPeer(signal.fromPeerId)} ice candidate error ${event.errorCode}: ${event.errorText || 'unknown error'}`);
     };
     connection.ondatachannel = (event) => {
       peerState.channel = event.channel;
@@ -292,7 +296,9 @@ export class ClientSession {
     this.lastHostMessageAt = Date.now();
     this.sawRoomInDirectory = false;
     this.receivedFirstSnapshot = false;
-    this.connection = new RTCPeerConnection(RTC_CONFIG);
+    const rtcConfig = await getRtcConfig();
+    this.log(describeRtcConfig(rtcConfig));
+    this.connection = new RTCPeerConnection(rtcConfig);
     this.channel = this.connection.createDataChannel('beat');
     this.bindConnectionLogs(this.connection, `client->${shortPeer(room.hostPeerId)}`);
     this.configureClientChannel();
@@ -305,6 +311,9 @@ export class ClientSession {
           this.options.directory.sendSignal(makeSignal(room.roomId, this.options.peerId, room.hostPeerId, 'ice', wrapSignalPayload(this.sessionId, event.candidate.toJSON()))),
         ).catch((error: unknown) => this.log(`ice send failed: ${readError(error)}`));
       }
+    };
+    this.connection.onicecandidateerror = (event) => {
+      this.log(`client ice candidate error ${event.errorCode}: ${event.errorText || 'unknown error'}`);
     };
 
     await this.options.directory.requestJoinRoom?.(room.roomId, this.options.peerId, this.options.displayName);
