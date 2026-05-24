@@ -291,14 +291,9 @@ function step(): void {
     for (const slot of slotPresses) {
       handleSlotPress(player, slot);
     }
-    updateChargeAim(player);
-    const axisX = clamp(player.input.moveX, -1, 1);
-    const axisY = clamp(player.input.moveY, -1, 1);
-    const mag = Math.hypot(axisX, axisY) || 1;
     const speedMultiplier = (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) * activeSlowMultiplier(player);
-    const speed = ruleset.player.speed * speedMultiplier;
-    player.body.setLinvel({ x: (axisX / mag) * speed, y: (axisY / mag) * speed }, true);
-    player.facing = aimForPlayer(player);
+    updateMovementAndFacing(player, speedMultiplier);
+    updateChargeAim(player);
     for (const slot of castSlots) {
       castSlot(player, slot);
     }
@@ -748,6 +743,48 @@ function activeSlowMultiplier(player: RuntimePlayer): number {
   return currentSlow(player)?.multiplier ?? 1;
 }
 
+function updateMovementAndFacing(player: RuntimePlayer, speedMultiplier: number): void {
+  if (!ruleset) {
+    return;
+  }
+  const axisX = clamp(player.input.moveX, -1, 1);
+  const axisY = clamp(player.input.moveY, -1, 1);
+  if (ruleset.player.movement.mode === 'tank') {
+    updateTankMovement(player, axisX, axisY, speedMultiplier);
+    return;
+  }
+  updateTwinStickMovement(player, axisX, axisY, speedMultiplier);
+}
+
+function updateTwinStickMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
+  if (!ruleset) {
+    return;
+  }
+  const move = normalized(axisX, axisY);
+  const speed = ruleset.player.speed * speedMultiplier;
+  player.body.setLinvel(move ? { x: move.x * speed, y: move.y * speed } : { x: 0, y: 0 }, true);
+  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
+  if (ruleset.player.aim.mode === 'free' && explicitAim) {
+    player.facing = explicitAim;
+    return;
+  }
+  if (move) {
+    player.facing = move;
+  }
+}
+
+function updateTankMovement(player: RuntimePlayer, turnInput: number, throttleInput: number, speedMultiplier: number): void {
+  if (!ruleset) {
+    return;
+  }
+  const turnRadians = (ruleset.player.movement.turnSpeedDegrees * Math.PI) / 180 / ruleset.tickRate;
+  player.facing = rotate(player.facing, turnInput * turnRadians);
+  const throttle = clamp(-throttleInput, -1, 1);
+  const reverseMultiplier = throttle < 0 ? ruleset.player.movement.reverseMultiplier : 1;
+  const speed = ruleset.player.speed * speedMultiplier * reverseMultiplier;
+  player.body.setLinvel({ x: player.facing.x * throttle * speed, y: player.facing.y * throttle * speed }, true);
+}
+
 function readSnapshot(): EngineSnapshot {
   const activeRuleset = ruleset;
   if (!activeRuleset) {
@@ -781,6 +818,8 @@ function readSnapshot(): EngineSnapshot {
         lastUsedSlot: player.lastUsedSlot,
         aimDx: aim.x,
         aimDy: aim.y,
+        facingDx: player.facing.x,
+        facingDy: player.facing.y,
         status: toStatusSnapshot(player),
         charging: player.charging ? toChargingSnapshot(player.charging) : undefined,
         lastInputSequence: player.input.sequence,
@@ -937,15 +976,27 @@ function findAimAssistTarget(owner: RuntimePlayer, ability: Ability, aim: Vec2):
 }
 
 function aimForPlayer(player: RuntimePlayer): Vec2 {
+  if (ruleset?.player.aim.mode === 'facing') {
+    return player.facing;
+  }
   const aim = normalized(player.input.aimDx, player.input.aimDy);
   if (aim) {
     return aim;
   }
-  const move = normalized(player.input.moveX, player.input.moveY);
+  const move = ruleset?.player.movement.mode === 'tank' ? undefined : normalized(player.input.moveX, player.input.moveY);
   if (move) {
     return move;
   }
   return player.facing;
+}
+
+function rotate(vector: Vec2, radians: number): Vec2 {
+  if (Math.abs(radians) < 0.0001) {
+    return vector;
+  }
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return normalized(vector.x * cos - vector.y * sin, vector.x * sin + vector.y * cos) ?? vector;
 }
 
 function normalized(x: number, y: number): Vec2 | undefined {

@@ -17,7 +17,7 @@ npm run dev
 
 Open `http://127.0.0.1:5177`.
 
-For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, aim with the mouse, and cast skills with `Space`, left click, or `1`-`4`. Hold a charged skill to power it up; it fires automatically at full charge. On phones, use the left virtual joystick and press-drag-hold the right skill buttons to aim charged casts.
+For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, aim with the mouse, and cast skills with `Space`, left click, or `1`-`4`. Hold a charged skill to power it up; it fires automatically at full charge. On phones, use the left virtual joystick and press-drag-hold the right skill buttons to aim charged casts. Rules can switch movement between twin-stick and tank steering, and aim between free aim and body-facing casts.
 
 For a quick multiplayer smoke test, open the app in two tabs:
 
@@ -32,7 +32,7 @@ By default the directory uses `localStorage` and `BroadcastChannel`, so it is sa
 The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or reset the rules before starting a room. The initial rules surface includes:
 
 - arena size and static obstacles
-- player speed, HP, radius, damping, and respawn time
+- player speed, HP, radius, damping, respawn time, movement mode, and aim mode
 - a four-slot loadout
 - projectile and melee ability definitions with targeting, optional charge tuning, damage, cooldown, range, radius, color, effects, and shape-specific timing
 

@@ -73,6 +73,18 @@ export type MeleeAbility = BaseAbility & {
 };
 
 export type Ability = ProjectileAbility | MeleeAbility;
+export type PlayerMovementMode = 'twinStick' | 'tank';
+export type PlayerAimMode = 'free' | 'facing';
+
+export type PlayerMovementConfig = {
+  mode: PlayerMovementMode;
+  turnSpeedDegrees: number;
+  reverseMultiplier: number;
+};
+
+export type PlayerAimConfig = {
+  mode: PlayerAimMode;
+};
 
 export type Ruleset = {
   id: string;
@@ -92,6 +104,8 @@ export type Ruleset = {
     damping: number;
     maxHp: number;
     respawnTicks: number;
+    movement: PlayerMovementConfig;
+    aim: PlayerAimConfig;
   };
   obstacles: RectObstacle[];
   abilities: Ability[];
@@ -135,6 +149,8 @@ export type PlayerSnapshot = {
   lastUsedSlot: number;
   aimDx: number;
   aimDy: number;
+  facingDx: number;
+  facingDy: number;
   status?: PlayerStatusSnapshot;
   charging?: ChargingSnapshot;
   lastInputSequence: number;

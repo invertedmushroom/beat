@@ -12,6 +12,59 @@ describe('rulesValidation', () => {
     expect(parseRulesetJson(stringifyRuleset(ruleset))).toEqual(ruleset);
   });
 
+  it('validates player movement and aim config', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      player: {
+        ...ruleset.player,
+        movement: {
+          mode: 'tank',
+          turnSpeedDegrees: 420,
+          reverseMultiplier: 0.4,
+        },
+        aim: {
+          mode: 'facing',
+        },
+      },
+    });
+
+    expect(parsed.player.movement).toEqual({
+      mode: 'tank',
+      turnSpeedDegrees: 420,
+      reverseMultiplier: 0.4,
+    });
+    expect(parsed.player.aim).toEqual({ mode: 'facing' });
+  });
+
+  it('rejects invalid player movement and aim config', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        player: {
+          ...ruleset.player,
+          movement: {
+            mode: 'drift',
+            turnSpeedDegrees: 420,
+            reverseMultiplier: 0.4,
+          },
+        },
+      }),
+    ).toThrow(/player\.movement\.mode/);
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        player: {
+          ...ruleset.player,
+          aim: {
+            mode: 'mouseOnly',
+          },
+        },
+      }),
+    ).toThrow(/player\.aim\.mode/);
+  });
+
   it('rejects a missing slotted ability', () => {
     const ruleset = createDefaultRuleset();
     expect(() =>

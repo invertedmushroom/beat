@@ -162,6 +162,63 @@ test('mobile charged skill can be aimed by drag hold', async ({ page }) => {
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[3] ?? 0)).toBeGreaterThan(0);
 });
 
+test('tank movement mode turns body and fires along facing', async ({ page }) => {
+  await page.goto('/');
+  const patchedRules = await page.locator('#rules-json').evaluate((node) => {
+    const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
+      obstacles: unknown[];
+      player: {
+        movement: Record<string, unknown>;
+        aim: Record<string, unknown>;
+      };
+      abilities: Array<Record<string, unknown>>;
+    };
+    rules.obstacles = [];
+    rules.player.movement = {
+      mode: 'tank',
+      turnSpeedDegrees: 720,
+      reverseMultiplier: 0.45,
+    };
+    rules.player.aim = {
+      mode: 'facing',
+    };
+    const pulse = rules.abilities.find((ability) => ability.id === 'pulse-bolt');
+    if (!pulse) {
+      throw new Error('pulse-bolt missing');
+    }
+    Object.assign(pulse, {
+      cooldownTicks: 6,
+      speed: 1.6,
+      lifetimeTicks: 30,
+    });
+    return `${JSON.stringify(rules, null, 2)}\n`;
+  });
+  await page.locator('#rules-json').fill(patchedRules);
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Solo' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  await aimCanvas(page, 'left');
+  await page.keyboard.press('Space');
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const snapshot = window.__BEAT_SNAPSHOT__;
+        const player = snapshot?.players[0];
+        const projectile = snapshot?.projectiles[0];
+        return player && projectile ? projectile.x - player.x : 0;
+      }),
+    )
+    .toBeGreaterThan(0);
+
+  await page.keyboard.down('ArrowRight');
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.facingDy ?? 0)).toBeGreaterThan(0.35);
+  await page.keyboard.up('ArrowRight');
+  await page.keyboard.down('ArrowUp');
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.vy ?? 0)).toBeGreaterThan(0.5);
+  await page.keyboard.up('ArrowUp');
+});
+
 test('authored effects are visible in multiplayer combat', async ({ context, page: host }) => {
   await host.goto('/');
   await host.locator('#display-name').fill('Host');

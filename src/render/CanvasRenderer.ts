@@ -159,6 +159,9 @@ export class CanvasRenderer {
       this.ctx.lineWidth = player.playerId === this.localPlayerId ? 3 : 1.5;
       this.ctx.strokeStyle = player.playerId === this.localPlayerId ? '#ffe66d' : player.alive ? '#0a0a0a' : '#252521';
       this.ctx.stroke();
+      if (player.alive) {
+        this.drawFacingPointer(x, y, radius, player.facingDx, player.facingDy);
+      }
 
       this.ctx.font = '12px ui-sans-serif, system-ui';
       this.ctx.textAlign = 'center';
@@ -200,6 +203,28 @@ export class CanvasRenderer {
     this.ctx.fillRect(x - width / 2, y, width, height);
     this.ctx.fillStyle = alive ? '#2fd17c' : '#6a6760';
     this.ctx.fillRect(x - width / 2, y, width * ratio, height);
+  }
+
+  private drawFacingPointer(x: number, y: number, radius: number, dx: number, dy: number): void {
+    const facing = normalized(dx, dy);
+    if (!facing) {
+      return;
+    }
+    this.ctx.save();
+    this.ctx.strokeStyle = '#141414';
+    this.ctx.lineWidth = 3;
+    this.ctx.lineCap = 'round';
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y);
+    this.ctx.lineTo(x + facing.x * radius * 1.45, y + facing.y * radius * 1.45);
+    this.ctx.stroke();
+    this.ctx.strokeStyle = '#f5f3ed';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y);
+    this.ctx.lineTo(x + facing.x * radius * 1.35, y + facing.y * radius * 1.35);
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 
   private drawSlowAura(x: number, y: number, radius: number, color: string, multiplier: number): void {

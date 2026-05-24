@@ -3,13 +3,13 @@ import { validateRuleset } from './rulesValidation';
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({
-    id: 'beat-arena-v4',
-    name: 'Beat Arena Skills V4',
-    version: 4,
+    id: 'beat-arena-v5',
+    name: 'Beat Arena Skills V5',
+    version: 5,
     tickRate: 30,
     maxPlayers: 6,
     mapBundleId: 'local-grid-arena',
-    contentHash: 'local-content-v5',
+    contentHash: 'local-content-v6',
     arena: {
       width: 38,
       height: 24,
@@ -20,6 +20,14 @@ export function createDefaultRuleset(): Ruleset {
       damping: 9,
       maxHp: 100,
       respawnTicks: 90,
+      movement: {
+        mode: 'twinStick',
+        turnSpeedDegrees: 300,
+        reverseMultiplier: 0.65,
+      },
+      aim: {
+        mode: 'free',
+      },
     },
     obstacles: [
       { id: 'mid-left', x: -6.5, y: 0, halfWidth: 1.1, halfHeight: 4.1 },

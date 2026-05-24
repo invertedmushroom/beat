@@ -12,8 +12,16 @@ describe('rulesetFingerprint', () => {
         speed: a.player.speed,
         radius: a.player.radius,
         respawnTicks: a.player.respawnTicks,
+        movement: {
+          reverseMultiplier: a.player.movement.reverseMultiplier,
+          turnSpeedDegrees: a.player.movement.turnSpeedDegrees,
+          mode: a.player.movement.mode,
+        },
         maxHp: a.player.maxHp,
         damping: a.player.damping,
+        aim: {
+          mode: a.player.aim.mode,
+        },
       },
     };
 

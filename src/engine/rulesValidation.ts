@@ -47,7 +47,31 @@ function validatePlayer(value: unknown): Ruleset['player'] {
     damping: readNumber(player.damping, 'player.damping', 0, 30),
     maxHp: readInt(player.maxHp, 'player.maxHp', 1, 10_000),
     respawnTicks: readInt(player.respawnTicks, 'player.respawnTicks', 0, 600),
+    movement: validatePlayerMovement(player.movement),
+    aim: validatePlayerAim(player.aim),
   };
+}
+
+function validatePlayerMovement(value: unknown): Ruleset['player']['movement'] {
+  const movement = assertRecord(value, 'player.movement');
+  const mode = readString(movement.mode, 'player.movement.mode');
+  if (mode !== 'twinStick' && mode !== 'tank') {
+    throw new Error('player.movement.mode must be twinStick or tank');
+  }
+  return {
+    mode,
+    turnSpeedDegrees: readNumber(movement.turnSpeedDegrees, 'player.movement.turnSpeedDegrees', 30, 1_440),
+    reverseMultiplier: readNumber(movement.reverseMultiplier, 'player.movement.reverseMultiplier', 0, 1),
+  };
+}
+
+function validatePlayerAim(value: unknown): Ruleset['player']['aim'] {
+  const aim = assertRecord(value, 'player.aim');
+  const mode = readString(aim.mode, 'player.aim.mode');
+  if (mode === 'free' || mode === 'facing') {
+    return { mode };
+  }
+  throw new Error('player.aim.mode must be free or facing');
 }
 
 function validateObstacle(value: unknown): Ruleset['obstacles'][number] {
