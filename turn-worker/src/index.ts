@@ -15,6 +15,7 @@ interface Env {
   TURN_API_TOKEN: string;
   ALLOWED_ORIGINS: string;
   TURN_TTL_SECONDS: string;
+  RATE_LIMITER: { limit(input: { key: string }): Promise<{ success: boolean }> };
 }
 
 interface CloudflareTurnResponse {
@@ -45,6 +46,15 @@ export default {
     }
     if (!cors['Access-Control-Allow-Origin']) {
       return new Response('origin not allowed', { status: 403 });
+    }
+
+    const clientIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const { success } = await env.RATE_LIMITER.limit({ key: clientIp });
+    if (!success) {
+      return new Response('rate limit exceeded', {
+        status: 429,
+        headers: { ...cors, 'Retry-After': '60' },
+      });
     }
 
     const ttl = Number.parseInt(env.TURN_TTL_SECONDS || '86400', 10);
