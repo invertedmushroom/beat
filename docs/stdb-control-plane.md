@@ -4,6 +4,8 @@ Beat's PWA-hosted mode keeps per-frame state out of SpacetimeDB. STDB is the roo
 
 ## Tables
 
+Table names and reducer names are shown here using the module's snake_case schema names. Generated TypeScript bindings expose camelCase accessors for the same tables and reducers.
+
 `hosted_room`
 
 - `room_id: String`
@@ -34,7 +36,7 @@ Beat's PWA-hosted mode keeps per-frame state out of SpacetimeDB. STDB is the roo
 
 `hosted_room_signal`
 
-- `signal_id: u64`
+- `signal_id: String`
 - `room_id: String`
 - `from_peer_id: String`
 - `to_peer_id: String`
@@ -58,9 +60,9 @@ Beat's PWA-hosted mode keeps per-frame state out of SpacetimeDB. STDB is the roo
 `src/rooms/spacetimeDirectory.ts` connects with generated `DbConnection` bindings:
 
 - subscribes to `hosted_room` for the server selector
-- calls `create_hosted_room` once per hosted room, then `heartbeat_hosted_room`
-- calls `request_join_hosted_room` before a client sends an offer
-- calls `accept_join_hosted_room` when the host answers
+- calls the generated `createHostedRoom` accessor once per hosted room, then `heartbeatHostedRoom`
+- calls `requestJoinHostedRoom` before a client sends an offer when the backend supports join recording
+- calls `acceptJoinHostedRoom` when the host answers
 - subscribes to `hosted_room_signal` rows addressed to the local peer id
 - stores the STDB anonymous auth token in `localStorage`
 

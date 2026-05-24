@@ -47,6 +47,14 @@ The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or 
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 
+## Documentation
+
+- `docs/architecture.md` — implementation overview and component map.
+- `docs/rules-implementation.md` — current rule schema and live semantics.
+- `docs/room-config-guide.md` — user-facing room/rules configuration guide.
+- `docs/engine-flow.md` — tick loop, physics, collision, status and resource updates.
+- `docs/networking.md` — host/client, WebRTC, room directory, and STDB reducer interactions.
+
 ## SpacetimeDB
 
 The STDB module is TypeScript under `spacetimedb/src/index.ts`. Generated browser bindings live in `src/module_bindings/`.
