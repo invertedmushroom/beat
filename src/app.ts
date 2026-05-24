@@ -2,7 +2,18 @@ import { createDefaultRuleset } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
 import { hashRuleset } from './engine/rulesHash';
 import { parseRulesetJson, stringifyRuleset, validateRuleset } from './engine/rulesValidation';
-import type { EngineSnapshot, MechanicAction, MechanicCondition, MechanicTraceSnapshot, PlayerInput, Ruleset } from './engine/protocol';
+import type {
+  AiTraceSnapshot,
+  EngineSnapshot,
+  MechanicAction,
+  MechanicCondition,
+  MechanicTraceSnapshot,
+  NpcArchetype,
+  NpcSpawn,
+  PlayerInput,
+  Ruleset,
+  RuntimeNpcConfig,
+} from './engine/protocol';
 import { InputController, type TouchControlElements } from './input/InputController';
 import { HostSession, ClientSession } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
@@ -40,6 +51,13 @@ export class BeatApp {
   private localMechanicsRoot!: HTMLDivElement;
   private traceRoot!: HTMLDivElement;
   private logRoot!: HTMLDivElement;
+  private labControlsRoot!: HTMLDivElement;
+  private labSpawnSelect!: HTMLSelectElement;
+  private labSpawnButton!: HTMLButtonElement;
+  private labClearActorsButton!: HTMLButtonElement;
+  private labResetButton!: HTMLButtonElement;
+  private labClearTraceButton!: HTMLButtonElement;
+  private labPauseButton!: HTMLButtonElement;
   private menuView!: HTMLElement;
   private arenaView!: HTMLElement;
   private rulesJsonInput!: HTMLTextAreaElement;
@@ -65,6 +83,9 @@ export class BeatApp {
   private editableRuleset: Ruleset = createDefaultRuleset();
   private editableRulesetHash = '';
   private rulesInspectorRefreshId = 0;
+  private labActorIds = new Set<string>();
+  private labSpawnIndex = 0;
+  private labPaused = false;
 
   constructor(container: HTMLElement) {
     this.root = container;
@@ -84,6 +105,11 @@ export class BeatApp {
     this.labButton.addEventListener('click', () => void this.startSolo(true));
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
     this.fullscreenButton.addEventListener('click', () => void this.toggleFullscreen());
+    this.labSpawnButton.addEventListener('click', () => this.spawnSelectedLabActor());
+    this.labClearActorsButton.addEventListener('click', () => this.clearLabActors());
+    this.labResetButton.addEventListener('click', () => this.resetLabActors());
+    this.labClearTraceButton.addEventListener('click', () => this.clearLabTrace());
+    this.labPauseButton.addEventListener('click', () => this.toggleLabPause());
     this.resetRulesButton.addEventListener('click', () => void this.resetRules());
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
@@ -131,6 +157,13 @@ export class BeatApp {
     this.localMechanicsRoot = requireNode<HTMLDivElement>('#local-mechanics');
     this.traceRoot = requireNode<HTMLDivElement>('#trace-log');
     this.logRoot = requireNode<HTMLDivElement>('#log');
+    this.labControlsRoot = requireNode<HTMLDivElement>('#lab-controls');
+    this.labSpawnSelect = requireNode<HTMLSelectElement>('#lab-spawn-select');
+    this.labSpawnButton = requireNode<HTMLButtonElement>('#lab-spawn');
+    this.labClearActorsButton = requireNode<HTMLButtonElement>('#lab-clear-actors');
+    this.labResetButton = requireNode<HTMLButtonElement>('#lab-reset');
+    this.labClearTraceButton = requireNode<HTMLButtonElement>('#lab-clear-trace');
+    this.labPauseButton = requireNode<HTMLButtonElement>('#lab-pause');
     this.rulesJsonInput = requireNode<HTMLTextAreaElement>('#rules-json');
     this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
     this.rulesInspector = requireNode<HTMLDivElement>('#rules-inspector');
@@ -170,7 +203,9 @@ export class BeatApp {
       displayName: this.displayName(),
       hue: 150,
       local: true,
+      team: 'players',
     });
+    this.spawnNpcSpawns(this.ruleset.npcs.sessionSpawns, 'session');
     this.unsubscribeSnapshot = this.engine.onSnapshot((snapshot) => {
       this.consumeSnapshot(snapshot, `hosting: ${room.name}`);
       this.hostSession?.broadcastSnapshot(snapshot);
@@ -229,16 +264,21 @@ export class BeatApp {
       displayName: this.displayName(),
       hue: 150,
       local: true,
+      team: 'players',
       spawnPoint: lab ? { x: -10, y: -7 } : undefined,
     });
     if (lab) {
-      this.addTrainingDummy('dummy-a', 'Dummy', 44, { x: -2.8, y: -7 });
+      this.resetLabState();
+      this.spawnNpcSpawns(this.ruleset.npcs.labSpawns, 'lab');
+      this.syncLabControls();
+    } else {
+      this.spawnNpcSpawns(this.ruleset.npcs.sessionSpawns, 'session');
     }
     this.unsubscribeSnapshot = this.engine.onSnapshot((snapshot) => {
-      this.consumeSnapshot(snapshot, lab ? 'lab: training target' : 'solo: browser worker authority');
+      this.consumeSnapshot(snapshot, lab ? 'lab: test bench' : 'solo: browser worker authority');
     });
     this.hashLine.textContent = `rules ${shortHash(rulesetHash)} · content ${shortHash(this.ruleset.contentHash)}`;
-    this.setStatus(lab ? 'lab: training target' : 'solo: browser worker authority');
+    this.setStatus(lab ? 'lab: test bench' : 'solo: browser worker authority');
   }
 
   private async joinRoom(room: RoomInfo): Promise<void> {
@@ -301,15 +341,17 @@ export class BeatApp {
     this.ruleset = undefined;
     this.lastSnapshot = undefined;
     this.previousSlotCooldowns = undefined;
+    this.resetLabState();
     window.__BEAT_SNAPSHOT__ = undefined;
     window.__BEAT_TRACE__ = undefined;
+    window.__BEAT_AI_TRACE__ = undefined;
     this.renderer.setRuleset(undefined);
     this.renderer.setEmptyMessage('No room active');
     this.renderer.setLocalPlayer(undefined);
     this.input.setAimOrigin(undefined);
     this.updateSkillBar(undefined);
     this.updateLocalMechanics(undefined);
-    this.renderTrace([]);
+    this.renderTrace([], []);
     this.mode = 'idle';
     this.setRulesLocked(false);
     void this.exitFullscreen();
@@ -344,8 +386,9 @@ export class BeatApp {
   }
 
   private setStatus(status: string): void {
-    const playerCount = this.lastSnapshot?.players.length ?? 0;
-    const text = `${status} · players ${playerCount}`;
+    const humans = this.lastSnapshot?.players.filter((player) => player.role === 'player').length ?? 0;
+    const actors = this.lastSnapshot?.players.length ?? 0;
+    const text = `${status} · humans ${humans} · actors ${actors}`;
     this.statusLine.textContent = text;
     this.menuStatusLine.textContent = text;
   }
@@ -367,13 +410,30 @@ export class BeatApp {
     return this.editableRuleset;
   }
 
-  private addTrainingDummy(idSuffix: string, name: string, hue: number, spawnPoint: { x: number; y: number }): void {
+  private spawnNpcSpawns(spawns: NpcSpawn[], scope: 'lab' | 'session'): void {
+    for (const spawn of spawns) {
+      const archetype = this.ruleset?.npcs.archetypes.find((candidate) => candidate.id === spawn.archetypeId);
+      if (!archetype) {
+        continue;
+      }
+      const playerId = `${scope}-npc-${spawn.id}`;
+      this.addNpcActor(playerId, archetype, { x: spawn.x, y: spawn.y }, spawn.team);
+      if (scope === 'lab') {
+        this.labActorIds.add(playerId);
+      }
+    }
+  }
+
+  private addNpcActor(playerId: string, archetype: NpcArchetype, spawnPoint: { x: number; y: number }, teamOverride?: string): void {
+    const team = teamOverride ?? archetype.team;
     this.engine?.addPlayer({
-      playerId: `lab-${idSuffix}`,
-      displayName: name,
-      hue,
+      playerId,
+      displayName: archetype.name,
+      hue: archetype.hue,
       local: false,
-      role: 'dummy',
+      role: 'npc',
+      team,
+      npc: npcRuntimeConfig(archetype, team),
       spawnPoint,
     });
   }
@@ -382,12 +442,101 @@ export class BeatApp {
     this.lastSnapshot = snapshot;
     window.__BEAT_SNAPSHOT__ = snapshot;
     window.__BEAT_TRACE__ = snapshot.mechanicTraces;
+    window.__BEAT_AI_TRACE__ = snapshot.aiTraces;
     this.renderer.update(snapshot);
     this.updateAimOrigin(snapshot);
     this.updateSkillBar(snapshot);
     this.updateLocalMechanics(snapshot);
-    this.renderTrace(snapshot.mechanicTraces);
+    this.renderTrace(snapshot.mechanicTraces, snapshot.aiTraces);
     this.setStatus(status);
+  }
+
+  private spawnSelectedLabActor(): void {
+    if (this.mode !== 'lab' || !this.ruleset) {
+      return;
+    }
+    const archetype = this.ruleset.npcs.archetypes.find((candidate) => candidate.id === this.labSpawnSelect.value);
+    if (!archetype) {
+      return;
+    }
+    const index = this.labSpawnIndex++;
+    const playerId = `lab-npc-manual-${index}`;
+    const spawnPoint = {
+      x: -2.8 + (index % 5) * 1.6,
+      y: -5.8 + Math.floor(index / 5) * 1.35,
+    };
+    this.addNpcActor(playerId, archetype, spawnPoint);
+    this.labActorIds.add(playerId);
+    this.log(`lab spawned ${archetype.name}`);
+  }
+
+  private clearLabActors(): void {
+    if (this.mode !== 'lab') {
+      return;
+    }
+    for (const playerId of this.labActorIds) {
+      this.engine?.removePlayer(playerId);
+    }
+    this.labActorIds.clear();
+    this.log('lab actors cleared');
+  }
+
+  private resetLabActors(): void {
+    if (this.mode !== 'lab' || !this.ruleset) {
+      return;
+    }
+    this.clearLabActors();
+    this.spawnNpcSpawns(this.ruleset.npcs.labSpawns, 'lab');
+    this.clearLabTrace();
+    this.log('lab actors reset');
+  }
+
+  private clearLabTrace(): void {
+    this.engine?.clearTrace();
+    window.__BEAT_TRACE__ = [];
+    window.__BEAT_AI_TRACE__ = [];
+    this.renderTrace([], []);
+  }
+
+  private toggleLabPause(): void {
+    if (this.mode !== 'lab') {
+      return;
+    }
+    this.labPaused = !this.labPaused;
+    this.engine?.setPaused(this.labPaused);
+    this.syncLabControls();
+    this.log(this.labPaused ? 'lab paused' : 'lab resumed');
+  }
+
+  private resetLabState(): void {
+    this.labActorIds.clear();
+    this.labSpawnIndex = 0;
+    this.labPaused = false;
+    this.syncLabControls();
+  }
+
+  private syncLabControls(): void {
+    if (!this.labControlsRoot) {
+      return;
+    }
+    const labActive = this.mode === 'lab';
+    this.labControlsRoot.hidden = !labActive;
+    this.labPauseButton.textContent = this.labPaused ? 'Resume' : 'Pause';
+    this.labPauseButton.setAttribute('aria-pressed', String(this.labPaused));
+    const archetypes = this.ruleset?.npcs.archetypes ?? this.editableRuleset.npcs.archetypes;
+    this.labSpawnSelect.replaceChildren(
+      ...archetypes.map((archetype) => {
+        const option = document.createElement('option');
+        option.value = archetype.id;
+        option.textContent = archetype.name;
+        return option;
+      }),
+    );
+    this.labSpawnButton.disabled = !labActive || archetypes.length === 0;
+    this.labClearActorsButton.disabled = !labActive;
+    this.labResetButton.disabled = !labActive;
+    this.labClearTraceButton.disabled = !labActive;
+    this.labPauseButton.disabled = !labActive;
   }
 
   private readRulesForStart(): Ruleset | undefined {
@@ -438,9 +587,10 @@ export class BeatApp {
       }
       this.editableRulesetHash = hash;
       this.rulesHashLine.textContent = `${ruleset.name} · ${shortHash(hash)}`;
-      this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers`;
+      this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers · ${ruleset.npcs.archetypes.length} NPCs`;
       this.rulesValidationLine.classList.remove('is-error');
       this.rulesInspector.innerHTML = rulesInspectorHtml(ruleset);
+      this.syncLabControls();
     } catch (error) {
       if (refreshId !== this.rulesInspectorRefreshId) {
         return;
@@ -466,11 +616,14 @@ export class BeatApp {
   private showMenu(): void {
     this.menuView.hidden = false;
     this.arenaView.hidden = true;
+    this.syncLabControls();
   }
 
   private showArena(): void {
+    blurActiveElement();
     this.menuView.hidden = true;
     this.arenaView.hidden = false;
+    this.syncLabControls();
     this.syncFullscreenButton();
     requestAnimationFrame(() => this.renderer.resizeNow());
     this.setRulesLocked(true);
@@ -584,11 +737,23 @@ export class BeatApp {
     this.localMechanicsRoot.innerHTML = chips.length > 0 ? chips.join('') : '<span class="mechanic-chip mechanic-chip--empty">No statuses</span>';
   }
 
-  private renderTrace(traces: MechanicTraceSnapshot[]): void {
-    const visible = traces.slice(-18).reverse();
+  private renderTrace(mechanicTraces: MechanicTraceSnapshot[], aiTraces: AiTraceSnapshot[]): void {
+    const visible = [
+      ...mechanicTraces.map((trace) => ({ tick: trace.tick, type: 'mechanic' as const, trace })),
+      ...aiTraces.map((trace) => ({ tick: trace.tick, type: 'ai' as const, trace })),
+    ]
+      .sort((a, b) => a.tick - b.tick)
+      .slice(-18)
+      .reverse();
     this.traceRoot.innerHTML =
       visible.length > 0
-        ? visible.map((trace) => `<div class="trace-line trace-line--${trace.kind}">${escapeHtml(traceLabel(trace))}</div>`).join('')
+        ? visible
+            .map((entry) =>
+              entry.type === 'mechanic'
+                ? `<div class="trace-line trace-line--${entry.trace.kind}">${escapeHtml(traceLabel(entry.trace))}</div>`
+                : `<div class="trace-line trace-line--ai-${entry.trace.kind}">${escapeHtml(aiTraceLabel(entry.trace))}</div>`,
+            )
+            .join('')
         : '<div class="trace-line trace-line--empty">No mechanics yet</div>';
   }
 
@@ -675,6 +840,19 @@ function shellHtml(): string {
           <button id="fullscreen-toggle" class="button arena-action-button" type="button" aria-pressed="false">Fullscreen</button>
           <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
         </div>
+        <div id="lab-controls" class="lab-controls" hidden>
+          <div class="lab-controls__title">Lab Bench</div>
+          <div class="lab-controls__row">
+            <button id="lab-pause" class="button lab-control-button" type="button" aria-pressed="false">Pause</button>
+            <button id="lab-reset" class="button lab-control-button" type="button">Reset</button>
+            <button id="lab-clear-trace" class="button lab-control-button" type="button">Clear Trace</button>
+          </div>
+          <div class="lab-controls__row">
+            <select id="lab-spawn-select" class="lab-select" aria-label="NPC archetype"></select>
+            <button id="lab-spawn" class="button lab-control-button" type="button">Spawn</button>
+            <button id="lab-clear-actors" class="button lab-control-button" type="button">Clear Actors</button>
+          </div>
+        </div>
         <div id="skill-bar" class="skill-bar" aria-label="Skill bar">
           <button class="skill-slot" type="button" data-slot="0">
             <span class="skill-slot__cooldown-fill"></span>
@@ -754,6 +932,12 @@ function escapeHtml(value: string): string {
   });
 }
 
+function blurActiveElement(): void {
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+}
+
 function rulesInspectorHtml(ruleset: Ruleset): string {
   return [
     inspectorGroup(
@@ -801,6 +985,28 @@ function rulesInspectorHtml(ruleset: Ruleset): string {
           '#ffe66d',
         ),
       ),
+    ),
+    inspectorGroup(
+      'NPCs',
+      ruleset.npcs.archetypes.map((archetype) =>
+        inspectorRow(
+          archetype.name,
+          `${archetype.id} · ${archetype.behavior.mode} · team ${archetype.team}`,
+          `loadout ${archetype.loadout.abilityIds.join(', ') || 'none'} · cast ${archetype.casting.slots.map((slot) => slot + 1).join(', ') || 'none'} · x${archetype.hpMultiplier} hp`,
+          `hsl(${archetype.hue} 76% 58%)`,
+        ),
+      ),
+    ),
+    inspectorGroup(
+      'NPC Spawns',
+      [
+        ...ruleset.npcs.labSpawns.map((spawn) =>
+          inspectorRow(spawn.id, `lab · ${spawn.archetypeId}`, `${spawn.x}, ${spawn.y}${spawn.team ? ` · team ${spawn.team}` : ''}`, '#2fd17c'),
+        ),
+        ...ruleset.npcs.sessionSpawns.map((spawn) =>
+          inspectorRow(spawn.id, `session · ${spawn.archetypeId}`, `${spawn.x}, ${spawn.y}${spawn.team ? ` · team ${spawn.team}` : ''}`, '#ff6b4a'),
+        ),
+      ],
     ),
   ].join('');
 }
@@ -887,8 +1093,35 @@ function traceLabel(trace: MechanicTraceSnapshot): string {
   return `${trace.tick} mechanics guard blocked queued events`;
 }
 
+function aiTraceLabel(trace: AiTraceSnapshot): string {
+  const actor = trace.actorName ?? shortTraceId(trace.actorId) ?? 'npc';
+  const target = trace.targetName ?? shortTraceId(trace.targetId);
+  if (trace.kind === 'target') {
+    return `${trace.tick} ai ${actor} ${trace.result === 'acquired' ? `target ${target ?? 'enemy'}` : trace.reason ?? 'no target'}`;
+  }
+  if (trace.kind === 'move') {
+    return `${trace.tick} ai ${actor} ${trace.behavior ?? 'move'}${target ? ` toward ${target}` : ''}`;
+  }
+  if (trace.kind === 'cast') {
+    return `${trace.tick} ai ${actor} cast ${trace.abilityId ?? `slot ${trace.slot ?? 0}`}${target ? ` at ${target}` : ''}`;
+  }
+  return `${trace.tick} ai ${actor} blocked ${trace.abilityId ?? `slot ${trace.slot ?? 0}`}: ${trace.reason ?? 'blocked'}`;
+}
+
 function shortTraceId(value: string | undefined): string | undefined {
   return value ? value.slice(-8) : undefined;
+}
+
+function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConfig {
+  return {
+    archetypeId: archetype.id,
+    team,
+    hpMultiplier: archetype.hpMultiplier,
+    speedMultiplier: archetype.speedMultiplier,
+    loadoutAbilityIds: archetype.loadout.abilityIds,
+    behavior: archetype.behavior,
+    casting: archetype.casting,
+  };
 }
 
 function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {

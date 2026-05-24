@@ -192,9 +192,59 @@ export type Ruleset = {
   obstacles: RectObstacle[];
   abilities: Ability[];
   mechanics: MechanicsConfig;
+  npcs: NpcConfig;
   loadout: {
     abilityIds: string[];
   };
+};
+
+export type NpcConfig = {
+  archetypes: NpcArchetype[];
+  labSpawns: NpcSpawn[];
+  sessionSpawns: NpcSpawn[];
+};
+
+export type NpcBehaviorMode = 'idle' | 'wander' | 'seek' | 'kite';
+
+export type NpcArchetype = {
+  id: string;
+  name: string;
+  hue: number;
+  team: string;
+  hpMultiplier: number;
+  speedMultiplier: number;
+  loadout: {
+    abilityIds: string[];
+  };
+  behavior: {
+    mode: NpcBehaviorMode;
+    aggroRange: number;
+    preferredRange: number;
+    wanderRadius: number;
+  };
+  casting: {
+    slots: number[];
+    minRange: number;
+    maxRange: number;
+  };
+};
+
+export type NpcSpawn = {
+  id: string;
+  archetypeId: string;
+  x: number;
+  y: number;
+  team?: string;
+};
+
+export type RuntimeNpcConfig = {
+  archetypeId: string;
+  team: string;
+  hpMultiplier: number;
+  speedMultiplier: number;
+  loadoutAbilityIds: string[];
+  behavior: NpcArchetype['behavior'];
+  casting: NpcArchetype['casting'];
 };
 
 export type PlayerInput = {
@@ -214,12 +264,16 @@ export type PlayerSpawn = {
   displayName: string;
   hue: number;
   local: boolean;
-  role?: 'player' | 'dummy';
+  role?: ActorRole;
+  team?: string;
+  npc?: RuntimeNpcConfig;
   spawnPoint?: {
     x: number;
     y: number;
   };
 };
+
+export type ActorRole = 'player' | 'dummy' | 'npc';
 
 export type PlayerSnapshot = {
   playerId: string;
@@ -239,7 +293,8 @@ export type PlayerSnapshot = {
   aimDy: number;
   facingDx: number;
   facingDy: number;
-  role: 'player' | 'dummy';
+  role: ActorRole;
+  team: string;
   status?: PlayerStatusSnapshot;
   statuses: StatusSnapshot[];
   resources: ResourceSnapshot[];
@@ -339,6 +394,23 @@ export type MechanicTraceSnapshot = {
   amount?: number;
 };
 
+export type AiTraceKind = 'target' | 'move' | 'cast' | 'blocked';
+
+export type AiTraceSnapshot = {
+  traceId: string;
+  tick: number;
+  kind: AiTraceKind;
+  actorId: string;
+  actorName?: string;
+  targetId?: string;
+  targetName?: string;
+  behavior?: NpcBehaviorMode;
+  slot?: number;
+  abilityId?: string;
+  result: 'acquired' | 'none' | 'moved' | 'cast' | 'blocked';
+  reason?: string;
+};
+
 export type EngineSnapshot = {
   tick: number;
   nowMs: number;
@@ -348,6 +420,7 @@ export type EngineSnapshot = {
   effects: EffectSnapshot[];
   combatTexts: CombatTextSnapshot[];
   mechanicTraces: MechanicTraceSnapshot[];
+  aiTraces: AiTraceSnapshot[];
 };
 
 export type EngineCommand =
@@ -355,6 +428,8 @@ export type EngineCommand =
   | { type: 'add-player'; player: PlayerSpawn }
   | { type: 'remove-player'; playerId: string }
   | { type: 'input'; playerId: string; input: PlayerInput }
+  | { type: 'set-paused'; paused: boolean }
+  | { type: 'clear-trace' }
   | { type: 'stop' };
 
 export type EngineEvent =

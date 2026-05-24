@@ -3,13 +3,13 @@ import { validateRuleset } from './rulesValidation';
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({
-    id: 'beat-arena-v6',
-    name: 'Beat Arena Mechanics V6',
-    version: 6,
+    id: 'beat-arena-v8',
+    name: 'Beat Arena NPC Lab V8',
+    version: 8,
     tickRate: 30,
     maxPlayers: 6,
     mapBundleId: 'local-grid-arena',
-    contentHash: 'local-content-v7',
+    contentHash: 'local-content-v8',
     arena: {
       width: 38,
       height: 24,
@@ -257,6 +257,78 @@ export function createDefaultRuleset(): Ruleset {
           ],
         },
       ],
+    },
+    npcs: {
+      archetypes: [
+        {
+          id: 'training-dummy',
+          name: 'Training Dummy',
+          hue: 44,
+          team: 'hostile',
+          hpMultiplier: 1.4,
+          speedMultiplier: 0,
+          loadout: {
+            abilityIds: [],
+          },
+          behavior: {
+            mode: 'idle',
+            aggroRange: 0,
+            preferredRange: 0,
+            wanderRadius: 0,
+          },
+          casting: {
+            slots: [],
+            minRange: 0,
+            maxRange: 0,
+          },
+        },
+        {
+          id: 'spark-chaser',
+          name: 'Spark Chaser',
+          hue: 304,
+          team: 'hostile',
+          hpMultiplier: 0.9,
+          speedMultiplier: 0.72,
+          loadout: {
+            abilityIds: ['pulse-bolt'],
+          },
+          behavior: {
+            mode: 'seek',
+            aggroRange: 18,
+            preferredRange: 6,
+            wanderRadius: 5,
+          },
+          casting: {
+            slots: [0],
+            minRange: 2.2,
+            maxRange: 16,
+          },
+        },
+        {
+          id: 'lance-kiter',
+          name: 'Lance Kiter',
+          hue: 258,
+          team: 'hostile',
+          hpMultiplier: 0.8,
+          speedMultiplier: 0.62,
+          loadout: {
+            abilityIds: ['ion-lance'],
+          },
+          behavior: {
+            mode: 'kite',
+            aggroRange: 22,
+            preferredRange: 9,
+            wanderRadius: 6,
+          },
+          casting: {
+            slots: [0],
+            minRange: 5,
+            maxRange: 20,
+          },
+        },
+      ],
+      labSpawns: [{ id: 'dummy-a', archetypeId: 'training-dummy', x: -2.8, y: -7 }],
+      sessionSpawns: [],
     },
     loadout: {
       abilityIds: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'],

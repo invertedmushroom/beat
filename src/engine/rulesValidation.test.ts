@@ -227,6 +227,88 @@ describe('rulesValidation', () => {
     expect(parsed.mechanics.triggers.find((trigger) => trigger.id === 'burn-spend')?.actions).toHaveLength(2);
   });
 
+  it('validates NPC archetypes, spawns, teams, behavior, and loadouts', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      npcs: {
+        archetypes: [
+          ...ruleset.npcs.archetypes,
+          {
+            id: 'arc-kiter',
+            name: 'Arc Kiter',
+            hue: 188,
+            team: 'hostile',
+            hpMultiplier: 1.2,
+            speedMultiplier: 0.8,
+            loadout: { abilityIds: ['pulse-bolt', 'arc-slash'] },
+            behavior: {
+              mode: 'kite',
+              aggroRange: 20,
+              preferredRange: 8,
+              wanderRadius: 4,
+            },
+            casting: {
+              slots: [0, 1],
+              minRange: 1,
+              maxRange: 18,
+            },
+          },
+        ],
+        labSpawns: [...ruleset.npcs.labSpawns, { id: 'arc-kiter-a', archetypeId: 'arc-kiter', x: 3, y: -4, team: 'hostile' }],
+        sessionSpawns: [{ id: 'arc-kiter-live', archetypeId: 'arc-kiter', x: 5, y: 0 }],
+      },
+    });
+
+    expect(parsed.npcs.archetypes.find((archetype) => archetype.id === 'arc-kiter')?.behavior.mode).toBe('kite');
+    expect(parsed.npcs.sessionSpawns).toHaveLength(1);
+  });
+
+  it('rejects invalid NPC references and behavior config', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        npcs: {
+          ...ruleset.npcs,
+          archetypes: ruleset.npcs.archetypes.map((archetype, index) =>
+            index === 0 ? { ...archetype, loadout: { abilityIds: ['missing-ability'] } } : archetype,
+          ),
+        },
+      }),
+    ).toThrow(/must reference an ability/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        npcs: {
+          ...ruleset.npcs,
+          labSpawns: [{ id: 'bad-spawn', archetypeId: 'missing-npc', x: 0, y: 0 }],
+        },
+      }),
+    ).toThrow(/must reference an NPC archetype/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        npcs: {
+          ...ruleset.npcs,
+          archetypes: ruleset.npcs.archetypes.map((archetype, index) =>
+            index === 0
+              ? {
+                  ...archetype,
+                  behavior: {
+                    ...archetype.behavior,
+                    mode: 'flank',
+                  },
+                }
+              : archetype,
+          ),
+        },
+      }),
+    ).toThrow(/behavior\.mode/);
+  });
+
   it('rejects invalid mechanics references', () => {
     const ruleset = createDefaultRuleset();
     expect(() =>

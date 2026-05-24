@@ -51,6 +51,21 @@ describe('rulesetFingerprint', () => {
     expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
   });
 
+  it('changes when NPC config changes', () => {
+    const a = createDefaultRuleset();
+    const b = {
+      ...a,
+      npcs: {
+        ...a.npcs,
+        archetypes: a.npcs.archetypes.map((archetype) =>
+          archetype.id === 'spark-chaser' ? { ...archetype, behavior: { ...archetype.behavior, aggroRange: archetype.behavior.aggroRange + 1 } } : archetype,
+        ),
+      },
+    };
+
+    expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
+  });
+
   it('changes when loadout order changes', () => {
     const a = createDefaultRuleset();
     const b = {

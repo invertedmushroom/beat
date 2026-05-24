@@ -10,6 +10,10 @@ import type {
   MechanicTrigger,
   MechanicsConfig,
   MeleeAbility,
+  NpcArchetype,
+  NpcBehaviorMode,
+  NpcConfig,
+  NpcSpawn,
   ProjectileAbility,
   ResourceDefinition,
   Ruleset,
@@ -25,6 +29,7 @@ export function validateRuleset(value: unknown): Ruleset {
   const ruleset = assertRecord(value, 'ruleset');
   const abilities = readArray(ruleset.abilities, 'abilities').map(validateAbility);
   const mechanics = validateMechanics(ruleset.mechanics);
+  const npcs = validateNpcs(ruleset.npcs, abilities);
   const loadout = assertRecord(ruleset.loadout, 'loadout');
   const abilityIds = validateLoadoutAbilityIds(loadout.abilityIds, abilities);
   validateMechanicReferences(abilities, mechanics);
@@ -42,6 +47,7 @@ export function validateRuleset(value: unknown): Ruleset {
     obstacles: readArray(ruleset.obstacles, 'obstacles').map(validateObstacle),
     abilities,
     mechanics,
+    npcs,
     loadout: { abilityIds },
   };
 }
@@ -356,6 +362,109 @@ function validateLoadoutAbilityIds(value: unknown, abilities: Ability[]): string
     }
     return id;
   });
+}
+
+function validateNpcs(value: unknown, abilities: Ability[]): NpcConfig {
+  if (value === undefined) {
+    return { archetypes: [], labSpawns: [], sessionSpawns: [] };
+  }
+  const npcs = assertRecord(value, 'npcs');
+  const archetypes = readArray(npcs.archetypes, 'npcs.archetypes').map((archetype) => validateNpcArchetype(archetype, abilities));
+  assertUniqueIds(archetypes, 'npcs.archetypes');
+  const labSpawns = readArray(npcs.labSpawns, 'npcs.labSpawns').map((spawn) => validateNpcSpawn(spawn, archetypes, 'npcs.labSpawns'));
+  const sessionSpawns = readArray(npcs.sessionSpawns, 'npcs.sessionSpawns').map((spawn) => validateNpcSpawn(spawn, archetypes, 'npcs.sessionSpawns'));
+  assertUniqueIds(labSpawns, 'npcs.labSpawns');
+  assertUniqueIds(sessionSpawns, 'npcs.sessionSpawns');
+  return { archetypes, labSpawns, sessionSpawns };
+}
+
+function validateNpcArchetype(value: unknown, abilities: Ability[]): NpcArchetype {
+  const archetype = assertRecord(value, 'npcs.archetype');
+  const loadout = assertRecord(archetype.loadout, 'npcs.archetype.loadout');
+  return {
+    id: readId(archetype.id, 'npcs.archetype.id'),
+    name: clampString(readString(archetype.name, 'npcs.archetype.name'), 1, 36, 'npcs.archetype.name'),
+    hue: readInt(archetype.hue, 'npcs.archetype.hue', 0, 359),
+    team: readId(archetype.team, 'npcs.archetype.team'),
+    hpMultiplier: readOptionalNumber(archetype.hpMultiplier, 'npcs.archetype.hpMultiplier', 0.05, 20) ?? 1,
+    speedMultiplier: readOptionalNumber(archetype.speedMultiplier, 'npcs.archetype.speedMultiplier', 0, 5) ?? 1,
+    loadout: {
+      abilityIds: validateNpcLoadoutAbilityIds(loadout.abilityIds, abilities),
+    },
+    behavior: validateNpcBehavior(archetype.behavior),
+    casting: validateNpcCasting(archetype.casting),
+  };
+}
+
+function validateNpcLoadoutAbilityIds(value: unknown, abilities: Ability[]): string[] {
+  const abilityIds = readArray(value, 'npcs.archetype.loadout.abilityIds');
+  if (abilityIds.length > 4) {
+    throw new Error('npcs.archetype.loadout.abilityIds may contain at most four ability ids');
+  }
+  return abilityIds.map((abilityId, index) => {
+    const id = readId(abilityId, `npcs.archetype.loadout.abilityIds[${index}]`);
+    if (!abilities.some((ability) => ability.id === id)) {
+      throw new Error(`npcs.archetype.loadout.abilityIds[${index}] must reference an ability`);
+    }
+    return id;
+  });
+}
+
+function validateNpcBehavior(value: unknown): NpcArchetype['behavior'] {
+  const behavior = assertRecord(value, 'npcs.archetype.behavior');
+  return {
+    mode: validateNpcBehaviorMode(behavior.mode),
+    aggroRange: readOptionalNumber(behavior.aggroRange, 'npcs.archetype.behavior.aggroRange', 0, 100) ?? 18,
+    preferredRange: readOptionalNumber(behavior.preferredRange, 'npcs.archetype.behavior.preferredRange', 0, 100) ?? 5,
+    wanderRadius: readOptionalNumber(behavior.wanderRadius, 'npcs.archetype.behavior.wanderRadius', 0, 100) ?? 5,
+  };
+}
+
+function validateNpcBehaviorMode(value: unknown): NpcBehaviorMode {
+  const mode = readString(value, 'npcs.archetype.behavior.mode');
+  if (mode === 'idle' || mode === 'wander' || mode === 'seek' || mode === 'kite') {
+    return mode;
+  }
+  throw new Error('npcs.archetype.behavior.mode must be idle, wander, seek, or kite');
+}
+
+function validateNpcCasting(value: unknown): NpcArchetype['casting'] {
+  const casting = value === undefined ? {} : assertRecord(value, 'npcs.archetype.casting');
+  const minRange = readOptionalNumber(casting.minRange, 'npcs.archetype.casting.minRange', 0, 100) ?? 0;
+  const maxRange = readOptionalNumber(casting.maxRange, 'npcs.archetype.casting.maxRange', 0, 100) ?? 18;
+  if (maxRange < minRange) {
+    throw new Error('npcs.archetype.casting.maxRange must be greater than or equal to minRange');
+  }
+  return {
+    slots: validateNpcCastingSlots(casting.slots),
+    minRange,
+    maxRange,
+  };
+}
+
+function validateNpcCastingSlots(value: unknown): number[] {
+  if (value === undefined) {
+    return [];
+  }
+  const slots = readArray(value, 'npcs.archetype.casting.slots').map((slot, index) =>
+    readInt(slot, `npcs.archetype.casting.slots[${index}]`, 0, 3),
+  );
+  return Array.from(new Set(slots)).sort((a, b) => a - b);
+}
+
+function validateNpcSpawn(value: unknown, archetypes: NpcArchetype[], label: string): NpcSpawn {
+  const spawn = assertRecord(value, `${label}.spawn`);
+  const archetypeId = readId(spawn.archetypeId, `${label}.archetypeId`);
+  if (!archetypes.some((archetype) => archetype.id === archetypeId)) {
+    throw new Error(`${label}.archetypeId must reference an NPC archetype`);
+  }
+  return {
+    id: readId(spawn.id, `${label}.id`),
+    archetypeId,
+    x: readNumber(spawn.x, `${label}.x`, -200, 200),
+    y: readNumber(spawn.y, `${label}.y`, -200, 200),
+    ...(spawn.team === undefined ? {} : { team: readId(spawn.team, `${label}.team`) }),
+  };
 }
 
 function validateAbility(value: unknown): Ability {

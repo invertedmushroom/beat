@@ -245,23 +245,24 @@ test('rules inspector validates mechanics examples and updates hash', async ({ p
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.resources.length ?? 0)).toBeGreaterThan(0);
 });
 
-test('solo lab spawns a training dummy and explains mechanics in trace', async ({ page }) => {
+test('lab spawns rules-authored actors and explains mechanics in trace', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Lab' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await expect
-    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy')?.displayName ?? ''))
-    .toBe('Dummy');
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'npc')?.displayName ?? ''))
+    .toBe('Training Dummy');
   await expect(page.locator('#local-mechanics')).toContainText('Shield');
+  await expect(page.locator('#lab-controls')).toBeVisible();
 
   await page.keyboard.press('Space');
   await expect
-    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy')?.statuses.some((status) => status.id === 'shocked') ?? false))
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'npc')?.statuses.some((status) => status.id === 'shocked') ?? false))
     .toBeTruthy();
   await expect
     .poll(async () =>
       page.evaluate(() => {
-        const dummy = window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'dummy');
+        const dummy = window.__BEAT_SNAPSHOT__?.players.find((player) => player.role === 'npc');
         return dummy ? dummy.hp < dummy.maxHp : false;
       }),
     )
@@ -272,6 +273,39 @@ test('solo lab spawns a training dummy and explains mechanics in trace', async (
 
   await page.locator('.arena-log summary').click();
   await expect(page.locator('#trace-log')).toContainText('Shock Bonus');
+});
+
+test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Lab' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  await page.locator('#lab-spawn-select').selectOption('spark-chaser');
+  await page.getByRole('button', { name: 'Spawn' }).click();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.some((player) => player.displayName === 'Spark Chaser') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_AI_TRACE__?.some((trace) => trace.actorName === 'Spark Chaser' && trace.kind === 'target') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_AI_TRACE__?.some((trace) => trace.actorName === 'Spark Chaser' && trace.kind === 'cast') ?? false))
+    .toBeTruthy();
+
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
+  await page.waitForTimeout(100);
+  const pausedTick = await page.evaluate(() => window.__BEAT_SNAPSHOT__?.tick ?? 0);
+  await page.waitForTimeout(180);
+  expect(await page.evaluate(() => window.__BEAT_SNAPSHOT__?.tick ?? 0)).toBe(pausedTick);
+
+  await page.getByRole('button', { name: 'Clear Trace' }).click();
+  await expect.poll(async () => page.evaluate(() => (window.__BEAT_TRACE__?.length ?? 0) + (window.__BEAT_AI_TRACE__?.length ?? 0))).toBe(0);
+
+  await page.getByRole('button', { name: 'Reset' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await page.getByRole('button', { name: 'Clear Actors' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 });
 
 test('mechanics status combo is visible in multiplayer combat', async ({ context, page: host }) => {
@@ -321,6 +355,41 @@ test('mechanics status combo is visible in multiplayer combat', async ({ context
     .toBeTruthy();
   await expect
     .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.effects.some((effect) => effect.kind === 'trigger') ?? false))
+    .toBeTruthy();
+});
+
+test('host and client both see configured session NPCs without changing room player count', async ({ context, page: host }) => {
+  const roomName = `NPC Session ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  const patchedRules = await host.locator('#rules-json').evaluate((node) => {
+    const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
+      npcs: {
+        sessionSpawns: Array<Record<string, unknown>>;
+      };
+    };
+    rules.npcs.sessionSpawns = [{ id: 'session-dummy', archetypeId: 'training-dummy', x: 0, y: 4 }];
+    return `${JSON.stringify(rules, null, 2)}\n`;
+  });
+  await host.locator('#rules-json').fill(patchedRules);
+  await host.getByRole('button', { name: 'Apply' }).click();
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await expect
+    .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.some((player) => player.role === 'npc' && player.displayName === 'Training Dummy') ?? false))
+    .toBeTruthy();
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toContainText('1/6');
+  await roomRow.click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(3);
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(3);
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.some((player) => player.role === 'npc' && player.displayName === 'Training Dummy') ?? false))
     .toBeTruthy();
 });
 

@@ -37,6 +37,14 @@ export class EngineClient {
     this.post({ type: 'input', playerId, input });
   }
 
+  setPaused(paused: boolean): void {
+    this.post({ type: 'set-paused', paused });
+  }
+
+  clearTrace(): void {
+    this.post({ type: 'clear-trace' });
+  }
+
   onSnapshot(listener: SnapshotListener): () => void {
     this.snapshotListeners.add(listener);
     return () => this.snapshotListeners.delete(listener);

@@ -4,6 +4,8 @@ import { spawnPointForIndex } from './defaultRules';
 import type {
   Ability,
   AbilityEffect,
+  AiTraceKind,
+  AiTraceSnapshot,
   CombatTextSnapshot,
   EffectSnapshot,
   EngineCommand,
@@ -20,6 +22,7 @@ import type {
   PlayerInput,
   PlayerSpawn,
   ProjectileAbility,
+  RuntimeNpcConfig,
   ProjectileSnapshot,
   Ruleset,
   StatusDefinition,
@@ -39,10 +42,13 @@ type RuntimePlayer = {
   input: PlayerInput;
   spawnSlot: number;
   hp: number;
+  maxHp: number;
   alive: boolean;
   respawnTick: number;
   cooldownUntil: Map<string, number>;
   facing: Vec2;
+  team: string;
+  npc?: RuntimeNpcState;
   lastUsedSlot: number;
   lastHandledInputSequence: number;
   charging?: RuntimeCharge;
@@ -128,6 +134,15 @@ type RuntimeResource = {
   regenPerTick: number;
 };
 
+type RuntimeNpcState = {
+  config: RuntimeNpcConfig;
+  targetId?: string;
+  wanderSeed: number;
+  lastNoTargetTraceTick: number;
+  lastMoveTraceTick: number;
+  lastBlockedTraceTickBySlot: Map<number, number>;
+};
+
 type MechanicEvent = {
   event: MechanicEventKind;
   sourceId?: string;
@@ -180,6 +195,7 @@ let projectileIndex = 0;
 let effectIndex = 0;
 let combatTextIndex = 0;
 let traceIndex = 0;
+let aiTraceIndex = 0;
 let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
 let melees: RuntimeMelee[] = [];
@@ -187,11 +203,14 @@ let effects: RuntimeEffect[] = [];
 let combatTexts: RuntimeCombatText[] = [];
 let mechanicEvents: MechanicEvent[] = [];
 let mechanicTraces: MechanicTraceSnapshot[] = [];
+let aiTraces: AiTraceSnapshot[] = [];
 let processingMechanics = false;
+let paused = false;
 
 const AIM_ASSIST_CONE_DEGREES = 70;
 const MAX_MECHANIC_EVENTS_PER_TICK = 48;
 const MAX_MECHANIC_TRACES = 64;
+const MAX_AI_TRACES = 64;
 const DIRECT_SLOW_STATUS_ID = '__direct_slow';
 
 port.addEventListener('message', (event) => {
@@ -245,6 +264,13 @@ function handleCommand(command: EngineCommand): void {
         }
       }
       return;
+    case 'set-paused':
+      paused = command.paused;
+      return;
+    case 'clear-trace':
+      mechanicTraces = [];
+      aiTraces = [];
+      return;
     case 'stop':
       stop();
       return;
@@ -261,6 +287,7 @@ function initialize(nextRuleset: Ruleset): void {
   effectIndex = 0;
   combatTextIndex = 0;
   traceIndex = 0;
+  aiTraceIndex = 0;
   players = new Map();
   projectiles = [];
   melees = [];
@@ -268,7 +295,9 @@ function initialize(nextRuleset: Ruleset): void {
   combatTexts = [];
   mechanicEvents = [];
   mechanicTraces = [];
+  aiTraces = [];
   processingMechanics = false;
+  paused = false;
 
   addArenaWalls(nextRuleset);
   for (const obstacle of nextRuleset.obstacles) {
@@ -305,6 +334,9 @@ function addPlayer(spawn: PlayerSpawn): void {
 
   const spawnSlot = spawnIndex++;
   const point = spawn.spawnPoint ?? spawnPointForIndex(spawnSlot);
+  const role = spawn.role ?? 'player';
+  const team = spawn.team ?? spawn.npc?.team ?? (role === 'player' ? spawn.playerId : 'hostile');
+  const maxHp = Math.max(1, Math.round(ruleset.player.maxHp * (spawn.npc?.hpMultiplier ?? 1)));
   const body = world.createRigidBody(
     RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(point.x, point.y)
@@ -325,11 +357,25 @@ function addPlayer(spawn: PlayerSpawn): void {
     body,
     input: neutralInput(),
     spawnSlot,
-    hp: ruleset.player.maxHp,
+    hp: maxHp,
+    maxHp,
     alive: true,
     respawnTick: 0,
     cooldownUntil: new Map(),
     facing: { x: 1, y: 0 },
+    team,
+    npc: spawn.npc
+      ? {
+          config: {
+            ...spawn.npc,
+            team,
+          },
+          wanderSeed: stableSeed(spawn.playerId),
+          lastNoTargetTraceTick: -9999,
+          lastMoveTraceTick: -9999,
+          lastBlockedTraceTickBySlot: new Map(),
+        }
+      : undefined,
     lastUsedSlot: 0,
     lastHandledInputSequence: 0,
     statuses: new Map(),
@@ -351,6 +397,11 @@ function step(): void {
     return;
   }
 
+  if (paused) {
+    port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
+    return;
+  }
+
   for (const player of players.values()) {
     if (!player.alive && player.respawnTick <= tick) {
       respawnPlayer(player);
@@ -365,6 +416,7 @@ function step(): void {
     clearExpiredStatuses(player);
     tickStatusPeriodics(player);
     regenerateResources(player);
+    updateNpcInput(player);
 
     const hasNewInputEvents = player.input.sequence !== player.lastHandledInputSequence;
     const slotPresses = hasNewInputEvents ? player.input.slotPresses : [];
@@ -374,7 +426,10 @@ function step(): void {
     for (const slot of slotPresses) {
       handleSlotPress(player, slot);
     }
-    const speedMultiplier = (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) * activeMovementMultiplier(player);
+    const speedMultiplier =
+      (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) *
+      activeMovementMultiplier(player) *
+      (player.npc?.config.speedMultiplier ?? 1);
     updateMovementAndFacing(player, speedMultiplier);
     updateChargeAim(player);
     for (const slot of castSlots) {
@@ -399,7 +454,7 @@ function step(): void {
 }
 
 function castSlot(player: RuntimePlayer, slot: number): void {
-  const ability = abilityForSlot(slot);
+  const ability = abilityForPlayerSlot(player, slot);
   if (!ability || (player.cooldownUntil.get(ability.id) ?? 0) > tick) {
     return;
   }
@@ -413,7 +468,7 @@ function castSlot(player: RuntimePlayer, slot: number): void {
 }
 
 function handleSlotPress(player: RuntimePlayer, slot: number): void {
-  const ability = abilityForSlot(slot);
+  const ability = abilityForPlayerSlot(player, slot);
   if (!ability) {
     return;
   }
@@ -468,13 +523,250 @@ function spawnAbility(player: RuntimePlayer, ability: Ability, aim: Vec2): void 
   }
 }
 
-function abilityForSlot(slot: number): Ability | undefined {
+function abilityForPlayerSlot(player: RuntimePlayer, slot: number): Ability | undefined {
   const activeRuleset = ruleset;
-  if (!activeRuleset || !Number.isInteger(slot) || slot < 0 || slot >= activeRuleset.loadout.abilityIds.length) {
+  const abilityIds = abilityIdsForPlayer(player);
+  if (!activeRuleset || !Number.isInteger(slot) || slot < 0 || slot >= abilityIds.length) {
     return undefined;
   }
-  const abilityId = activeRuleset.loadout.abilityIds[slot];
+  const abilityId = abilityIds[slot];
   return activeRuleset.abilities.find((candidate) => candidate.id === abilityId);
+}
+
+function abilityIdsForPlayer(player: RuntimePlayer): string[] {
+  return player.npc?.config.loadoutAbilityIds ?? ruleset?.loadout.abilityIds ?? [];
+}
+
+function updateNpcInput(player: RuntimePlayer): void {
+  const npc = player.npc;
+  if (!npc || !ruleset) {
+    return;
+  }
+  const behavior = npc.config.behavior;
+  const baseInput = neutralInput();
+  baseInput.sequence = player.input.sequence + 1;
+  if (behavior.mode === 'idle') {
+    player.input = baseInput;
+    return;
+  }
+
+  const target = findNpcTarget(player);
+  if (target?.spawn.playerId !== npc.targetId) {
+    npc.targetId = target?.spawn.playerId;
+    if (target) {
+      addAiTrace('target', 'acquired', player, {
+        targetId: target.spawn.playerId,
+        targetName: target.spawn.displayName,
+        behavior: behavior.mode,
+      });
+    }
+  }
+  if (!target) {
+    if (tick - npc.lastNoTargetTraceTick >= Math.max(30, ruleset.tickRate)) {
+      npc.lastNoTargetTraceTick = tick;
+      addAiTrace('target', 'none', player, {
+        behavior: behavior.mode,
+        reason: 'no enemy in aggro range',
+      });
+    }
+    const wander = behavior.mode === 'wander' ? npcWanderMove(player) : undefined;
+    if (wander) {
+      baseInput.moveX = wander.x;
+      baseInput.moveY = wander.y;
+      baseInput.aimDx = wander.x;
+      baseInput.aimDy = wander.y;
+      traceNpcMove(player, undefined, behavior.mode);
+    }
+    player.input = baseInput;
+    return;
+  }
+
+  const origin = player.body.translation();
+  const targetPos = target.body.translation();
+  const dx = targetPos.x - origin.x;
+  const dy = targetPos.y - origin.y;
+  const distance = Math.hypot(dx, dy);
+  const aim = normalized(dx, dy) ?? player.facing;
+  const move = npcMoveForBehavior(player, target, distance, aim);
+  baseInput.aimDx = aim.x;
+  baseInput.aimDy = aim.y;
+  if (move) {
+    baseInput.moveX = move.x;
+    baseInput.moveY = move.y;
+    traceNpcMove(player, target, behavior.mode);
+  }
+
+  const cast = chooseNpcCast(player, target, distance);
+  if (cast) {
+    if (cast.ability.charge) {
+      if (!player.charging) {
+        baseInput.slotPresses = [cast.slot];
+        addAiTrace('cast', 'cast', player, {
+          targetId: target.spawn.playerId,
+          targetName: target.spawn.displayName,
+          behavior: behavior.mode,
+          slot: cast.slot,
+          abilityId: cast.ability.id,
+        });
+      }
+    } else {
+      baseInput.castSlots = [cast.slot];
+      addAiTrace('cast', 'cast', player, {
+        targetId: target.spawn.playerId,
+        targetName: target.spawn.displayName,
+        behavior: behavior.mode,
+        slot: cast.slot,
+        abilityId: cast.ability.id,
+      });
+    }
+  }
+  player.input = baseInput;
+}
+
+function findNpcTarget(actor: RuntimePlayer): RuntimePlayer | undefined {
+  const aggroRange = actor.npc?.config.behavior.aggroRange ?? 0;
+  if (aggroRange <= 0) {
+    return undefined;
+  }
+  const origin = actor.body.translation();
+  let best: { player: RuntimePlayer; distance: number } | undefined;
+  for (const candidate of players.values()) {
+    if (candidate.spawn.playerId === actor.spawn.playerId || !candidate.alive || sameTeam(actor, candidate)) {
+      continue;
+    }
+    const pos = candidate.body.translation();
+    const distance = Math.hypot(pos.x - origin.x, pos.y - origin.y);
+    if (distance > aggroRange) {
+      continue;
+    }
+    if (!best || distance < best.distance || (distance === best.distance && candidate.spawn.playerId < best.player.spawn.playerId)) {
+      best = { player: candidate, distance };
+    }
+  }
+  return best?.player;
+}
+
+function npcMoveForBehavior(player: RuntimePlayer, target: RuntimePlayer, distance: number, aim: Vec2): Vec2 | undefined {
+  const behavior = player.npc?.config.behavior;
+  if (!behavior) {
+    return undefined;
+  }
+  if (behavior.mode === 'seek') {
+    return distance > Math.max(0.5, behavior.preferredRange * 0.8) ? aim : undefined;
+  }
+  if (behavior.mode === 'kite') {
+    if (distance < Math.max(0.5, behavior.preferredRange * 0.85)) {
+      return { x: -aim.x, y: -aim.y };
+    }
+    if (distance > behavior.preferredRange * 1.18) {
+      return aim;
+    }
+    return undefined;
+  }
+  if (behavior.mode === 'wander') {
+    return npcWanderMove(player);
+  }
+  return undefined;
+}
+
+function npcWanderMove(player: RuntimePlayer): Vec2 | undefined {
+  const npc = player.npc;
+  const radius = npc?.config.behavior.wanderRadius ?? 0;
+  if (!npc || radius <= 0) {
+    return undefined;
+  }
+  const pos = player.body.translation();
+  const anchor = player.spawn.spawnPoint ?? spawnPointForIndex(player.spawnSlot);
+  const homeDx = anchor.x - pos.x;
+  const homeDy = anchor.y - pos.y;
+  const homeDistance = Math.hypot(homeDx, homeDy);
+  if (homeDistance > radius) {
+    return normalized(homeDx, homeDy);
+  }
+  const phase = (tick + npc.wanderSeed) / 32;
+  return normalized(Math.cos(phase), Math.sin(phase * 0.73 + npc.wanderSeed * 0.01));
+}
+
+function chooseNpcCast(player: RuntimePlayer, target: RuntimePlayer, distance: number): { slot: number; ability: Ability } | undefined {
+  const npc = player.npc;
+  if (!npc) {
+    return undefined;
+  }
+  for (const slot of npc.config.casting.slots) {
+    const ability = abilityForPlayerSlot(player, slot);
+    if (!ability) {
+      traceNpcBlockedCast(player, slot, undefined, 'empty slot');
+      continue;
+    }
+    if ((player.cooldownUntil.get(ability.id) ?? 0) > tick || (player.charging && player.charging.slot !== slot)) {
+      traceNpcBlockedCast(player, slot, ability.id, 'cooldown');
+      continue;
+    }
+    if (distance < npc.config.casting.minRange || distance > npc.config.casting.maxRange) {
+      traceNpcBlockedCast(player, slot, ability.id, 'range');
+      continue;
+    }
+    if (ability.shape === 'melee' && distance > ability.range + (ruleset?.player.radius ?? 0.5) + 0.35) {
+      traceNpcBlockedCast(player, slot, ability.id, 'melee range');
+      continue;
+    }
+    if (ability.charge && player.charging) {
+      continue;
+    }
+    return { slot, ability };
+  }
+  return undefined;
+}
+
+function traceNpcMove(player: RuntimePlayer, target: RuntimePlayer | undefined, behavior: RuntimeNpcConfig['behavior']['mode']): void {
+  const npc = player.npc;
+  if (!npc || !ruleset || tick - npc.lastMoveTraceTick < Math.max(20, ruleset.tickRate)) {
+    return;
+  }
+  npc.lastMoveTraceTick = tick;
+  addAiTrace('move', 'moved', player, {
+    targetId: target?.spawn.playerId,
+    targetName: target?.spawn.displayName,
+    behavior,
+  });
+}
+
+function traceNpcBlockedCast(player: RuntimePlayer, slot: number, abilityId: string | undefined, reason: string): void {
+  const npc = player.npc;
+  if (!npc || !ruleset) {
+    return;
+  }
+  const last = npc.lastBlockedTraceTickBySlot.get(slot) ?? -9999;
+  if (tick - last < Math.max(18, ruleset.tickRate)) {
+    return;
+  }
+  npc.lastBlockedTraceTickBySlot.set(slot, tick);
+  addAiTrace('blocked', 'blocked', player, {
+    behavior: npc.config.behavior.mode,
+    slot,
+    abilityId,
+    reason,
+  });
+}
+
+function addAiTrace(
+  kind: AiTraceKind,
+  result: AiTraceSnapshot['result'],
+  actor: RuntimePlayer,
+  extra: Partial<Omit<AiTraceSnapshot, 'traceId' | 'tick' | 'kind' | 'result' | 'actorId' | 'actorName'>> = {},
+): void {
+  aiTraces.push({
+    traceId: `ai-${++aiTraceIndex}`,
+    tick,
+    kind,
+    actorId: actor.spawn.playerId,
+    actorName: actor.spawn.displayName,
+    result,
+    ...extra,
+  });
+  if (aiTraces.length > MAX_AI_TRACES) {
+    aiTraces = aiTraces.slice(-MAX_AI_TRACES);
+  }
 }
 
 function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility, aim: Vec2): void {
@@ -576,7 +868,7 @@ function stepMelees(): void {
     if (active && owner?.alive) {
       const ownerPos = owner.body.translation();
       for (const target of players.values()) {
-        if (target.spawn.playerId === melee.ownerId || !target.alive || melee.hitPlayers.has(target.spawn.playerId)) {
+        if (target.spawn.playerId === melee.ownerId || !target.alive || melee.hitPlayers.has(target.spawn.playerId) || sameTeam(owner, target)) {
           continue;
         }
         const targetPos = target.body.translation();
@@ -622,6 +914,9 @@ function damagePlayer(player: RuntimePlayer, damage: number, context: DamageCont
   if (!ruleset || !player.alive) {
     return;
   }
+  if (context.source && sameTeam(context.source, player)) {
+    return;
+  }
   const pos = player.body.translation();
   const finalDamage = Math.max(0, damage * damageDealtMultiplier(context.source) * damageTakenMultiplier(player));
   if (finalDamage <= 0) {
@@ -639,7 +934,7 @@ function damagePlayer(player: RuntimePlayer, damage: number, context: DamageCont
     direction: context.direction,
   });
   if (player.hp > 0) {
-    if (player.hp / ruleset.player.maxHp <= 0.35) {
+    if (player.hp / player.maxHp <= 0.35) {
       emitMechanicEvent({
         event: 'onLowHp',
         sourceId: context.source?.spawn.playerId,
@@ -675,7 +970,7 @@ function respawnPlayer(player: RuntimePlayer): void {
     return;
   }
   const point = player.spawn.spawnPoint ?? spawnPointForIndex(player.spawnSlot);
-  player.hp = ruleset.player.maxHp;
+  player.hp = player.maxHp;
   player.alive = true;
   player.respawnTick = 0;
   player.statuses.clear();
@@ -784,7 +1079,7 @@ function healPlayer(player: RuntimePlayer, amount: number): void {
     return;
   }
   const before = player.hp;
-  player.hp = Math.min(ruleset.player.maxHp, player.hp + amount);
+  player.hp = Math.min(player.maxHp, player.hp + amount);
   const healed = player.hp - before;
   if (healed <= 0) {
     return;
@@ -1044,7 +1339,7 @@ function conditionPasses(condition: MechanicCondition, event: MechanicEvent, sou
     return !player.statuses.has(condition.statusId);
   }
   if (condition.kind === 'hpBelow') {
-    return ruleset ? player.hp / ruleset.player.maxHp <= condition.ratio : false;
+    return player.hp / player.maxHp <= condition.ratio;
   }
   if (condition.kind === 'resourceAtLeast') {
     return (player.resources.get(condition.resourceId)?.value ?? 0) >= condition.amount;
@@ -1170,8 +1465,9 @@ function movePlayerSafely(player: RuntimePlayer, direction: Vec2, distance: numb
 
 function findProjectileHit(projectile: RuntimeProjectile, from: Vec2, to: Vec2): RuntimePlayer | undefined {
   const playerRadius = ruleset?.player.radius ?? 0.5;
+  const owner = players.get(projectile.ownerId);
   for (const player of players.values()) {
-    if (player.spawn.playerId === projectile.ownerId || !player.alive) {
+    if (player.spawn.playerId === projectile.ownerId || !player.alive || sameTeam(owner, player)) {
       continue;
     }
     const pos = player.body.translation();
@@ -1374,10 +1670,12 @@ function readSnapshot(): EngineSnapshot {
     effects: effects.map(toEffectSnapshot),
     combatTexts: combatTexts.map(toCombatTextSnapshot),
     mechanicTraces,
+    aiTraces,
     players: Array.from(players.values()).map((player) => {
       const pos = player.body.translation();
       const vel = player.body.linvel();
       const aim = aimForPlayer(player);
+      const abilityIds = abilityIdsForPlayer(player);
       return {
         playerId: player.spawn.playerId,
         displayName: player.spawn.displayName,
@@ -1387,16 +1685,17 @@ function readSnapshot(): EngineSnapshot {
         vy: vel.y,
         hue: player.spawn.hue,
         hp: player.hp,
-        maxHp: activeRuleset.player.maxHp,
+        maxHp: player.maxHp,
         alive: player.alive,
         respawnTick: player.respawnTick,
-        slotCooldownTicks: activeRuleset.loadout.abilityIds.map((abilityId) => Math.max(0, (player.cooldownUntil.get(abilityId) ?? 0) - tick)),
+        slotCooldownTicks: abilityIds.map((abilityId) => Math.max(0, (player.cooldownUntil.get(abilityId) ?? 0) - tick)),
         lastUsedSlot: player.lastUsedSlot,
         aimDx: aim.x,
         aimDy: aim.y,
         facingDx: player.facing.x,
         facingDy: player.facing.y,
         role: player.spawn.role ?? 'player',
+        team: player.team,
         status: toStatusSnapshot(player),
         statuses: toStatusSnapshots(player),
         resources: toResourceSnapshots(player),
@@ -1525,7 +1824,9 @@ function stop(): void {
   combatTexts = [];
   mechanicEvents = [];
   mechanicTraces = [];
+  aiTraces = [];
   processingMechanics = false;
+  paused = false;
 }
 
 function neutralInput(): PlayerInput {
@@ -1572,7 +1873,7 @@ function findAimAssistTarget(owner: RuntimePlayer, ability: Ability, aim: Vec2):
   const minDot = Math.cos((AIM_ASSIST_CONE_DEGREES * Math.PI) / 360);
   let best: { player: RuntimePlayer; distance: number } | undefined;
   for (const candidate of players.values()) {
-    if (candidate.spawn.playerId === owner.spawn.playerId || !candidate.alive) {
+    if (candidate.spawn.playerId === owner.spawn.playerId || !candidate.alive || sameTeam(owner, candidate)) {
       continue;
     }
     const pos = candidate.body.translation();
@@ -1610,6 +1911,18 @@ function aimForPlayer(player: RuntimePlayer): Vec2 {
     return move;
   }
   return player.facing;
+}
+
+function sameTeam(a: RuntimePlayer | undefined, b: RuntimePlayer | undefined): boolean {
+  return Boolean(a && b && a.team.length > 0 && a.team === b.team);
+}
+
+function stableSeed(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash % 10_000;
 }
 
 function rotate(vector: Vec2, radians: number): Vec2 {

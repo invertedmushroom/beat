@@ -405,6 +405,48 @@ h2 {
   min-width: 68px;
 }
 
+.lab-controls {
+  position: absolute;
+  z-index: 5;
+  top: max(92px, calc(env(safe-area-inset-top) + 92px));
+  right: max(14px, env(safe-area-inset-right));
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100% - 28px));
+  padding: 10px;
+  color: #f5f3ed;
+  border: 1px solid #34332f;
+  border-radius: 6px;
+  background: rgba(20, 20, 20, 0.82);
+  font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.lab-controls__title {
+  color: #ffe66d;
+  font-weight: 760;
+}
+
+.lab-controls__row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.lab-select,
+.lab-control-button {
+  min-width: 0;
+  min-height: 34px;
+}
+
+.lab-select {
+  width: 100%;
+  color: #f5f3ed;
+  border: 1px solid #3b3a35;
+  border-radius: 6px;
+  background: #1d1d1a;
+  padding: 0 8px;
+}
+
 .skill-bar {
   position: absolute;
   z-index: 5;
@@ -589,6 +631,16 @@ h2 {
   color: #ff9a82;
 }
 
+.trace-line--ai-target,
+.trace-line--ai-move,
+.trace-line--ai-cast {
+  color: #62d2ff;
+}
+
+.trace-line--ai-blocked {
+  color: #ff9a82;
+}
+
 .touch-controls {
   display: none;
 }
@@ -697,6 +749,17 @@ h2 {
 
   .arena-actions {
     gap: 6px;
+  }
+
+  .lab-controls {
+    top: auto;
+    right: max(14px, env(safe-area-inset-right));
+    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 270px);
+    width: min(330px, calc(100% - 28px));
+  }
+
+  .lab-controls__row {
+    grid-template-columns: 1fr;
   }
 
   .arena-action-button {

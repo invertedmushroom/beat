@@ -156,12 +156,12 @@ export class CanvasRenderer {
         this.drawChargeAura(x, y, radius, player.charging.ratio, player.charging.abilityId);
       }
       this.ctx.beginPath();
-      this.ctx.fillStyle = player.alive ? `hsl(${player.hue} ${player.role === 'dummy' ? '52%' : '76%'} ${player.role === 'dummy' ? '48%' : '58%'})` : '#55524a';
+      this.ctx.fillStyle = player.alive ? actorFill(player.hue, player.role) : '#55524a';
       this.ctx.arc(x, y, radius, 0, Math.PI * 2);
       this.ctx.fill();
       this.ctx.lineWidth = player.playerId === this.localPlayerId ? 3 : 1.5;
-      this.ctx.strokeStyle = player.playerId === this.localPlayerId ? '#ffe66d' : player.role === 'dummy' ? '#ffe66d' : player.alive ? '#0a0a0a' : '#252521';
-      if (player.role === 'dummy') {
+      this.ctx.strokeStyle = player.playerId === this.localPlayerId ? '#ffe66d' : actorStroke(player.role, player.alive);
+      if (player.role === 'dummy' || player.role === 'npc') {
         this.ctx.setLineDash([4, 3]);
       }
       this.ctx.stroke();
@@ -417,4 +417,27 @@ function normalized(x: number, y: number): { x: number; y: number } | undefined 
 
 function lerp(min: number, max: number, ratio: number): number {
   return min + (max - min) * Math.max(0, Math.min(1, ratio));
+}
+
+function actorFill(hue: number, role: EngineSnapshot['players'][number]['role']): string {
+  if (role === 'dummy') {
+    return `hsl(${hue} 52% 48%)`;
+  }
+  if (role === 'npc') {
+    return `hsl(${hue} 72% 50%)`;
+  }
+  return `hsl(${hue} 76% 58%)`;
+}
+
+function actorStroke(role: EngineSnapshot['players'][number]['role'], alive: boolean): string {
+  if (!alive) {
+    return '#252521';
+  }
+  if (role === 'dummy') {
+    return '#ffe66d';
+  }
+  if (role === 'npc') {
+    return '#ff6b4a';
+  }
+  return '#0a0a0a';
 }
