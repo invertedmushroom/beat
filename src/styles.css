@@ -320,6 +320,16 @@ h2 {
   cursor: pointer;
 }
 
+.room-row:disabled {
+  opacity: 0.62;
+  border-color: #34332f;
+  cursor: not-allowed;
+}
+
+.room-row:disabled:hover {
+  border-color: #34332f;
+}
+
 .room-row__name {
   overflow: hidden;
   font-weight: 720;

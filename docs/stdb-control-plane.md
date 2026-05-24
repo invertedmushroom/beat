@@ -90,6 +90,7 @@ Those env vars only configure the directory and signaling mailbox. They do not p
 ## Rules
 
 - The host identity owns room metadata.
+- `request_join_hosted_room` rejects new join attempts when the room is already full.
 - Signal reducers verify that the sender identity owns the source peer id, or owns the host peer id for the room.
 - Room listings include `ruleset_hash` and `content_hash` so clients can decide whether to trust the host before opening a peer connection.
 - STDB does not store live snapshots or full rules JSON; WebRTC data channels carry host rules, inputs, and snapshots.

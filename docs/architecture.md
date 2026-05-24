@@ -7,7 +7,7 @@
 - `src/app.ts` is the main application controller: it manages menu state, room modes, rule editing, engine startup, and networking.
 - `src/engine/worker.ts` runs the authoritative simulation in a Web Worker.
 - `src/net/webrtc.ts` manages host/client WebRTC sessions and snapshot/input messaging.
-- `src/rooms/spacetimeDirectory.ts` and `src/rooms/localDirectory.ts` provide room discovery and signaling backends.
+- `src/rooms/spacetimeDirectory.ts`, `src/rooms/httpDirectory.ts`, and `src/rooms/localDirectory.ts` provide room discovery and signaling backends.
 - `src/engine/rulesValidation.ts` validates the JSON rule schema before starting a game.
 
 ## Main app modes
@@ -40,13 +40,14 @@
 ### Directories
 
 - `src/rooms/localDirectory.ts` is the browser-local directory and signaling transport using `localStorage`, `BroadcastChannel`, and periodic pruning.
+- `src/rooms/httpDirectory.ts` is the HTTP/SSE-backed directory and signaling transport for remote edge deployments.
 - `src/rooms/spacetimeDirectory.ts` connects to SpacetimeDB and uses generated reducer bindings for hosted-room advertisement, join requests, and signals.
 
 ### WebRTC
 
 - `src/net/webrtc.ts` has `HostSession` and `ClientSession`.
 - The host uses STDB/local directory signals to exchange offers/answers/ICE.
-- Once established, snapshots and input are sent over reliable data channels.
+- Once established, the host uses separate data channels: reliable control, partially reliable input, and best-effort snapshot traffic.
 - The host remains authoritative for simulation and broadcasts snapshots to clients.
 
 ## Engine runtime

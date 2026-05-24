@@ -20,6 +20,49 @@ The app validates these top-level rule fields:
 - `mapBundleId`: ID-format string, 1-96 chars.
 - `contentHash`: string, 1-128 chars.
 
+## Match
+
+`match` is a required top-level rules section for objective-driven rooms.
+
+- `teams`: a non-empty list of score teams.
+- `durationTicks`: match duration in ticks, `300..36000`.
+- `scoreLimit`: integer `1..1000`.
+- `friendlyFire`: boolean, defaults to `true`.
+- `respawnMode`: currently only `timed`.
+
+### Teams
+
+Each team in `match.teams[]` includes:
+
+- `id`: ID-format string.
+- `name`: friendly team name.
+- `color`: `#rrggbb`.
+
+### Objectives
+
+`objectives` is a required top-level array that defines level objectives.
+Each objective is currently a `relicPush` type.
+
+- `id`: objective identifier.
+- `name`: objective name.
+- `kind`: currently `relicPush`.
+- `spawn`: objective spawn point with `x` and `y`.
+- `body`: physics body spec for the objective object.
+- `scoreZones`: list of team scoring zones.
+- `scoreCooldownTicks`: cooldown after a score.
+- `resetOnScore`: whether the objective resets to spawn after scoring.
+
+### Score zones
+
+Each `objective.scoreZones[]` entry includes:
+
+- `id`: zone identifier.
+- `team`: team ID that scores here.
+- `x`, `y`: zone center.
+- `radius`: zone radius.
+- `points`: score amount.
+- `color`: optional `#rrggbb`.
+
 ### Arena
 
 - `arena.width`: `12..120`.
@@ -173,7 +216,7 @@ The default preset defines:
 Each `mechanics.triggers[]` entry supports:
 
 - `id`, optional `name`.
-- `event`: `onCast`, `onHit`, `onDamageTaken`, `onStatusApplied`, `onStatusExpired`, `onKill`, `onLowHp`.
+- `event`: `onCast`, `onHit`, `onDamageTaken`, `onStatusApplied`, `onStatusExpired`, `onKill`, `onLowHp`, `onObjectiveEnter`, `onObjectiveTick`, or `onScore`.
 - optional `conditions`.
 - required `actions`.
 
@@ -184,6 +227,8 @@ Supported conditions:
 - `resourceAtLeast`
 - `slotUsed`
 - `abilityTag`
+- `objectiveId`
+- `scoringTeam`
 
 Supported actions:
 
@@ -235,13 +280,17 @@ Each `npcs.archetypes[]` entry supports:
 
 ## Default preset behavior
 
-The shipped default ruleset uses:
+The shipped default ruleset now uses:
 
+- `id: beat-arena-v10`
+- `name: Beat Arena Relic Push V10`
+- a `match` definition with two teams, a score limit, friendly fire, and timed respawn mode.
+- a relic push objective with a physical relic body and team score zones.
 - 4 player slots: `pulse-bolt`, `arc-slash`, `seeker-spark`, `ion-lance`.
 - 6 defined abilities including physics and charge abilities.
 - 3 statuses: `shocked`, `chilled`, `overheated`.
 - 2 resources: `shield`, `heat`.
-- triggers that make `shield` and `heat` meaningful.
+- triggers that make `shield` and `heat` meaningful, plus a score-related objective trigger.
 
 ## Notes
 

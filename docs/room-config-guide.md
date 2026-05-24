@@ -303,7 +303,58 @@ This spec is shared by `spawnBody`, `snare.anchor = body`, and `dragBody`.
 | `start` | Starting value | Number `0..max` |
 | `regenPerTick` | Passive regen or decay | Number `-100..100` |
 
+## Match and objectives
+
+These are new top-level rule sections for objective-driven rooms.
+
+### `match`
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `teams` | Which score teams are in the match | At least one team entry |
+| `durationTicks` | Match duration | Integer `300..36000` |
+| `scoreLimit` | Winning score | Integer `1..1000` |
+| `friendlyFire` | Friendly fire enabled | Boolean |
+| `respawnMode` | Respawn behavior after death | `timed` |
+
+Each team in `match.teams[]` includes:
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `id` | Team identifier | 1-96 chars, ID format |
+| `name` | Team display name | 1-36 chars |
+| `color` | Team color | `#rrggbb` |
+
+### `objectives[]`
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `id` | Objective identifier | 1-96 chars, ID format |
+| `name` | Objective name | 1-36 chars |
+| `kind` | Objective type | `relicPush` |
+| `spawn` | Objective spawn point | `x` and `y` numbers |
+| `body` | Objective physics body | Physics body spec |
+| `scoreZones` | Team scoring zones | See below |
+| `scoreCooldownTicks` | Score cooldown | Integer `1..36000` |
+| `resetOnScore` | Reset objective after score | Boolean |
+
+#### `scoreZones[]`
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `id` | Zone identifier | 1-96 chars, ID format |
+| `team` | Team that scores in this zone | Must match a team ID |
+| `x` | Zone center X | Number `-200..200` |
+| `y` | Zone center Y | Number `-200..200` |
+| `radius` | Zone radius | Number `0.1..100` |
+| `points` | Score value | Number `1..1000` |
+| `color` | Optional zone color | `#rrggbb` |
+
 ## `mechanics.triggers[]`
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `id` | Trigger identifier | 1-96 chars, ID format |
 
 | Field | Purpose | Accepted values |
 | --- | --- | --- |
@@ -395,18 +446,20 @@ These values exist at runtime, but you do not configure them through the Rules J
 
 The shipped default preset currently uses:
 
-- `id: beat-arena-v9`
-- `name: Beat Arena Physics Lab V9`
+- `id: beat-arena-v10`
+- `name: Beat Arena Relic Push V10`
 - `tickRate: 30`
 - `maxPlayers: 6`
 - `mapBundleId: local-grid-arena`
-- `contentHash: local-content-v9`
+- `contentHash: local-content-v10`
 - Arena size `38 x 24`
 - 4 static obstacles
 - 6 defined abilities
 - 4 slotted player abilities
 - 3 statuses
 - 2 resources
-- 6 triggers
+- 7 triggers
 - 3 NPC archetypes
 - 1 lab spawn
+- objective-driven relic push match config
+- score zones for two teams

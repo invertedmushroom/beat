@@ -23,9 +23,10 @@ Main-thread commands can mutate worker state between timer ticks. The timed tick
 3. consume input events, update movement/facing, and process charge press/release or auto-release behavior.
 4. advance Rapier physics with `world.step()`.
 5. enforce active constraint corrections after the physics step.
-6. step projectiles and melees, which is where damage, healing, effect application, and trigger emission happen.
-7. prune expired constraints, physics bodies, transient effects, and combat text.
-8. increment `tick` and emit the snapshot for the main thread.
+6. step objectives and objective scoring logic.
+7. step projectiles and melees, which is where damage, healing, effect application, and trigger emission happen.
+8. prune expired constraints, physics bodies, transient effects, and combat text.
+9. increment `tick` and emit the snapshot for the main thread.
 
 ## Projectiles
 
@@ -106,6 +107,18 @@ Statuses are runtime objects with:
 
 Resources are live runtime values.
 
+## Objectives and match state
+
+Objective-driven rooms use `ruleset.match` and `ruleset.objectives`.
+The worker creates objective bodies from objective definitions, tracks active objective zones, and emits objective events during the tick loop.
+
+- `resetObjectives()` rebuilds objective state and can reset scores when requested.
+- `stepObjectives()` runs objective-specific logic each tick.
+- `onObjectiveEnter`, `onObjectiveTick`, and `onScore` events are emitted as objective state changes.
+- scoring logic honors `objective.scoreCooldownTicks` and `resetOnScore`.
+
+This feature is currently implemented for `relicPush` objectives.
+
 - `initialResources()` creates a resource map from `ruleset.mechanics.resources`.
 - `regenerateResources()` applies `regenPerTick` each tick.
 - `modifyResource()` safely increments or decrements resource values, clamps to `[0,max]`, and emits UI feedback.
@@ -146,5 +159,6 @@ The worker publishes `EngineSnapshot` objects containing:
 - players with position, HP, status, resources, and charging info
 - projectiles, physics bodies, constraints
 - effects, combat texts, mechanic traces, and AI traces
+- match state and objective snapshots
 
-Snapshots are serialized by `toProjectileSnapshot()`, `toPhysicsBodySnapshot()`, `toResourceSnapshots()`, and related helpers.
+Snapshots are serialized by `toProjectileSnapshot()`, `toPhysicsBodySnapshot()`, `toResourceSnapshots()`, `toObjectiveSnapshot()`, and related helpers.

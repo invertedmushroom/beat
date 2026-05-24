@@ -48,17 +48,23 @@ The host:
 2. sends periodic heartbeat updates.
 3. listens for `RoomSignal` events addressed to the host peer ID.
 4. accepts `offer` signals, creates an RTCPeerConnection, and returns an `answer`.
-5. opens a data channel for each client.
+5. opens three data channels for each client:
+   - a control channel for `hello`, `welcome`, `ping`, `pong`, and session-level notices
+   - an input channel for client-to-host input messages (unordered, limited retransmit)
+   - a snapshot channel for host-to-client gameplay state (unordered, no retransmit)
+   - labels are `beat-control`, `beat-input`, `beat-snapshot`, with legacy support for `beat`
 6. on `hello`, assigns a player ID and adds the remote player to the engine.
+   - if room capacity has been reached, the host sends `notice: room is full` and immediately closes that peer session.
 7. on `input`, forwards the player input to `engine.submitInput()`.
-8. broadcasts `snapshot` messages to all open peer channels.
+8. broadcasts `snapshot` messages over each client's dedicated snapshot channel.
 
 Host to client messages are JSON-serialized and include:
 
 - `welcome` with assigned playerId, room info, and ruleset
-- `snapshot` updates
+- `snapshot` updates (a compact `NetworkSnapshot` payload omitting mechanic and AI traces)
 - `notice` text messages
 - `host-closed`
+- `pong` responses to client latency checks
 
 ### Client side
 
@@ -66,12 +72,13 @@ Host to client messages are JSON-serialized and include:
 The client:
 
 1. optionally records a join request via the directory when the backend supports it.
-2. creates an RTCPeerConnection and data channel.
+2. creates an RTCPeerConnection and three data channels (`beat-control`, `beat-input`, `beat-snapshot`).
 3. sends `offer` to the host through the directory.
 4. receives `answer` and ICE candidates through directory signals.
 5. on open channel, sends `hello` with display name.
 6. handles `welcome` and begins rendering snapshots.
 7. sends `input` messages to the host as the local player moves.
+8. if no host message arrives before the first snapshot timeout window, the client disconnects and reports a connection timeout.
 
 ## Signaling and STDB
 
@@ -86,6 +93,11 @@ It connects to a SpacetimeDB instance and performs:
 - accepted-join state via `acceptJoinHostedRoom`
 - signal persistence via `sendHostedRoomSignal`
 - live updates via subscriptions on `hostedRoom` and `hostedRoomSignal`
+
+Practical behavior note:
+
+- join requests are a ledger and admission check point, but there is no manual host approval UI yet.
+- in STDB mode, a new join request is rejected when the room is already at capacity.
 
 ### Hosted room schema
 
@@ -112,6 +124,7 @@ The host and client each subscribe to signals addressed to their peer ID.
 ### Room lifecycle
 
 The host periodically re-advertises the room to keep it alive.
+When player count reaches capacity, room status is advertised as `full` and new joins are rejected.
 If the host closes the room, the directory removes it and notifies subscribers.
 The STDB reducer `pruneHostedRooms` also removes stale rooms.
 
@@ -127,14 +140,22 @@ It stores rooms and signals in `localStorage`, broadcasts changes over `Broadcas
 Client-to-host:
 
 - `{ type: 'hello', displayName }`
-- `{ type: 'input', input }`
+- `{ type: 'input'; input, redundantInputs?: PlayerInput[] }`
+- `{ type: 'ping'; sentAtMs }`
 
 Host-to-client:
 
-- `{ type: 'welcome', playerId, room, ruleset }`
-- `{ type: 'snapshot', snapshot }`
-- `{ type: 'notice', message }`
+- `{ type: 'welcome'; playerId, room, ruleset }`
+- `{ type: 'snapshot'; snapshot }`
+- `{ type: 'notice'; message }`
 - `{ type: 'host-closed' }`
+- `{ type: 'pong'; sentAtMs, receivedAtMs }`
+
+Practical note:
+
+- The host accepts optional `redundantInputs` to help repair out-of-order or dropped client input sequences.
+- The `ping`/`pong` handshake is used for latency diagnostics and RTT measurement.
+- The network snapshot payload is intentionally compact and excludes trace arrays for smaller messages.
 
 ## Practical notes
 
