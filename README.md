@@ -27,6 +27,15 @@ For a quick multiplayer smoke test, open the app in two tabs:
 
 By default the directory uses `localStorage` and `BroadcastChannel`, so it is same-origin and same-browser. Copy `.env.example` to `.env.local` and set `VITE_DIRECTORY_DRIVER=spacetime` to use STDB directly.
 
+Using STDB changes room discovery and signaling only. Live gameplay still runs peer-to-peer over WebRTC data channels, so cross-network phone sessions can still fail during ICE negotiation on cellular, guest Wi-Fi, or other symmetric-NAT networks.
+
+For public or mobile-friendly hosting, configure a real ICE source as well as STDB:
+
+- set `VITE_ICE_SERVERS_URL` to a provider endpoint that returns a browser `iceServers` array
+- or set `VITE_TURN_URLS`, `VITE_TURN_USERNAME`, and `VITE_TURN_CREDENTIAL` directly
+
+Without TURN, the app is STUN-only and some phone-hosted or phone-joined sessions will time out while the peer connection stays at `ice checking`.
+
 ## Customizable Rules
 
 The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or reset the rules before starting a room. The initial rules surface includes:
@@ -74,6 +83,8 @@ Use `VITE_STDB_URI=https://maincloud.spacetimedb.com` and `VITE_STDB_DATABASE=be
 $env:VITE_STDB_URI="https://maincloud.spacetimedb.com"
 $env:VITE_STDB_DATABASE="beat-rooms"
 ```
+
+If you want public hosting to work across restrictive networks, also set either `VITE_ICE_SERVERS_URL` or explicit TURN env vars. STDB alone does not relay WebRTC traffic.
 The root `spacetimedb` npm package is pinned to `2.1.0` to match the installed `spacetime` CLI. Upgrade the CLI and both package versions together.
 
 ## Architecture
@@ -109,5 +120,7 @@ VITE_DIRECTORY_DRIVER=spacetime
 VITE_STDB_URI=https://maincloud.spacetimedb.com
 VITE_STDB_DATABASE=beat-rooms
 ```
+
+If you need phone-friendly public hosting, add `VITE_ICE_SERVERS_URL` or explicit TURN env vars to the deployment as well. Otherwise the GitHub Pages build is STUN-only.
 
 The STDB module is already published separately with `npm run stdb:publish:maincloud`; GitHub Pages only hosts the static PWA.

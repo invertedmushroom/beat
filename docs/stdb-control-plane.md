@@ -72,6 +72,8 @@ VITE_STDB_URI=https://maincloud.spacetimedb.com
 VITE_STDB_DATABASE=beat-rooms
 ```
 
+Those env vars only configure the directory and signaling mailbox. They do not provide WebRTC relay. For public/mobile-friendly hosting, also configure either `VITE_ICE_SERVERS_URL` or explicit TURN env vars so peers on restrictive networks can complete ICE.
+
 ## Optional HTTP/SSE Edge Contract
 
 `src/rooms/httpDirectory.ts` still supports this transport shape. An edge service can map each route directly to the reducers/tables above.
@@ -89,4 +91,5 @@ VITE_STDB_DATABASE=beat-rooms
 - Signal reducers verify that the sender identity owns the source peer id, or owns the host peer id for the room.
 - Room listings include `ruleset_hash` and `content_hash` so clients can decide whether to trust the host before opening a peer connection.
 - STDB does not store live snapshots or full rules JSON; WebRTC data channels carry host rules, inputs, and snapshots.
+- STDB carries SDP/ICE signaling only; it does not relay gameplay traffic. Network traversal still depends on the configured ICE servers.
 - Signaling payloads should never contain gameplay secrets. They are short-lived SDP/ICE messages and are pruned by `prune_hosted_rooms`.
