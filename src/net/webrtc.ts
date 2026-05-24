@@ -3,6 +3,7 @@ import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
 import type { RoomDirectory, RoomInfo, RoomSignal } from '../rooms/directory';
 import { createId } from '../utils/ids';
 import { decodeClientMessage, decodeHostMessage, encodeMessage } from './messages';
+import { RTC_CONFIG } from './rtcConfig';
 
 type LogListener = (message: string) => void;
 type SnapshotListener = (snapshot: EngineSnapshot) => void;
@@ -15,10 +16,6 @@ type PeerState = {
   sessionId: string;
   remoteDescriptionReady: boolean;
   pendingIce: RTCIceCandidateInit[];
-};
-
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 };
 
 export class HostSession {
