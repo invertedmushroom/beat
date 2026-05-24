@@ -18,6 +18,9 @@ export class BeatApp {
   private readonly directory = this.directoryRuntime.directory;
   private readonly peerId = createId('peer');
   private readonly handleFullscreenChange = () => this.syncFullscreenButton();
+  private readonly beforeUnloadHandler = () => {
+    this.hostSession?.destroy();
+  };
   private readonly renderer: CanvasRenderer;
   private readonly input: InputController;
   private readonly root: HTMLElement;
@@ -76,6 +79,7 @@ export class BeatApp {
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+    window.addEventListener('beforeunload', this.beforeUnloadHandler);
     this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
     void this.refreshRulesHash();
     this.syncFullscreenButton();
@@ -90,6 +94,7 @@ export class BeatApp {
     this.unsubscribeRooms?.();
     this.unsubscribeInput?.();
     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+    window.removeEventListener('beforeunload', this.beforeUnloadHandler);
     this.input.destroy();
     this.renderer.destroy();
     this.directory.destroy();
@@ -181,7 +186,7 @@ export class BeatApp {
       hostPeerId: this.peerId,
     });
     this.hostSession.onLog((message) => this.log(message));
-    this.hostSession.start();
+    await this.hostSession.start();
     this.hashLine.textContent = `rules ${shortHash(rulesetHash)} · content ${shortHash(this.ruleset.contentHash)}`;
     this.setStatus(`hosting: ${room.name}`);
     this.log(`room open: ${room.roomId}`);
@@ -236,6 +241,10 @@ export class BeatApp {
       displayName: this.displayName(),
     });
     this.clientSession.onLog((message) => this.log(message));
+    this.clientSession.onDisconnect(() => {
+      this.log('host disconnected');
+      this.stopActiveMode();
+    });
     this.clientSession.onWelcome((playerId, joinedRoom, ruleset) => {
       this.localPlayerId = playerId;
       this.ruleset = ruleset;

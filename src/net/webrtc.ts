@@ -39,8 +39,12 @@ export class HostSession {
     },
   ) {}
 
-  start(): void {
-    void Promise.resolve(this.options.directory.advertiseRoom(this.options.room)).catch((error: unknown) => this.log(`room advertise failed: ${readError(error)}`));
+  async start(): Promise<void> {
+    try {
+      await this.options.directory.advertiseRoom(this.options.room);
+    } catch (error: unknown) {
+      this.log(`room advertise failed: ${readError(error)}`);
+    }
     this.heartbeatHandle = window.setInterval(() => this.heartbeat(), 2_000);
     this.unsubscribeSignals = this.options.directory.subscribeSignals(this.options.hostPeerId, (signal) => {
       void this.handleSignal(signal);
@@ -265,6 +269,7 @@ export class ClientSession {
   private readonly snapshotListeners = new Set<SnapshotListener>();
   private readonly welcomeListeners = new Set<WelcomeListener>();
   private readonly logListeners = new Set<LogListener>();
+  private readonly disconnectListeners = new Set<() => void>();
   private localPlayerId?: string;
 
   constructor(
@@ -323,6 +328,11 @@ export class ClientSession {
     return () => this.logListeners.delete(listener);
   }
 
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => this.disconnectListeners.delete(listener);
+  }
+
   destroy(): void {
     this.unsubscribeSignals?.();
     this.channel?.close();
@@ -359,7 +369,7 @@ export class ClientSession {
   }
 
   private configureClientChannel(): void {
-    if (!this.channel) {
+    if (!this.channel || !this.connection) {
       return;
     }
     this.channel.onopen = () => {
@@ -367,7 +377,17 @@ export class ClientSession {
       this.log('data channel open');
     };
     this.channel.onerror = () => this.log('data channel error');
-    this.channel.onclose = () => this.log('data channel closed');
+    this.channel.onclose = () => {
+      this.log('data channel closed');
+      this.notifyDisconnect();
+    };
+    this.connection.onconnectionstatechange = () => {
+      const state = this.connection?.connectionState;
+      if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+        this.log(`connection ${state}`);
+        this.notifyDisconnect();
+      }
+    };
     this.channel.onmessage = (event: MessageEvent<string>) => {
       const message = decodeHostMessage(event.data);
       if (!message) {
@@ -408,6 +428,12 @@ export class ClientSession {
   private log(message: string): void {
     for (const listener of this.logListeners) {
       listener(message);
+    }
+  }
+
+  private notifyDisconnect(): void {
+    for (const listener of this.disconnectListeners) {
+      listener();
     }
   }
 }
