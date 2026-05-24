@@ -17,6 +17,7 @@ export class BeatApp {
   private readonly directoryRuntime = createRoomDirectory();
   private readonly directory = this.directoryRuntime.directory;
   private readonly peerId = createId('peer');
+  private readonly handleFullscreenChange = () => this.syncFullscreenButton();
   private readonly renderer: CanvasRenderer;
   private readonly input: InputController;
   private readonly root: HTMLElement;
@@ -41,6 +42,7 @@ export class BeatApp {
   private copyRulesButton!: HTMLButtonElement;
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
+  private fullscreenButton!: HTMLButtonElement;
   private engine?: EngineClient;
   private hostSession?: HostSession;
   private clientSession?: ClientSession;
@@ -69,11 +71,14 @@ export class BeatApp {
     this.hostButton.addEventListener('click', () => void this.hostRoom());
     this.soloButton.addEventListener('click', () => void this.startSolo());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
+    this.fullscreenButton.addEventListener('click', () => void this.toggleFullscreen());
     this.resetRulesButton.addEventListener('click', () => void this.resetRules());
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
+    document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
     void this.refreshRulesHash();
+    this.syncFullscreenButton();
     this.showMenu();
     this.setStatus('idle: local directory ready');
     this.hashLine.textContent = this.directoryRuntime.label;
@@ -84,6 +89,7 @@ export class BeatApp {
     this.stopActiveMode();
     this.unsubscribeRooms?.();
     this.unsubscribeInput?.();
+    document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
     this.input.destroy();
     this.renderer.destroy();
     this.directory.destroy();
@@ -105,6 +111,7 @@ export class BeatApp {
     this.peerLine = requireNode<HTMLDivElement>('#peer-line');
     this.logRoot = requireNode<HTMLDivElement>('#log');
     this.rulesJsonInput = requireNode<HTMLTextAreaElement>('#rules-json');
+    this.fullscreenButton = requireNode<HTMLButtonElement>('#fullscreen-toggle');
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
@@ -283,6 +290,7 @@ export class BeatApp {
     this.updateSkillBar(undefined);
     this.mode = 'idle';
     this.setRulesLocked(false);
+    void this.exitFullscreen();
     this.showMenu();
     this.setStatus(`idle: ${this.directoryRuntime.label}`);
   }
@@ -384,9 +392,48 @@ export class BeatApp {
   private showArena(): void {
     this.menuView.hidden = true;
     this.arenaView.hidden = false;
+    this.syncFullscreenButton();
     requestAnimationFrame(() => this.renderer.resizeNow());
     this.setRulesLocked(true);
     this.updateSkillBar(this.lastSnapshot);
+  }
+
+  private canFullscreen(): boolean {
+    return typeof this.arenaView.requestFullscreen === 'function' && document.fullscreenEnabled !== false;
+  }
+
+  private syncFullscreenButton(): void {
+    const active = document.fullscreenElement === this.arenaView;
+    this.fullscreenButton.disabled = !this.canFullscreen();
+    this.fullscreenButton.textContent = active ? 'Window' : 'Fullscreen';
+    this.fullscreenButton.setAttribute('aria-pressed', String(active));
+    this.fullscreenButton.title = this.canFullscreen() ? (active ? 'Exit fullscreen' : 'Enter fullscreen') : 'Fullscreen is unavailable in this browser';
+  }
+
+  private async toggleFullscreen(): Promise<void> {
+    if (!this.canFullscreen()) {
+      return;
+    }
+    try {
+      if (document.fullscreenElement === this.arenaView) {
+        await document.exitFullscreen();
+        return;
+      }
+      await this.arenaView.requestFullscreen({ navigationUI: 'hide' });
+    } catch (error) {
+      this.log(`fullscreen unavailable: ${readError(error)}`);
+    } finally {
+      this.syncFullscreenButton();
+    }
+  }
+
+  private async exitFullscreen(): Promise<void> {
+    if (document.fullscreenElement !== this.arenaView) {
+      this.syncFullscreenButton();
+      return;
+    }
+    await document.exitFullscreen().catch(() => undefined);
+    this.syncFullscreenButton();
   }
 
   private setRulesLocked(locked: boolean): void {
@@ -489,7 +536,10 @@ function shellHtml(): string {
           <div id="hash-line">rules idle</div>
           <div id="peer-line">peer</div>
         </div>
-        <button id="leave-room" class="button arena-menu-button" type="button">Menu</button>
+        <div class="arena-actions">
+          <button id="fullscreen-toggle" class="button arena-action-button" type="button" aria-pressed="false">Fullscreen</button>
+          <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
+        </div>
         <div id="skill-bar" class="skill-bar" aria-label="Skill bar">
           <button class="skill-slot" type="button" data-slot="0">
             <span class="skill-slot__cooldown-fill"></span>

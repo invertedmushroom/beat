@@ -261,11 +261,16 @@ h2 {
   padding: 10px 12px;
 }
 
-.arena-menu-button {
+.arena-actions {
   position: absolute;
   z-index: 5;
   top: max(14px, env(safe-area-inset-top));
   right: max(14px, env(safe-area-inset-right));
+  display: flex;
+  gap: 8px;
+}
+
+.arena-action-button {
   min-width: 68px;
 }
 
@@ -482,6 +487,15 @@ h2 {
   .hud {
     max-width: calc(100% - 108px);
     font-size: 11px;
+  }
+
+  .arena-actions {
+    gap: 6px;
+  }
+
+  .arena-action-button {
+    min-width: 0;
+    padding-inline: 10px;
   }
 
   .button-grid--rules {
