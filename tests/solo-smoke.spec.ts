@@ -207,7 +207,7 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 
   await aimCanvas(page, 'left');
-  await page.keyboard.press('Space');
+  await pressGameKey(page, 'Space');
   await expect
     .poll(async () =>
       page.evaluate(() => {
@@ -306,6 +306,100 @@ test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', as
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await page.getByRole('button', { name: 'Clear Actors' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+});
+
+test('lab physics preset materializes bodies and tethers actors', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Physics' }).click();
+  await expect(page.locator('#rules-inspector')).toContainText('Anchor Orb');
+  await expect(page.locator('#rules-inspector')).toContainText('phase walls');
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Lab' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  await page.keyboard.press('Space');
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.physicsBodies.some((body) => body.sourceAbilityId === 'anchor-orb') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.constraints.some((constraint) => constraint.kind === 'snare') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_TRACE__?.some((trace) => trace.kind === 'physics' && trace.physicsKind === 'snare') ?? false))
+    .toBeTruthy();
+
+  await pressGameKey(page, 'Digit2');
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.constraints.some((constraint) => constraint.kind === 'drag') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const snapshot = window.__BEAT_SNAPSHOT__;
+        const player = snapshot?.players.find((candidate) => candidate.role === 'player');
+        const body = snapshot?.physicsBodies.find((candidate) => candidate.sourceAbilityId === 'wrecking-weight');
+        return player && body ? player.x - body.x : 0;
+      }),
+    )
+    .toBeGreaterThan(0.7);
+});
+
+test('mobile touch can fire a physics ability', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Physics' }).click();
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Lab' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  const fire = await page.locator('#touch-fire').boundingBox();
+  if (!fire) {
+    throw new Error('touch fire pad missing');
+  }
+  await page.mouse.move(fire.x + fire.width / 2, fire.y + fire.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(fire.x + fire.width / 2 + 46, fire.y + fire.height / 2, { steps: 4 });
+  await page.mouse.up();
+
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.physicsBodies.some((body) => body.sourceAbilityId === 'anchor-orb') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.constraints.some((constraint) => constraint.kind === 'snare') ?? false))
+    .toBeTruthy();
+});
+
+test('host and client both see physics bodies and tethers', async ({ context, page: host }) => {
+  const roomName = `Physics Sync ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await host.getByRole('button', { name: 'Physics' }).click();
+  await host.getByRole('button', { name: 'Apply' }).click();
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  await host.bringToFront();
+  await aimCanvas(host, 'right');
+  await pressGameKey(host, 'Space');
+  await expect
+    .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.physicsBodies.some((body) => body.sourceAbilityId === 'anchor-orb') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.physicsBodies.some((body) => body.sourceAbilityId === 'anchor-orb') ?? false))
+    .toBeTruthy();
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.constraints.some((constraint) => constraint.kind === 'snare') ?? false))
+    .toBeTruthy();
 });
 
 test('mechanics status combo is visible in multiplayer combat', async ({ context, page: host }) => {

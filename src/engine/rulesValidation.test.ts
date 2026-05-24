@@ -167,6 +167,82 @@ describe('rulesValidation', () => {
     expect(ability.effects).toHaveLength(5);
   });
 
+  it('validates projectile world collision and physics effects', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      abilities: ruleset.abilities.map((candidate, index) =>
+        index === 0
+          ? {
+              ...candidate,
+              worldCollision: 'phase',
+              effects: [
+                {
+                  kind: 'spawnBody',
+                  target: 'impact',
+                  inheritVelocity: 0.3,
+                  body: {
+                    shape: 'ball',
+                    radius: 0.5,
+                    mass: 5,
+                    friction: 0.6,
+                    restitution: 0.2,
+                    linearDamping: 1.2,
+                    lifetimeTicks: 80,
+                    color: '#2fd17c',
+                  },
+                },
+                {
+                  kind: 'snare',
+                  target: 'hit',
+                  anchor: 'body',
+                  durationTicks: 60,
+                  radius: 2.2,
+                  stiffness: 80,
+                  damping: 8,
+                  color: '#2fd17c',
+                  body: {
+                    shape: 'ball',
+                    radius: 0.45,
+                    mass: 4,
+                    friction: 0.5,
+                    restitution: 0.1,
+                    linearDamping: 1,
+                    lifetimeTicks: 80,
+                    color: '#2fd17c',
+                  },
+                },
+                {
+                  kind: 'dragBody',
+                  target: 'self',
+                  durationTicks: 90,
+                  leashLength: 2.6,
+                  stiffness: 70,
+                  damping: 9,
+                  body: {
+                    shape: 'ball',
+                    radius: 0.7,
+                    mass: 16,
+                    friction: 0.95,
+                    restitution: 0.05,
+                    linearDamping: 2,
+                    lifetimeTicks: 90,
+                    color: '#c79bff',
+                  },
+                },
+              ],
+            }
+          : candidate,
+      ),
+    }).abilities[0];
+
+    expect(parsed.shape).toBe('projectile');
+    if (parsed.shape === 'projectile') {
+      expect(parsed.worldCollision).toBe('phase');
+    }
+    expect(parsed.effects).toHaveLength(3);
+  });
+
   it('rejects invalid ability effects', () => {
     const ruleset = createDefaultRuleset();
     expect(() =>
@@ -182,6 +258,72 @@ describe('rulesValidation', () => {
         ),
       }),
     ).toThrow(/ability\.effect\.multiplier/);
+  });
+
+  it('rejects invalid physics ability fields', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        abilities: ruleset.abilities.map((ability, index) => (index === 0 ? { ...ability, worldCollision: 'bounce' } : ability)),
+      }),
+    ).toThrow(/ability\.worldCollision/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        abilities: ruleset.abilities.map((ability, index) =>
+          index === 0
+            ? {
+                ...ability,
+                effects: [
+                  {
+                    kind: 'spawnBody',
+                    target: 'impact',
+                    body: {
+                      shape: 'ball',
+                      radius: 0.5,
+                      mass: 0,
+                      lifetimeTicks: 80,
+                      color: '#2fd17c',
+                    },
+                  },
+                ],
+              }
+            : ability,
+        ),
+      }),
+    ).toThrow(/ability\.effect\.body\.mass/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        abilities: ruleset.abilities.map((ability, index) =>
+          index === 0
+            ? {
+                ...ability,
+                effects: [
+                  {
+                    kind: 'dragBody',
+                    target: 'hit',
+                    durationTicks: 90,
+                    leashLength: 0.05,
+                    stiffness: 70,
+                    damping: 9,
+                    body: {
+                      shape: 'ball',
+                      radius: 0.7,
+                      mass: 16,
+                      lifetimeTicks: 90,
+                      color: '#c79bff',
+                    },
+                  },
+                ],
+              }
+            : ability,
+        ),
+      }),
+    ).toThrow(/ability\.effect\.leashLength/);
   });
 
   it('validates mechanics statuses, resources, triggers, and references', () => {

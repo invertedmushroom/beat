@@ -130,6 +130,9 @@ export class CanvasRenderer {
       this.ctx.restore();
     }
 
+    this.drawConstraints(originX, originY, scale);
+    this.drawPhysicsBodies(originX, originY, scale);
+
     for (const projectile of this.snapshot?.projectiles ?? []) {
       const x = originX + projectile.x * scale;
       const y = originY + projectile.y * scale;
@@ -340,6 +343,80 @@ export class CanvasRenderer {
     this.ctx.arc(x, y, radius * 2.2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
     this.ctx.stroke();
     this.ctx.restore();
+  }
+
+  private drawConstraints(originX: number, originY: number, scale: number): void {
+    const snapshot = this.snapshot;
+    if (!snapshot) {
+      return;
+    }
+    for (const constraint of snapshot.constraints) {
+      const target = snapshot.players.find((player) => player.playerId === constraint.targetId);
+      if (!target) {
+        continue;
+      }
+      const anchorBody = constraint.anchorBodyId
+        ? snapshot.physicsBodies.find((body) => body.bodyId === constraint.anchorBodyId)
+        : undefined;
+      const targetX = originX + target.x * scale;
+      const targetY = originY + target.y * scale;
+      const anchorX = originX + (anchorBody?.x ?? constraint.anchorX) * scale;
+      const anchorY = originY + (anchorBody?.y ?? constraint.anchorY) * scale;
+      const fade = Math.max(0.28, Math.min(1, constraint.remainingTicks / 40));
+      this.ctx.save();
+      this.ctx.globalAlpha = fade;
+      this.ctx.strokeStyle = constraint.color;
+      this.ctx.lineWidth = constraint.kind === 'drag' ? 3 : 2;
+      this.ctx.setLineDash(constraint.kind === 'drag' ? [8, 5] : [4, 4]);
+      this.ctx.beginPath();
+      this.ctx.moveTo(targetX, targetY);
+      this.ctx.lineTo(anchorX, anchorY);
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
+      this.ctx.globalAlpha = fade * 0.65;
+      this.ctx.beginPath();
+      this.ctx.arc(anchorX, anchorY, Math.max(5, constraint.length * scale), 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.globalAlpha = fade;
+      this.ctx.fillStyle = constraint.color;
+      this.ctx.beginPath();
+      this.ctx.arc(anchorX, anchorY, 4.5, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+  }
+
+  private drawPhysicsBodies(originX: number, originY: number, scale: number): void {
+    for (const body of this.snapshot?.physicsBodies ?? []) {
+      const x = originX + body.x * scale;
+      const y = originY + body.y * scale;
+      const radius = Math.max(5, body.radius * scale);
+      const fade = Math.max(0.25, Math.min(1, body.remainingTicks / 30));
+      this.ctx.save();
+      this.ctx.globalAlpha = fade;
+      this.ctx.shadowColor = body.color;
+      this.ctx.shadowBlur = 10;
+      this.ctx.fillStyle = body.color;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.shadowBlur = 0;
+      this.ctx.strokeStyle = '#f5f3ed';
+      this.ctx.globalAlpha = Math.min(1, fade + 0.25);
+      this.ctx.lineWidth = 1.5;
+      this.ctx.stroke();
+      const speed = Math.hypot(body.vx, body.vy);
+      if (speed > 0.05) {
+        this.ctx.strokeStyle = body.color;
+        this.ctx.lineWidth = 2;
+        this.ctx.globalAlpha = 0.55 * fade;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, y);
+        this.ctx.lineTo(x - body.vx * scale * 0.35, y - body.vy * scale * 0.35);
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
   }
 
   private drawDeathLabel(player: NonNullable<EngineSnapshot['players'][number]>, x: number, y: number, radius: number): void {

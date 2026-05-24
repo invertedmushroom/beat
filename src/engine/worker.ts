@@ -7,6 +7,7 @@ import type {
   AiTraceKind,
   AiTraceSnapshot,
   CombatTextSnapshot,
+  ConstraintSnapshot,
   EffectSnapshot,
   EngineCommand,
   EngineEvent,
@@ -19,6 +20,9 @@ import type {
   MechanicTraceSnapshot,
   MechanicTraceKind,
   MeleeAbility,
+  PhysicsBodySnapshot,
+  PhysicsBodySpec,
+  PhysicsTraceKind,
   PlayerInput,
   PlayerSpawn,
   ProjectileAbility,
@@ -66,6 +70,33 @@ type RuntimeProjectile = {
   dy: number;
   ageTicks: number;
   traveled: number;
+};
+
+type RuntimePhysicsBody = {
+  bodyId: string;
+  ownerId?: string;
+  sourceAbilityId?: string;
+  body: RAPIER.RigidBody;
+  radius: number;
+  color: string;
+  createdTick: number;
+  lifetimeTicks: number;
+};
+
+type RuntimeConstraint = {
+  constraintId: string;
+  kind: ConstraintSnapshot['kind'];
+  targetId: string;
+  ownerId?: string;
+  sourceAbilityId?: string;
+  joint?: RAPIER.ImpulseJoint;
+  anchorBodyId?: string;
+  anchorPoint?: Vec2;
+  hiddenAnchorBody?: RAPIER.RigidBody;
+  length: number;
+  color: string;
+  createdTick: number;
+  lifetimeTicks: number;
 };
 
 type RuntimeMelee = {
@@ -192,12 +223,16 @@ let tickHandle: number | undefined;
 let tick = 0;
 let spawnIndex = 0;
 let projectileIndex = 0;
+let physicsBodyIndex = 0;
+let constraintIndex = 0;
 let effectIndex = 0;
 let combatTextIndex = 0;
 let traceIndex = 0;
 let aiTraceIndex = 0;
 let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
+let physicsBodies = new Map<string, RuntimePhysicsBody>();
+let constraints = new Map<string, RuntimeConstraint>();
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
 let combatTexts: RuntimeCombatText[] = [];
@@ -284,12 +319,16 @@ function initialize(nextRuleset: Ruleset): void {
   tick = 0;
   spawnIndex = 0;
   projectileIndex = 0;
+  physicsBodyIndex = 0;
+  constraintIndex = 0;
   effectIndex = 0;
   combatTextIndex = 0;
   traceIndex = 0;
   aiTraceIndex = 0;
   players = new Map();
   projectiles = [];
+  physicsBodies = new Map();
+  constraints = new Map();
   melees = [];
   effects = [];
   combatTexts = [];
@@ -388,6 +427,7 @@ function removePlayer(playerId: string): void {
   if (!player || !world) {
     return;
   }
+  cleanupPlayerPhysics(playerId, 'cleanup');
   world.removeRigidBody(player.body);
   players.delete(playerId);
 }
@@ -429,6 +469,7 @@ function step(): void {
     const speedMultiplier =
       (player.charging?.ability.charge?.moveSpeedMultiplier ?? 1) *
       activeMovementMultiplier(player) *
+      activePhysicsConstraintMovementMultiplier(player) *
       (player.npc?.config.speedMultiplier ?? 1);
     updateMovementAndFacing(player, speedMultiplier);
     updateChargeAim(player);
@@ -445,8 +486,11 @@ function step(): void {
   }
 
   world.step();
+  enforceActiveConstraints();
   stepProjectiles();
   stepMelees();
+  pruneConstraints();
+  prunePhysicsBodies();
   pruneEffects();
   pruneCombatTexts();
   tick += 1;
@@ -835,7 +879,7 @@ function stepProjectiles(): void {
       });
       addImpact(to.x, to.y, projectile.ability.radius * 3.4, projectile.ability.color);
       if (hitPlayer.alive) {
-        applyHitEffects(projectile.ability, owner, hitPlayer, direction);
+        applyHitEffects(projectile.ability, owner, hitPlayer, direction, to);
       }
       emitMechanicEvent({
         event: 'onHit',
@@ -849,7 +893,7 @@ function stepProjectiles(): void {
     if (
       projectile.ageTicks >= projectile.ability.lifetimeTicks ||
       projectile.traveled >= projectile.ability.range ||
-      hitsArenaOrObstacle(to, projectile.ability.radius)
+      ((projectile.ability.worldCollision ?? 'despawn') === 'despawn' && hitsArenaOrObstacle(to, projectile.ability.radius))
     ) {
       addImpact(to.x, to.y, projectile.ability.radius * 2.8, projectile.ability.color);
       continue;
@@ -891,7 +935,7 @@ function stepMelees(): void {
           });
           addImpact(targetPos.x, targetPos.y, melee.ability.radius, melee.ability.color);
           if (target.alive) {
-            applyHitEffects(melee.ability, owner, target, direction);
+            applyHitEffects(melee.ability, owner, target, direction, { x: targetPos.x, y: targetPos.y });
           }
           emitMechanicEvent({
             event: 'onHit',
@@ -949,6 +993,7 @@ function damagePlayer(player: RuntimePlayer, damage: number, context: DamageCont
   }
   player.charging = undefined;
   player.statuses.clear();
+  cleanupPlayerPhysics(player.spawn.playerId, 'cleanup');
   player.alive = false;
   player.respawnTick = tick + ruleset.player.respawnTicks;
   player.body.setLinvel({ x: 0, y: 0 }, true);
@@ -1008,16 +1053,30 @@ function applySelfEffects(player: RuntimePlayer, ability: Ability, aim: Vec2): v
         stacks: effect.stacks,
       });
     }
+    if (effect.kind === 'spawnBody' && effect.target === 'self') {
+      spawnBodyFromEffect(effect.body, player, ability, player.body.translation(), aim, effect.inheritVelocity ?? 0);
+    }
+    if (effect.kind === 'dragBody' && effect.target === 'self') {
+      applyDragBody(effect, ability, player, player, aim, player.body.translation());
+    }
   }
 }
 
-function applyHitEffects(ability: Ability, source: RuntimePlayer | undefined, target: RuntimePlayer, direction: Vec2): void {
+function applyHitEffects(ability: Ability, source: RuntimePlayer | undefined, target: RuntimePlayer, direction: Vec2, impact: Vec2): void {
   for (const effect of ability.effects ?? []) {
-    applyHitEffect(effect, ability, source, target, direction, ability.color);
+    applyHitEffect(effect, ability, source, target, direction, impact, ability.color);
   }
 }
 
-function applyHitEffect(effect: AbilityEffect, ability: Ability, source: RuntimePlayer | undefined, target: RuntimePlayer, direction: Vec2, color: string): void {
+function applyHitEffect(
+  effect: AbilityEffect,
+  ability: Ability,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer,
+  direction: Vec2,
+  impact: Vec2,
+  color: string,
+): void {
   if (effect.kind === 'knockback') {
     knockbackPlayer(target, direction, effect.force, color);
     return;
@@ -1037,6 +1096,23 @@ function applyHitEffect(effect: AbilityEffect, ability: Ability, source: Runtime
       durationTicks: effect.durationTicks,
       stacks: effect.stacks,
     });
+  }
+  if (effect.kind === 'spawnBody' && (effect.target === 'hit' || effect.target === 'impact')) {
+    const targetPos = target.body.translation();
+    spawnBodyFromEffect(
+      effect.body,
+      source,
+      ability,
+      effect.target === 'hit' ? { x: targetPos.x, y: targetPos.y } : impact,
+      direction,
+      effect.inheritVelocity ?? 0,
+    );
+  }
+  if (effect.kind === 'snare' && effect.target === 'hit') {
+    applySnare(effect, ability, source, target, direction, impact);
+  }
+  if (effect.kind === 'dragBody' && effect.target === 'hit') {
+    applyDragBody(effect, ability, source, target, direction, impact);
   }
 }
 
@@ -1087,6 +1163,372 @@ function healPlayer(player: RuntimePlayer, amount: number): void {
   const pos = player.body.translation();
   addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'heal', healed, '#2fd17c');
   addEffect('heal', pos.x, pos.y, ruleset.player.radius * 2.7, '#2fd17c', 18);
+}
+
+function spawnBodyFromEffect(
+  spec: PhysicsBodySpec,
+  owner: RuntimePlayer | undefined,
+  ability: Ability,
+  position: Vec2,
+  direction: Vec2,
+  inheritVelocity: number,
+): RuntimePhysicsBody | undefined {
+  const inheritSpeed = ability.shape === 'projectile' ? ability.speed : 0.35;
+  const velocity = {
+    x: direction.x * inheritSpeed * inheritVelocity,
+    y: direction.y * inheritSpeed * inheritVelocity,
+  };
+  return createPhysicsBody(spec, position, velocity, owner?.spawn.playerId, ability.id);
+}
+
+function createPhysicsBody(
+  spec: PhysicsBodySpec,
+  position: Vec2,
+  velocity: Vec2,
+  ownerId: string | undefined,
+  sourceAbilityId: string | undefined,
+): RuntimePhysicsBody | undefined {
+  if (!world || !ruleset) {
+    return undefined;
+  }
+  const spawnPoint = hitsArenaOrObstacle(position, spec.radius) ? nearestOpenPoint(position, spec.radius) : position;
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(spawnPoint.x, spawnPoint.y)
+      .setLinvel(velocity.x, velocity.y)
+      .setLinearDamping(spec.linearDamping)
+      .setAngularDamping(spec.linearDamping)
+      .setCcdEnabled(true)
+      .setCanSleep(false),
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.ball(spec.radius)
+      .setMass(spec.mass)
+      .setFriction(spec.friction)
+      .setRestitution(spec.restitution),
+    body,
+  );
+  const physicsBody: RuntimePhysicsBody = {
+    bodyId: `body-${++physicsBodyIndex}`,
+    ownerId,
+    sourceAbilityId,
+    body,
+    radius: spec.radius,
+    color: spec.color,
+    createdTick: tick,
+    lifetimeTicks: spec.lifetimeTicks,
+  };
+  physicsBodies.set(physicsBody.bodyId, physicsBody);
+  addEffect('physics', spawnPoint.x, spawnPoint.y, spec.radius * 2.5, spec.color, 18);
+  const source = ownerId ? players.get(ownerId) : undefined;
+  addPhysicsTrace('spawnBody', 'applied', source, undefined, abilityById(sourceAbilityId));
+  return physicsBody;
+}
+
+function applySnare(
+  effect: Extract<AbilityEffect, { kind: 'snare' }>,
+  ability: Ability,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer,
+  direction: Vec2,
+  impact: Vec2,
+): void {
+  if (!world || !target.alive) {
+    return;
+  }
+  removeConstraintsForTarget(target.spawn.playerId, 'snare');
+  const color = effect.color ?? ability.color;
+  let anchorBody: RAPIER.RigidBody | undefined;
+  let anchorBodyId: string | undefined;
+  let anchorPoint: Vec2 | undefined;
+  let hiddenAnchorBody: RAPIER.RigidBody | undefined;
+  if (effect.anchor === 'body' && effect.body) {
+    const physicsBody = createPhysicsBody(effect.body, impact, { x: direction.x * 0.1, y: direction.y * 0.1 }, source?.spawn.playerId, ability.id);
+    if (!physicsBody) {
+      return;
+    }
+    anchorBody = physicsBody.body;
+    anchorBodyId = physicsBody.bodyId;
+  } else {
+    hiddenAnchorBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(impact.x, impact.y));
+    anchorBody = hiddenAnchorBody;
+    anchorPoint = impact;
+  }
+  const joint = createSpringJoint(target.body, anchorBody, effect.radius, effect.stiffness, effect.damping);
+  const constraint: RuntimeConstraint = {
+    constraintId: `constraint-${++constraintIndex}`,
+    kind: 'snare',
+    targetId: target.spawn.playerId,
+    ownerId: source?.spawn.playerId,
+    sourceAbilityId: ability.id,
+    joint,
+    anchorBodyId,
+    anchorPoint,
+    hiddenAnchorBody,
+    length: effect.radius,
+    color,
+    createdTick: tick,
+    lifetimeTicks: effect.durationTicks,
+  };
+  constraints.set(constraint.constraintId, constraint);
+  addEffect('snare', impact.x, impact.y, effect.radius, color, Math.min(34, Math.max(14, effect.durationTicks)));
+  addPhysicsTrace('snare', 'applied', source, target, ability);
+}
+
+function applyDragBody(
+  effect: Extract<AbilityEffect, { kind: 'dragBody' }>,
+  ability: Ability,
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer,
+  direction: Vec2,
+  impact: Vec2,
+): void {
+  if (!world || !target.alive) {
+    return;
+  }
+  removeConstraintsForTarget(target.spawn.playerId, 'drag');
+  const color = effect.color ?? ability.color;
+  const targetPos = target.body.translation();
+  const anchorPosition = {
+    x: targetPos.x - direction.x * effect.leashLength,
+    y: targetPos.y - direction.y * effect.leashLength,
+  };
+  const physicsBody = createPhysicsBody(
+    effect.body,
+    hitsArenaOrObstacle(anchorPosition, effect.body.radius) ? impact : anchorPosition,
+    target.body.linvel(),
+    source?.spawn.playerId,
+    ability.id,
+  );
+  if (!physicsBody) {
+    return;
+  }
+  const joint = createSpringJoint(target.body, physicsBody.body, effect.leashLength, effect.stiffness, effect.damping);
+  const constraint: RuntimeConstraint = {
+    constraintId: `constraint-${++constraintIndex}`,
+    kind: 'drag',
+    targetId: target.spawn.playerId,
+    ownerId: source?.spawn.playerId,
+    sourceAbilityId: ability.id,
+    joint,
+    anchorBodyId: physicsBody.bodyId,
+    length: effect.leashLength,
+    color,
+    createdTick: tick,
+    lifetimeTicks: effect.durationTicks,
+  };
+  constraints.set(constraint.constraintId, constraint);
+  addEffect('drag', targetPos.x, targetPos.y, effect.leashLength, color, Math.min(34, Math.max(16, effect.durationTicks)));
+  addPhysicsTrace('dragBody', 'applied', source, target, ability);
+}
+
+function createSpringJoint(
+  targetBody: RAPIER.RigidBody,
+  anchorBody: RAPIER.RigidBody,
+  length: number,
+  stiffness: number,
+  damping: number,
+): RAPIER.ImpulseJoint | undefined {
+  if (!world) {
+    return undefined;
+  }
+  const joint = world.createImpulseJoint(
+    RAPIER.JointData.spring(length, stiffness, damping, { x: 0, y: 0 }, { x: 0, y: 0 }),
+    targetBody,
+    anchorBody,
+    true,
+  );
+  joint.setContactsEnabled(false);
+  return joint;
+}
+
+function activePhysicsConstraintMovementMultiplier(player: RuntimePlayer): number {
+  let multiplier = 1;
+  for (const constraint of constraints.values()) {
+    if (constraint.targetId !== player.spawn.playerId || tick - constraint.createdTick >= constraint.lifetimeTicks) {
+      continue;
+    }
+    if (constraint.kind === 'drag') {
+      multiplier *= 0.68;
+    }
+    if (constraint.kind === 'snare') {
+      multiplier = Math.min(multiplier, 0.86);
+    }
+  }
+  return multiplier;
+}
+
+function enforceActiveConstraints(): void {
+  if (!ruleset) {
+    return;
+  }
+  for (const constraint of constraints.values()) {
+    const target = players.get(constraint.targetId);
+    const anchor = constraintAnchorPosition(constraint);
+    if (!target?.alive || !anchor) {
+      continue;
+    }
+    const pos = target.body.translation();
+    const dx = pos.x - anchor.x;
+    const dy = pos.y - anchor.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= constraint.length || distance < 0.001) {
+      continue;
+    }
+    const unit = { x: dx / distance, y: dy / distance };
+    if (constraint.kind === 'snare') {
+      const candidate = {
+        x: anchor.x + unit.x * constraint.length,
+        y: anchor.y + unit.y * constraint.length,
+      };
+      if (!hitsArenaOrObstacle(candidate, ruleset.player.radius)) {
+        target.body.setTranslation(candidate, true);
+      }
+      const velocity = target.body.linvel();
+      const outward = velocity.x * unit.x + velocity.y * unit.y;
+      if (outward > 0) {
+        target.body.setLinvel({ x: velocity.x - unit.x * outward, y: velocity.y - unit.y * outward }, true);
+      }
+    } else {
+      const velocity = target.body.linvel();
+      const pull = Math.min(2.5, (distance - constraint.length) * 0.22);
+      target.body.setLinvel({ x: velocity.x - unit.x * pull, y: velocity.y - unit.y * pull }, true);
+    }
+  }
+}
+
+function pruneConstraints(): void {
+  for (const constraint of Array.from(constraints.values())) {
+    const target = players.get(constraint.targetId);
+    if (!target?.alive || tick - constraint.createdTick >= constraint.lifetimeTicks) {
+      removeConstraint(constraint.constraintId, 'expire');
+    }
+  }
+}
+
+function prunePhysicsBodies(): void {
+  for (const physicsBody of Array.from(physicsBodies.values())) {
+    if (tick - physicsBody.createdTick >= physicsBody.lifetimeTicks) {
+      removePhysicsBody(physicsBody.bodyId, 'expire');
+    }
+  }
+}
+
+function cleanupPlayerPhysics(playerId: string, physicsKind: PhysicsTraceKind): void {
+  for (const constraint of Array.from(constraints.values())) {
+    if (constraint.targetId === playerId || constraint.ownerId === playerId) {
+      removeConstraint(constraint.constraintId, physicsKind);
+    }
+  }
+  for (const physicsBody of Array.from(physicsBodies.values())) {
+    if (physicsBody.ownerId === playerId) {
+      removePhysicsBody(physicsBody.bodyId, physicsKind);
+    }
+  }
+}
+
+function removeConstraintsForTarget(targetId: string, kind: ConstraintSnapshot['kind']): void {
+  for (const constraint of Array.from(constraints.values())) {
+    if (constraint.targetId === targetId && constraint.kind === kind) {
+      removeConstraint(constraint.constraintId, 'cleanup');
+    }
+  }
+}
+
+function removeConstraint(constraintId: string, physicsKind: PhysicsTraceKind): void {
+  const constraint = constraints.get(constraintId);
+  if (!constraint) {
+    return;
+  }
+  if (world && constraint.joint?.isValid()) {
+    world.removeImpulseJoint(constraint.joint, true);
+  }
+  if (world && constraint.hiddenAnchorBody) {
+    world.removeRigidBody(constraint.hiddenAnchorBody);
+  }
+  constraints.delete(constraintId);
+  addPhysicsTrace(physicsKind, 'applied', players.get(constraint.ownerId ?? ''), players.get(constraint.targetId), abilityById(constraint.sourceAbilityId));
+}
+
+function removePhysicsBody(bodyId: string, physicsKind: PhysicsTraceKind): void {
+  const physicsBody = physicsBodies.get(bodyId);
+  if (!physicsBody) {
+    return;
+  }
+  for (const constraint of Array.from(constraints.values())) {
+    if (constraint.anchorBodyId === bodyId) {
+      removeConstraint(constraint.constraintId, physicsKind);
+    }
+  }
+  if (world) {
+    world.removeRigidBody(physicsBody.body);
+  }
+  physicsBodies.delete(bodyId);
+  addPhysicsTrace(physicsKind, 'applied', players.get(physicsBody.ownerId ?? ''), undefined, abilityById(physicsBody.sourceAbilityId));
+}
+
+function constraintAnchorPosition(constraint: RuntimeConstraint): Vec2 | undefined {
+  if (constraint.anchorBodyId) {
+    const body = physicsBodies.get(constraint.anchorBodyId);
+    if (body) {
+      const pos = body.body.translation();
+      return { x: pos.x, y: pos.y };
+    }
+  }
+  return constraint.anchorPoint;
+}
+
+function nearestOpenPoint(point: Vec2, radius: number): Vec2 {
+  if (!ruleset) {
+    return point;
+  }
+  const halfW = ruleset.arena.width / 2 - radius;
+  const halfH = ruleset.arena.height / 2 - radius;
+  const clamped = {
+    x: clamp(point.x, -halfW, halfW),
+    y: clamp(point.y, -halfH, halfH),
+  };
+  if (!hitsArenaOrObstacle(clamped, radius)) {
+    return clamped;
+  }
+  const offsets = [
+    { x: 0, y: 0 },
+    { x: radius * 2, y: 0 },
+    { x: -radius * 2, y: 0 },
+    { x: 0, y: radius * 2 },
+    { x: 0, y: -radius * 2 },
+  ];
+  for (const offset of offsets) {
+    const candidate = {
+      x: clamp(clamped.x + offset.x, -halfW, halfW),
+      y: clamp(clamped.y + offset.y, -halfH, halfH),
+    };
+    if (!hitsArenaOrObstacle(candidate, radius)) {
+      return candidate;
+    }
+  }
+  return clamped;
+}
+
+function abilityById(abilityId: string | undefined): Ability | undefined {
+  return abilityId ? ruleset?.abilities.find((ability) => ability.id === abilityId) : undefined;
+}
+
+function addPhysicsTrace(
+  physicsKind: PhysicsTraceKind,
+  result: MechanicTraceSnapshot['result'],
+  source: RuntimePlayer | undefined,
+  target: RuntimePlayer | undefined,
+  ability: Ability | undefined,
+): void {
+  addMechanicTrace('physics', result, {
+    event: 'onCast',
+    sourceId: source?.spawn.playerId,
+    targetId: target?.spawn.playerId,
+    ability,
+  }, {
+    physicsKind,
+  });
 }
 
 function initialResources(): Map<string, RuntimeResource> {
@@ -1667,6 +2109,8 @@ function readSnapshot(): EngineSnapshot {
     nowMs: performance.now(),
     rulesetId: activeRuleset.id,
     projectiles: projectiles.map(toProjectileSnapshot),
+    physicsBodies: Array.from(physicsBodies.values()).map(toPhysicsBodySnapshot),
+    constraints: Array.from(constraints.values()).map(toConstraintSnapshot),
     effects: effects.map(toEffectSnapshot),
     combatTexts: combatTexts.map(toCombatTextSnapshot),
     mechanicTraces,
@@ -1784,6 +2228,40 @@ function toProjectileSnapshot(projectile: RuntimeProjectile): ProjectileSnapshot
   };
 }
 
+function toPhysicsBodySnapshot(physicsBody: RuntimePhysicsBody): PhysicsBodySnapshot {
+  const pos = physicsBody.body.translation();
+  const vel = physicsBody.body.linvel();
+  return {
+    bodyId: physicsBody.bodyId,
+    ownerId: physicsBody.ownerId,
+    sourceAbilityId: physicsBody.sourceAbilityId,
+    x: pos.x,
+    y: pos.y,
+    vx: vel.x,
+    vy: vel.y,
+    radius: physicsBody.radius,
+    color: physicsBody.color,
+    remainingTicks: Math.max(0, physicsBody.createdTick + physicsBody.lifetimeTicks - tick),
+  };
+}
+
+function toConstraintSnapshot(constraint: RuntimeConstraint): ConstraintSnapshot {
+  const anchor = constraintAnchorPosition(constraint) ?? players.get(constraint.targetId)?.body.translation() ?? { x: 0, y: 0 };
+  return {
+    constraintId: constraint.constraintId,
+    kind: constraint.kind,
+    targetId: constraint.targetId,
+    ownerId: constraint.ownerId,
+    sourceAbilityId: constraint.sourceAbilityId,
+    anchorBodyId: constraint.anchorBodyId,
+    anchorX: anchor.x,
+    anchorY: anchor.y,
+    length: constraint.length,
+    color: constraint.color,
+    remainingTicks: Math.max(0, constraint.createdTick + constraint.lifetimeTicks - tick),
+  };
+}
+
 function toEffectSnapshot(effect: RuntimeEffect): EffectSnapshot {
   return {
     effectId: effect.effectId,
@@ -1819,6 +2297,8 @@ function stop(): void {
   world = undefined;
   players = new Map();
   projectiles = [];
+  physicsBodies = new Map();
+  constraints = new Map();
   melees = [];
   effects = [];
   combatTexts = [];

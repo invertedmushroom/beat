@@ -2,6 +2,7 @@ import type {
   Ability,
   AbilityCharge,
   AbilityEffect,
+  DragBodyEffect,
   MechanicAction,
   MechanicCondition,
   MechanicDirectionRef,
@@ -14,10 +15,14 @@ import type {
   NpcBehaviorMode,
   NpcConfig,
   NpcSpawn,
+  PhysicsBodySpec,
   ProjectileAbility,
+  ProjectileWorldCollision,
   ResourceDefinition,
   Ruleset,
+  SnareEffect,
   StatusDefinition,
+  SpawnBodyEffect,
 } from './protocol';
 
 export function parseRulesetJson(json: string): Ruleset {
@@ -484,9 +489,11 @@ function validateAbility(value: unknown): Ability {
   };
   const shape = readString(ability.shape, 'ability.shape');
   if (shape === 'projectile') {
+    const worldCollision = validateProjectileWorldCollision(ability.worldCollision);
     return {
       ...base,
       shape,
+      ...(worldCollision === undefined ? {} : { worldCollision }),
       speed: readNumber(ability.speed, 'ability.speed', 0.05, 10),
       lifetimeTicks: readInt(ability.lifetimeTicks, 'ability.lifetimeTicks', 1, 1_200),
     } satisfies ProjectileAbility;
@@ -582,7 +589,57 @@ function validateEffect(value: unknown): AbilityEffect {
       ...(effect.stacks === undefined ? {} : { stacks: readInt(effect.stacks, 'ability.effect.stacks', 1, 50) }),
     };
   }
-  throw new Error('ability.effect.kind must be knockback, slow, heal, selfDash, or applyStatus');
+  if (kind === 'spawnBody') {
+    const inheritVelocity = readOptionalNumber(effect.inheritVelocity, 'ability.effect.inheritVelocity', 0, 4);
+    return {
+      kind,
+      target: validateSpawnBodyTarget(effect.target),
+      body: validatePhysicsBodySpec(effect.body, 'ability.effect.body'),
+      ...(inheritVelocity === undefined ? {} : { inheritVelocity }),
+    } satisfies SpawnBodyEffect;
+  }
+  if (kind === 'snare') {
+    const anchor = validateSnareAnchor(effect.anchor);
+    const body = effect.body === undefined ? undefined : validatePhysicsBodySpec(effect.body, 'ability.effect.body');
+    if (anchor === 'body' && body === undefined) {
+      throw new Error('ability.effect.body is required when snare anchor is body');
+    }
+    return {
+      kind,
+      target: validateSnareTarget(effect.target),
+      anchor,
+      durationTicks: readInt(effect.durationTicks, 'ability.effect.durationTicks', 1, 3_600),
+      radius: readNumber(effect.radius, 'ability.effect.radius', 0.2, 30),
+      stiffness: readNumber(effect.stiffness, 'ability.effect.stiffness', 1, 2_000),
+      damping: readNumber(effect.damping, 'ability.effect.damping', 0, 200),
+      ...(effect.color === undefined ? {} : { color: readColor(effect.color, 'ability.effect.color') }),
+      ...(body === undefined ? {} : { body }),
+    } satisfies SnareEffect;
+  }
+  if (kind === 'dragBody') {
+    return {
+      kind,
+      target: validateDragBodyTarget(effect.target),
+      durationTicks: readInt(effect.durationTicks, 'ability.effect.durationTicks', 1, 3_600),
+      leashLength: readNumber(effect.leashLength, 'ability.effect.leashLength', 0.2, 30),
+      stiffness: readNumber(effect.stiffness, 'ability.effect.stiffness', 1, 2_000),
+      damping: readNumber(effect.damping, 'ability.effect.damping', 0, 200),
+      ...(effect.color === undefined ? {} : { color: readColor(effect.color, 'ability.effect.color') }),
+      body: validatePhysicsBodySpec(effect.body, 'ability.effect.body'),
+    } satisfies DragBodyEffect;
+  }
+  throw new Error('ability.effect.kind must be knockback, slow, heal, selfDash, applyStatus, spawnBody, snare, or dragBody');
+}
+
+function validateProjectileWorldCollision(value: unknown): ProjectileWorldCollision | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const mode = readString(value, 'ability.worldCollision');
+  if (mode === 'despawn' || mode === 'phase') {
+    return mode;
+  }
+  throw new Error('ability.worldCollision must be despawn or phase');
 }
 
 function validateHealTarget(value: unknown): 'self' | 'hit' {
@@ -599,6 +656,56 @@ function validateApplyStatusTarget(value: unknown): 'self' | 'hit' {
     return target;
   }
   throw new Error('ability.effect.target must be self or hit');
+}
+
+function validateSpawnBodyTarget(value: unknown): SpawnBodyEffect['target'] {
+  const target = readString(value, 'ability.effect.target');
+  if (target === 'self' || target === 'hit' || target === 'impact') {
+    return target;
+  }
+  throw new Error('ability.effect.target must be self, hit, or impact');
+}
+
+function validateSnareTarget(value: unknown): SnareEffect['target'] {
+  const target = readString(value, 'ability.effect.target');
+  if (target === 'hit') {
+    return target;
+  }
+  throw new Error('ability.effect.target must be hit for snare');
+}
+
+function validateDragBodyTarget(value: unknown): DragBodyEffect['target'] {
+  const target = readString(value, 'ability.effect.target');
+  if (target === 'self' || target === 'hit') {
+    return target;
+  }
+  throw new Error('ability.effect.target must be self or hit for dragBody');
+}
+
+function validateSnareAnchor(value: unknown): SnareEffect['anchor'] {
+  const anchor = readString(value, 'ability.effect.anchor');
+  if (anchor === 'impact' || anchor === 'body') {
+    return anchor;
+  }
+  throw new Error('ability.effect.anchor must be impact or body');
+}
+
+function validatePhysicsBodySpec(value: unknown, label: string): PhysicsBodySpec {
+  const body = assertRecord(value, label);
+  const shape = readString(body.shape, `${label}.shape`);
+  if (shape !== 'ball') {
+    throw new Error(`${label}.shape must be ball`);
+  }
+  return {
+    shape,
+    radius: readNumber(body.radius, `${label}.radius`, 0.05, 5),
+    mass: readNumber(body.mass, `${label}.mass`, 0.05, 200),
+    friction: readOptionalNumber(body.friction, `${label}.friction`, 0, 5) ?? 0.55,
+    restitution: readOptionalNumber(body.restitution, `${label}.restitution`, 0, 2) ?? 0.18,
+    linearDamping: readOptionalNumber(body.linearDamping, `${label}.linearDamping`, 0, 40) ?? 1.4,
+    lifetimeTicks: readInt(body.lifetimeTicks, `${label}.lifetimeTicks`, 1, 3_600),
+    color: readColor(body.color, `${label}.color`),
+  };
 }
 
 function validateTargeting(value: unknown): Ability['targeting'] {

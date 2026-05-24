@@ -66,6 +66,33 @@ describe('rulesetFingerprint', () => {
     expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
   });
 
+  it('changes when physics ability config changes', () => {
+    const a = createDefaultRuleset();
+    const b = {
+      ...a,
+      abilities: a.abilities.map((ability) =>
+        ability.id === 'anchor-orb'
+          ? {
+              ...ability,
+              effects: ability.effects?.map((effect) =>
+                effect.kind === 'spawnBody'
+                  ? {
+                      ...effect,
+                      body: {
+                        ...effect.body,
+                        mass: effect.body.mass + 1,
+                      },
+                    }
+                  : effect,
+              ),
+            }
+          : ability,
+      ),
+    };
+
+    expect(rulesetFingerprint(a)).not.toBe(rulesetFingerprint(b));
+  });
+
   it('changes when loadout order changes', () => {
     const a = createDefaultRuleset();
     const b = {

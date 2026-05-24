@@ -820,6 +820,7 @@ function shellHtml(): string {
                   <button class="button rules-example" type="button" data-example="combo-preset">Combo Preset</button>
                   <button class="button rules-example" type="button" data-example="bleed-dot">Bleed DOT</button>
                   <button class="button rules-example" type="button" data-example="execute">Execute</button>
+                  <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
                 </div>
                 <div id="rules-inspector" class="rules-inspector"></div>
               </aside>
@@ -945,8 +946,8 @@ function rulesInspectorHtml(ruleset: Ruleset): string {
       ruleset.abilities.map((ability) =>
         inspectorRow(
           ability.name,
-          [ability.shape, ability.targeting, ...(ability.tags ?? [])].join(' · '),
-          `${ability.damage} dmg · ${ability.cooldownTicks} cd · ${(ability.effects ?? []).length} effects`,
+          abilityMeta(ability),
+          abilityDetail(ability),
           ability.color,
         ),
       ),
@@ -1029,6 +1030,42 @@ function inspectorRow(title: string, meta: string, detail: string, color: string
   `;
 }
 
+function abilityMeta(ability: Ruleset['abilities'][number]): string {
+  return [
+    ability.shape,
+    ability.targeting,
+    ability.shape === 'projectile' && ability.worldCollision === 'phase' ? 'phase walls' : undefined,
+    ...(ability.tags ?? []),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function abilityDetail(ability: Ruleset['abilities'][number]): string {
+  const physicsEffects = (ability.effects ?? []).map(physicsEffectLabel).filter(Boolean);
+  return [
+    `${ability.damage} dmg`,
+    `${ability.cooldownTicks} cd`,
+    `${(ability.effects ?? []).length} effects`,
+    physicsEffects.length > 0 ? physicsEffects.join(', ') : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function physicsEffectLabel(effect: NonNullable<Ruleset['abilities'][number]['effects']>[number]): string | undefined {
+  if (effect.kind === 'spawnBody') {
+    return `body r${effect.body.radius}`;
+  }
+  if (effect.kind === 'snare') {
+    return `snare ${effect.radius}`;
+  }
+  if (effect.kind === 'dragBody') {
+    return `drag ${effect.leashLength}`;
+  }
+  return undefined;
+}
+
 function triggerDetail(trigger: Ruleset['mechanics']['triggers'][number]): string {
   const conditions = trigger.conditions?.map(conditionLabel).join(' + ') ?? 'always';
   const actions = trigger.actions.map(actionLabel).join(' + ');
@@ -1078,6 +1115,9 @@ function traceLabel(trace: MechanicTraceSnapshot): string {
   const source = trace.sourceName ?? shortTraceId(trace.sourceId) ?? 'system';
   const target = trace.targetName ?? shortTraceId(trace.targetId);
   const ability = trace.abilityName ?? trace.abilityId;
+  if (trace.kind === 'physics') {
+    return `${trace.tick} physics ${trace.physicsKind ?? 'event'} ${ability ? `via ${ability}` : ''}${target ? ` ${source}->${target}` : ` ${source}`}`.trim();
+  }
   if (trace.kind === 'event') {
     return `${trace.tick} ${trace.event ?? 'event'} ${ability ? `via ${ability}` : ''} ${target ? `${source}->${target}` : source}`.trim();
   }
@@ -1127,6 +1167,11 @@ function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConf
 function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
   if (example === 'combo-preset') {
     return createDefaultRuleset();
+  }
+  if (example === 'physics-preset') {
+    const preset = createDefaultRuleset();
+    preset.loadout.abilityIds = ['anchor-orb', 'wrecking-weight', 'seeker-spark', 'ion-lance'];
+    return preset;
   }
   const next = structuredClone(ruleset) as Ruleset;
   if (example === 'bleed-dot') {

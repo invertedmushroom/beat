@@ -36,7 +36,15 @@ export type AbilityCharge = {
   autoRelease: true;
 };
 
-export type AbilityEffect = KnockbackEffect | SlowEffect | HealEffect | SelfDashEffect | ApplyStatusEffect;
+export type AbilityEffect =
+  | KnockbackEffect
+  | SlowEffect
+  | HealEffect
+  | SelfDashEffect
+  | ApplyStatusEffect
+  | SpawnBodyEffect
+  | SnareEffect
+  | DragBodyEffect;
 
 export type KnockbackEffect = {
   kind: 'knockback';
@@ -68,8 +76,52 @@ export type ApplyStatusEffect = {
   stacks?: number;
 };
 
+export type PhysicsBodySpec = {
+  shape: 'ball';
+  radius: number;
+  mass: number;
+  friction: number;
+  restitution: number;
+  linearDamping: number;
+  lifetimeTicks: number;
+  color: string;
+};
+
+export type SpawnBodyEffect = {
+  kind: 'spawnBody';
+  target: 'self' | 'hit' | 'impact';
+  body: PhysicsBodySpec;
+  inheritVelocity?: number;
+};
+
+export type SnareEffect = {
+  kind: 'snare';
+  target: 'hit';
+  anchor: 'impact' | 'body';
+  durationTicks: number;
+  radius: number;
+  stiffness: number;
+  damping: number;
+  color?: string;
+  body?: PhysicsBodySpec;
+};
+
+export type DragBodyEffect = {
+  kind: 'dragBody';
+  target: 'self' | 'hit';
+  durationTicks: number;
+  leashLength: number;
+  stiffness: number;
+  damping: number;
+  color?: string;
+  body: PhysicsBodySpec;
+};
+
+export type ProjectileWorldCollision = 'despawn' | 'phase';
+
 export type ProjectileAbility = BaseAbility & {
   shape: 'projectile';
+  worldCollision?: ProjectileWorldCollision;
   speed: number;
   lifetimeTicks: number;
 };
@@ -351,13 +403,54 @@ export type ProjectileSnapshot = {
 
 export type EffectSnapshot = {
   effectId: string;
-  kind: 'impact' | 'melee' | 'spawn' | 'death' | 'knockback' | 'slow' | 'dash' | 'heal' | 'status' | 'trigger' | 'resource';
+  kind:
+    | 'impact'
+    | 'melee'
+    | 'spawn'
+    | 'death'
+    | 'knockback'
+    | 'slow'
+    | 'dash'
+    | 'heal'
+    | 'status'
+    | 'trigger'
+    | 'resource'
+    | 'physics'
+    | 'snare'
+    | 'drag';
   x: number;
   y: number;
   radius: number;
   color: string;
   ageTicks: number;
   lifetimeTicks: number;
+};
+
+export type PhysicsBodySnapshot = {
+  bodyId: string;
+  ownerId?: string;
+  sourceAbilityId?: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+  color: string;
+  remainingTicks: number;
+};
+
+export type ConstraintSnapshot = {
+  constraintId: string;
+  kind: 'snare' | 'drag';
+  targetId: string;
+  ownerId?: string;
+  sourceAbilityId?: string;
+  anchorBodyId?: string;
+  anchorX: number;
+  anchorY: number;
+  length: number;
+  color: string;
+  remainingTicks: number;
 };
 
 export type CombatTextSnapshot = {
@@ -371,7 +464,8 @@ export type CombatTextSnapshot = {
   lifetimeTicks: number;
 };
 
-export type MechanicTraceKind = 'event' | 'trigger' | 'condition-failed' | 'action' | 'guard';
+export type MechanicTraceKind = 'event' | 'trigger' | 'condition-failed' | 'action' | 'guard' | 'physics';
+export type PhysicsTraceKind = 'spawnBody' | 'snare' | 'dragBody' | 'expire' | 'cleanup';
 
 export type MechanicTraceSnapshot = {
   traceId: string;
@@ -382,6 +476,7 @@ export type MechanicTraceSnapshot = {
   triggerName?: string;
   conditionKind?: MechanicCondition['kind'];
   actionKind?: MechanicAction['kind'];
+  physicsKind?: PhysicsTraceKind;
   result: 'queued' | 'fired' | 'skipped' | 'applied' | 'blocked';
   sourceId?: string;
   sourceName?: string;
@@ -417,6 +512,8 @@ export type EngineSnapshot = {
   rulesetId: string;
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
+  physicsBodies: PhysicsBodySnapshot[];
+  constraints: ConstraintSnapshot[];
   effects: EffectSnapshot[];
   combatTexts: CombatTextSnapshot[];
   mechanicTraces: MechanicTraceSnapshot[];
