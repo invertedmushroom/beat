@@ -7,6 +7,7 @@ export class CanvasRenderer {
   private frame?: number;
   private localPlayerId?: string;
   private emptyMessage = 'No room active';
+  private snapshotProvider?: () => EngineSnapshot | undefined;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const context = canvas.getContext('2d');
@@ -31,6 +32,10 @@ export class CanvasRenderer {
 
   setEmptyMessage(message: string): void {
     this.emptyMessage = message;
+  }
+
+  setSnapshotProvider(provider: (() => EngineSnapshot | undefined) | undefined): void {
+    this.snapshotProvider = provider;
   }
 
   resizeNow(): void {
@@ -77,6 +82,11 @@ export class CanvasRenderer {
   };
 
   private draw(): void {
+    const providedSnapshot = this.snapshotProvider?.();
+    if (providedSnapshot) {
+      this.snapshot = providedSnapshot;
+    }
+
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     this.ctx.clearRect(0, 0, width, height);

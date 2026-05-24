@@ -634,6 +634,46 @@ test('mobile client returns to menu when host leaves', async ({ context, page: h
   await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__ === undefined)).toBeTruthy();
 });
 
+test('multiplayer movement survives dropped snapshot packets', async ({ context, page: host }) => {
+  await host.addInitScript(() => {
+    const originalSend = RTCDataChannel.prototype.send;
+    let snapshotSends = 0;
+    RTCDataChannel.prototype.send = function patchedSend(this: RTCDataChannel, data: string | Blob | ArrayBuffer | ArrayBufferView) {
+      if (this.label === 'beat-snapshot' && typeof data === 'string' && data.includes('"type":"snapshot"')) {
+        snapshotSends += 1;
+        if (snapshotSends % 2 === 0) {
+          return;
+        }
+      }
+      return originalSend.call(this, data);
+    };
+  });
+
+  const roomName = `Drop Lab ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  const startX = await client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.x ?? 0);
+  await host.bringToFront();
+  await host.keyboard.down('KeyD');
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.x ?? 0))
+    .toBeGreaterThan(startX + 0.8);
+  await host.keyboard.up('KeyD');
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_NET_STATS__?.lastSnapshotBytes ?? 0)).toBeGreaterThan(0);
+});
+
 async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
   const canvas = await page.locator('#arena').boundingBox();
   if (!canvas) {

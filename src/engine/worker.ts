@@ -313,7 +313,7 @@ function handleCommand(command: EngineCommand): void {
       {
         const player = players.get(command.playerId);
         if (player) {
-          player.input = command.input;
+          acceptPlayerInput(player, command.input);
         }
       }
       return;
@@ -2594,6 +2594,44 @@ function neutralInput(): PlayerInput {
     slotReleases: [],
     sampledAtMs: performance.now(),
   };
+}
+
+function acceptPlayerInput(player: RuntimePlayer, input: PlayerInput): void {
+  if (input.sequence <= player.lastHandledInputSequence) {
+    return;
+  }
+
+  const currentUnhandled = player.input.sequence > player.lastHandledInputSequence;
+  if (input.sequence < player.input.sequence) {
+    if (currentUnhandled && hasInputEvents(input)) {
+      player.input = mergeInputEvents(player.input, input);
+    }
+    return;
+  }
+
+  if (input.sequence === player.input.sequence) {
+    player.input = mergeInputEvents(player.input, input);
+    return;
+  }
+
+  player.input = currentUnhandled ? mergeInputEvents(input, player.input) : input;
+}
+
+function hasInputEvents(input: PlayerInput): boolean {
+  return input.castSlots.length > 0 || input.slotPresses.length > 0 || input.slotReleases.length > 0;
+}
+
+function mergeInputEvents(base: PlayerInput, events: PlayerInput): PlayerInput {
+  return {
+    ...base,
+    castSlots: mergeSlots(base.castSlots, events.castSlots),
+    slotPresses: mergeSlots(base.slotPresses, events.slotPresses),
+    slotReleases: mergeSlots(base.slotReleases, events.slotReleases),
+  };
+}
+
+function mergeSlots(left: number[], right: number[]): number[] {
+  return Array.from(new Set([...left, ...right])).sort((a, b) => a - b);
 }
 
 function updateChargeAim(player: RuntimePlayer): void {

@@ -15,7 +15,8 @@ import type {
   RuntimeNpcConfig,
 } from './engine/protocol';
 import { InputController, type TouchControlElements } from './input/InputController';
-import { HostSession, ClientSession } from './net/webrtc';
+import { SnapshotSmoother, type SnapshotSmoothingStats } from './net/snapshotSmoothing';
+import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
 import type { RoomInfo } from './rooms/directory';
 import { createRoomDirectory } from './rooms/directoryFactory';
@@ -48,6 +49,7 @@ export class BeatApp {
   private hashLine!: HTMLDivElement;
   private rulesHashLine!: HTMLDivElement;
   private peerLine!: HTMLDivElement;
+  private networkLine!: HTMLDivElement;
   private matchLine!: HTMLDivElement;
   private localMechanicsRoot!: HTMLDivElement;
   private traceRoot!: HTMLDivElement;
@@ -80,6 +82,9 @@ export class BeatApp {
   private unsubscribeInput?: () => void;
   private unsubscribeSnapshot?: () => void;
   private lastSnapshot?: EngineSnapshot;
+  private snapshotSmoother?: SnapshotSmoother;
+  private networkStats?: NetDiagnostics;
+  private smoothingStats?: SnapshotSmoothingStats;
   private previousSlotCooldowns?: number[];
   private editableRuleset: Ruleset = createDefaultRuleset();
   private editableRulesetHash = '';
@@ -155,6 +160,7 @@ export class BeatApp {
     this.hashLine = requireNode<HTMLDivElement>('#hash-line');
     this.rulesHashLine = requireNode<HTMLDivElement>('#rules-hash-line');
     this.peerLine = requireNode<HTMLDivElement>('#peer-line');
+    this.networkLine = requireNode<HTMLDivElement>('#network-line');
     this.matchLine = requireNode<HTMLDivElement>('#match-line');
     this.localMechanicsRoot = requireNode<HTMLDivElement>('#local-mechanics');
     this.traceRoot = requireNode<HTMLDivElement>('#trace-log');
@@ -237,6 +243,10 @@ export class BeatApp {
       hostPeerId: this.peerId,
     });
     this.hostSession.onLog((message) => this.log(message));
+    this.hostSession.onStats((stats) => {
+      this.networkStats = stats;
+      this.updateNetworkLine();
+    });
     await this.hostSession.start();
     this.hashLine.textContent = `rules ${shortHash(rulesetHash)} · content ${shortHash(this.ruleset.contentHash)}`;
     this.setStatus(`hosting: ${room.name}`);
@@ -303,11 +313,25 @@ export class BeatApp {
     this.clientSession.onWelcome((playerId, joinedRoom, ruleset) => {
       this.localPlayerId = playerId;
       this.ruleset = ruleset;
+      this.snapshotSmoother = new SnapshotSmoother(ruleset, playerId);
+      this.renderer.setSnapshotProvider(() => {
+        const renderSnapshot = this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []);
+        this.smoothingStats = this.snapshotSmoother?.stats();
+        if (renderSnapshot) {
+          window.__BEAT_RENDER_SNAPSHOT__ = renderSnapshot;
+        }
+        return renderSnapshot;
+      });
       this.renderer.setRuleset(ruleset);
       this.renderer.setEmptyMessage('No room active');
       this.renderer.setLocalPlayer(playerId);
       this.hashLine.textContent = `rules ${shortHash(joinedRoom.rulesetHash)} · content ${shortHash(joinedRoom.contentHash)}`;
       this.setStatus(`joined: ${joinedRoom.name}`);
+    });
+    this.clientSession.onStats((stats) => {
+      this.networkStats = stats;
+      this.smoothingStats = this.snapshotSmoother?.stats();
+      this.updateNetworkLine();
     });
     this.clientSession.onSnapshot((snapshot) => {
       this.consumeSnapshot(snapshot, `joined: ${room.name}`);
@@ -342,11 +366,17 @@ export class BeatApp {
     this.localPlayerId = undefined;
     this.ruleset = undefined;
     this.lastSnapshot = undefined;
+    this.snapshotSmoother = undefined;
+    this.networkStats = undefined;
+    this.smoothingStats = undefined;
     this.previousSlotCooldowns = undefined;
     this.resetLabState();
     window.__BEAT_SNAPSHOT__ = undefined;
+    window.__BEAT_RENDER_SNAPSHOT__ = undefined;
+    window.__BEAT_NET_STATS__ = undefined;
     window.__BEAT_TRACE__ = undefined;
     window.__BEAT_AI_TRACE__ = undefined;
+    this.renderer.setSnapshotProvider(undefined);
     this.renderer.setRuleset(undefined);
     this.renderer.setEmptyMessage('No room active');
     this.renderer.setLocalPlayer(undefined);
@@ -354,6 +384,7 @@ export class BeatApp {
     this.updateSkillBar(undefined);
     this.updateLocalMechanics(undefined);
     this.updateMatchHud(undefined);
+    this.updateNetworkLine();
     this.renderTrace([], []);
     this.mode = 'idle';
     this.setRulesLocked(false);
@@ -394,6 +425,32 @@ export class BeatApp {
     const text = `${status} · humans ${humans} · actors ${actors}`;
     this.statusLine.textContent = text;
     this.menuStatusLine.textContent = text;
+  }
+
+  private updateNetworkLine(): void {
+    const stats = this.networkStats;
+    const smoothing = this.smoothingStats;
+    if (!stats) {
+      this.networkLine.textContent = this.mode === 'client' || this.mode === 'host' ? 'net waiting' : 'net idle';
+      window.__BEAT_NET_STATS__ = undefined;
+      return;
+    }
+    window.__BEAT_NET_STATS__ = {
+      ...stats,
+      predictionErrorEwma: smoothing?.predictionErrorEwma,
+      predictionErrorMax: smoothing?.predictionErrorMax,
+      remoteExtrapolationSeconds: smoothing?.remoteExtrapolationSeconds,
+      remoteExtrapolationEvents: smoothing?.remoteExtrapolationEvents,
+    };
+    const relay = stats.candidateType === 'unknown' ? 'ice unknown' : stats.relay ? 'TURN relay' : `${stats.candidateType} direct`;
+    const rtt = stats.rttMs === undefined ? 'rtt --' : `rtt ${Math.round(stats.rttMs)}ms`;
+    const rate = `${Math.round(stats.bytesPerSecond / 1024)}KB/s`;
+    const snapshot = `${Math.round(stats.lastSnapshotBytes / 1024)}KB snap`;
+    const backlog = `${Math.round(stats.backlogBytes / 1024)}KB queued`;
+    const drops = stats.role === 'host' ? `drop ${stats.droppedSnapshots} coal ${stats.coalescedSnapshots}` : `pending ${stats.pendingInputs ?? 0}`;
+    const prediction = smoothing ? `pred ${formatMeters(smoothing.predictionErrorEwma)}/${formatMeters(smoothing.predictionErrorMax)}` : 'pred --';
+    const extrapolation = smoothing ? `extrap ${smoothing.remoteExtrapolationEvents}/${smoothing.remoteExtrapolationSeconds.toFixed(2)}s` : 'extrap --';
+    this.networkLine.textContent = `net ${stats.role} · ${relay} · ${rtt} · ${rate} · ${snapshot} · ${backlog} · ${drops} · ${prediction} · ${extrapolation}`;
   }
 
   private log(message: string): void {
@@ -442,17 +499,25 @@ export class BeatApp {
   }
 
   private consumeSnapshot(snapshot: EngineSnapshot, status: string): void {
-    this.lastSnapshot = snapshot;
-    window.__BEAT_SNAPSHOT__ = snapshot;
+    if (this.mode === 'client' && this.snapshotSmoother) {
+      this.snapshotSmoother.pushAuthoritative(snapshot);
+      this.smoothingStats = this.snapshotSmoother.stats();
+    }
+    const presentationSnapshot =
+      this.mode === 'client' ? (this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []) ?? snapshot) : snapshot;
+    this.lastSnapshot = presentationSnapshot;
+    window.__BEAT_SNAPSHOT__ = presentationSnapshot;
+    window.__BEAT_RENDER_SNAPSHOT__ = presentationSnapshot;
     window.__BEAT_TRACE__ = snapshot.mechanicTraces;
     window.__BEAT_AI_TRACE__ = snapshot.aiTraces;
-    this.renderer.update(snapshot);
-    this.updateAimOrigin(snapshot);
-    this.updateSkillBar(snapshot);
-    this.updateLocalMechanics(snapshot);
-    this.updateMatchHud(snapshot);
+    this.renderer.update(presentationSnapshot);
+    this.updateAimOrigin(presentationSnapshot);
+    this.updateSkillBar(presentationSnapshot);
+    this.updateLocalMechanics(presentationSnapshot);
+    this.updateMatchHud(presentationSnapshot);
     this.renderTrace(snapshot.mechanicTraces, snapshot.aiTraces);
     this.setStatus(status);
+    this.updateNetworkLine();
   }
 
   private spawnSelectedLabActor(): void {
@@ -854,6 +919,7 @@ function shellHtml(): string {
           <div id="match-line">match idle</div>
           <div id="hash-line">rules idle</div>
           <div id="peer-line">peer</div>
+          <div id="network-line">net idle</div>
           <div id="local-mechanics" class="local-mechanics"></div>
         </div>
         <div class="arena-actions">
@@ -1199,6 +1265,13 @@ function aiTraceLabel(trace: AiTraceSnapshot): string {
 
 function shortTraceId(value: string | undefined): string | undefined {
   return value ? value.slice(-8) : undefined;
+}
+
+function formatMeters(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) {
+    return '--';
+  }
+  return `${value.toFixed(2)}m`;
 }
 
 function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConfig {
