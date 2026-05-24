@@ -1,7 +1,9 @@
 import RAPIER from '@dimforge/rapier2d-compat';
+import { chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
 import type {
   Ability,
+  CombatTextSnapshot,
   EffectSnapshot,
   EngineCommand,
   EngineEvent,
@@ -32,6 +34,9 @@ type RuntimePlayer = {
   respawnTick: number;
   cooldownUntil: Map<string, number>;
   facing: Vec2;
+  lastUsedSlot: number;
+  lastHandledInputSequence: number;
+  charging?: RuntimeCharge;
 };
 
 type RuntimeProjectile = {
@@ -67,6 +72,24 @@ type RuntimeEffect = {
   lifetimeTicks: number;
 };
 
+type RuntimeCombatText = {
+  textId: string;
+  kind: CombatTextSnapshot['kind'];
+  x: number;
+  y: number;
+  amount: number;
+  color: string;
+  createdTick: number;
+  lifetimeTicks: number;
+};
+
+type RuntimeCharge = {
+  slot: number;
+  ability: Ability;
+  startedTick: number;
+  aim: Vec2;
+};
+
 type Vec2 = { x: number; y: number };
 
 const port = self as unknown as WorkerPort;
@@ -79,10 +102,12 @@ let tick = 0;
 let spawnIndex = 0;
 let projectileIndex = 0;
 let effectIndex = 0;
+let combatTextIndex = 0;
 let players = new Map<string, RuntimePlayer>();
 let projectiles: RuntimeProjectile[] = [];
 let melees: RuntimeMelee[] = [];
 let effects: RuntimeEffect[] = [];
+let combatTexts: RuntimeCombatText[] = [];
 
 const AIM_ASSIST_CONE_DEGREES = 70;
 
@@ -151,10 +176,12 @@ function initialize(nextRuleset: Ruleset): void {
   spawnIndex = 0;
   projectileIndex = 0;
   effectIndex = 0;
+  combatTextIndex = 0;
   players = new Map();
   projectiles = [];
   melees = [];
   effects = [];
+  combatTexts = [];
 
   addArenaWalls(nextRuleset);
   for (const obstacle of nextRuleset.obstacles) {
@@ -216,6 +243,8 @@ function addPlayer(spawn: PlayerSpawn): void {
     respawnTick: 0,
     cooldownUntil: new Map(),
     facing: { x: 1, y: 0 },
+    lastUsedSlot: 0,
+    lastHandledInputSequence: 0,
   });
 }
 
@@ -238,49 +267,117 @@ function step(): void {
       respawnPlayer(player);
     }
     if (!player.alive) {
+      player.charging = undefined;
       player.body.setLinvel({ x: 0, y: 0 }, true);
+      player.lastHandledInputSequence = player.input.sequence;
       continue;
     }
 
+    const hasNewInputEvents = player.input.sequence !== player.lastHandledInputSequence;
+    const slotPresses = hasNewInputEvents ? player.input.slotPresses : [];
+    const castSlots = hasNewInputEvents ? player.input.castSlots : [];
+    const slotReleases = hasNewInputEvents ? player.input.slotReleases : [];
+
+    for (const slot of slotPresses) {
+      handleSlotPress(player, slot);
+    }
+    updateChargeAim(player);
     const axisX = clamp(player.input.moveX, -1, 1);
     const axisY = clamp(player.input.moveY, -1, 1);
     const mag = Math.hypot(axisX, axisY) || 1;
-    const speed = ruleset.player.speed;
+    const speedMultiplier = player.charging?.ability.charge?.moveSpeedMultiplier ?? 1;
+    const speed = ruleset.player.speed * speedMultiplier;
     player.body.setLinvel({ x: (axisX / mag) * speed, y: (axisY / mag) * speed }, true);
     player.facing = aimForPlayer(player);
-    for (const slot of player.input.castSlots) {
+    for (const slot of castSlots) {
       castSlot(player, slot);
     }
+    for (const slot of slotReleases) {
+      releaseCharge(player, slot);
+    }
+    if (player.charging && player.charging.ability.charge?.autoRelease && chargeTicks(player.charging) >= player.charging.ability.charge.maxTicks) {
+      releaseActiveCharge(player);
+    }
+    player.lastHandledInputSequence = player.input.sequence;
   }
 
   world.step();
   stepProjectiles();
   stepMelees();
   pruneEffects();
+  pruneCombatTexts();
   tick += 1;
   port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
 }
 
 function castSlot(player: RuntimePlayer, slot: number): void {
-  const activeRuleset = ruleset;
-  if (!activeRuleset) {
-    return;
-  }
-  if (!Number.isInteger(slot) || slot < 0 || slot >= activeRuleset.loadout.abilityIds.length) {
-    return;
-  }
-  const abilityId = activeRuleset.loadout.abilityIds[slot];
-  const ability = activeRuleset.abilities.find((candidate) => candidate.id === abilityId);
+  const ability = abilityForSlot(slot);
   if (!ability || (player.cooldownUntil.get(ability.id) ?? 0) > tick) {
+    return;
+  }
+  player.lastUsedSlot = slot;
+  if (ability.charge) {
     return;
   }
   player.cooldownUntil.set(ability.id, tick + ability.cooldownTicks);
   const aim = aimForAbility(player, ability);
+  spawnAbility(player, ability, aim);
+}
+
+function handleSlotPress(player: RuntimePlayer, slot: number): void {
+  const ability = abilityForSlot(slot);
+  if (!ability) {
+    return;
+  }
+  player.lastUsedSlot = slot;
+  if (!ability.charge || player.charging || (player.cooldownUntil.get(ability.id) ?? 0) > tick) {
+    return;
+  }
+  player.charging = {
+    slot,
+    ability,
+    startedTick: tick,
+    aim: aimForAbility(player, ability),
+  };
+}
+
+function releaseCharge(player: RuntimePlayer, slot: number): void {
+  if (!player.charging || player.charging.slot !== slot) {
+    return;
+  }
+  releaseActiveCharge(player);
+}
+
+function releaseActiveCharge(player: RuntimePlayer): void {
+  const charge = player.charging;
+  if (!charge) {
+    return;
+  }
+  updateChargeAim(player);
+  const ability = scaleAbilityForCharge(charge.ability, chargeRatio(chargeTicks(charge), charge.ability.charge?.maxTicks ?? 1));
+  player.cooldownUntil.set(charge.ability.id, tick + charge.ability.cooldownTicks);
+  player.lastUsedSlot = charge.slot;
+  player.charging = undefined;
+  const pos = player.body.translation();
+  addEffect('impact', pos.x, pos.y, (ruleset?.player.radius ?? 0.5) * 3.2, charge.ability.color, 24);
+  spawnAbility(player, ability, charge.aim);
+}
+
+function spawnAbility(player: RuntimePlayer, ability: Ability, aim: Vec2): void {
   if (ability.shape === 'projectile') {
     spawnProjectile(player, ability, aim);
   } else {
     spawnMelee(player, ability, aim);
   }
+}
+
+function abilityForSlot(slot: number): Ability | undefined {
+  const activeRuleset = ruleset;
+  if (!activeRuleset || !Number.isInteger(slot) || slot < 0 || slot >= activeRuleset.loadout.abilityIds.length) {
+    return undefined;
+  }
+  const abilityId = activeRuleset.loadout.abilityIds[slot];
+  return activeRuleset.abilities.find((candidate) => candidate.id === abilityId);
 }
 
 function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility, aim: Vec2): void {
@@ -397,16 +494,18 @@ function damagePlayer(player: RuntimePlayer, damage: number): void {
   if (!ruleset || !player.alive) {
     return;
   }
+  const pos = player.body.translation();
   player.hp = Math.max(0, player.hp - damage);
+  addCombatText(pos.x, pos.y - ruleset.player.radius * 1.8, 'damage', damage, '#ffd166');
   if (player.hp > 0) {
     return;
   }
+  player.charging = undefined;
   player.alive = false;
   player.respawnTick = tick + ruleset.player.respawnTicks;
   player.body.setLinvel({ x: 0, y: 0 }, true);
   player.body.setEnabled(false);
-  const pos = player.body.translation();
-  addImpact(pos.x, pos.y, ruleset.player.radius * 4, '#ffffff');
+  addEffect('death', pos.x, pos.y, ruleset.player.radius * 5, '#ffffff', 28);
 }
 
 function respawnPlayer(player: RuntimePlayer): void {
@@ -426,10 +525,10 @@ function respawnPlayer(player: RuntimePlayer): void {
     kind: 'spawn',
     x: point.x,
     y: point.y,
-    radius: ruleset.player.radius * 3,
+    radius: ruleset.player.radius * 3.4,
     color: '#2fd17c',
     createdTick: tick,
-    lifetimeTicks: 20,
+    lifetimeTicks: 24,
   });
 }
 
@@ -467,20 +566,41 @@ function hitsArenaOrObstacle(point: Vec2, radius: number): boolean {
 }
 
 function addImpact(x: number, y: number, radius: number, color: string): void {
+  addEffect('impact', x, y, radius, color, 14);
+}
+
+function addEffect(kind: EffectSnapshot['kind'], x: number, y: number, radius: number, color: string, lifetimeTicks: number): void {
   effects.push({
-    effectId: `impact-${++effectIndex}`,
-    kind: 'impact',
+    effectId: `${kind}-${++effectIndex}`,
+    kind,
     x,
     y,
     radius,
     color,
     createdTick: tick,
-    lifetimeTicks: 14,
+    lifetimeTicks,
   });
 }
 
 function pruneEffects(): void {
   effects = effects.filter((effect) => tick - effect.createdTick < effect.lifetimeTicks);
+}
+
+function addCombatText(x: number, y: number, kind: CombatTextSnapshot['kind'], amount: number, color: string): void {
+  combatTexts.push({
+    textId: `${kind}-${++combatTextIndex}`,
+    kind,
+    x,
+    y,
+    amount,
+    color,
+    createdTick: tick,
+    lifetimeTicks: 28,
+  });
+}
+
+function pruneCombatTexts(): void {
+  combatTexts = combatTexts.filter((text) => tick - text.createdTick < text.lifetimeTicks);
 }
 
 function readSnapshot(): EngineSnapshot {
@@ -495,9 +615,11 @@ function readSnapshot(): EngineSnapshot {
     rulesetId: activeRuleset.id,
     projectiles: projectiles.map(toProjectileSnapshot),
     effects: effects.map(toEffectSnapshot),
+    combatTexts: combatTexts.map(toCombatTextSnapshot),
     players: Array.from(players.values()).map((player) => {
       const pos = player.body.translation();
       const vel = player.body.linvel();
+      const aim = aimForPlayer(player);
       return {
         playerId: player.spawn.playerId,
         displayName: player.spawn.displayName,
@@ -511,9 +633,27 @@ function readSnapshot(): EngineSnapshot {
         alive: player.alive,
         respawnTick: player.respawnTick,
         slotCooldownTicks: activeRuleset.loadout.abilityIds.map((abilityId) => Math.max(0, (player.cooldownUntil.get(abilityId) ?? 0) - tick)),
+        lastUsedSlot: player.lastUsedSlot,
+        aimDx: aim.x,
+        aimDy: aim.y,
+        charging: player.charging ? toChargingSnapshot(player.charging) : undefined,
         lastInputSequence: player.input.sequence,
       };
     }),
+  };
+}
+
+function toChargingSnapshot(charge: RuntimeCharge): NonNullable<EngineSnapshot['players'][number]['charging']> {
+  const maxTicks = charge.ability.charge?.maxTicks ?? 1;
+  const ticks = chargeTicks(charge);
+  return {
+    slot: charge.slot,
+    abilityId: charge.ability.id,
+    chargeTicks: ticks,
+    maxTicks,
+    ratio: chargeRatio(ticks, maxTicks),
+    aimDx: charge.aim.x,
+    aimDy: charge.aim.y,
   };
 }
 
@@ -542,6 +682,19 @@ function toEffectSnapshot(effect: RuntimeEffect): EffectSnapshot {
   };
 }
 
+function toCombatTextSnapshot(text: RuntimeCombatText): CombatTextSnapshot {
+  return {
+    textId: text.textId,
+    kind: text.kind,
+    x: text.x,
+    y: text.y,
+    amount: text.amount,
+    color: text.color,
+    ageTicks: tick - text.createdTick,
+    lifetimeTicks: text.lifetimeTicks,
+  };
+}
+
 function stop(): void {
   if (tickHandle !== undefined) {
     clearInterval(tickHandle);
@@ -553,6 +706,7 @@ function stop(): void {
   projectiles = [];
   melees = [];
   effects = [];
+  combatTexts = [];
 }
 
 function neutralInput(): PlayerInput {
@@ -563,8 +717,21 @@ function neutralInput(): PlayerInput {
     aimDx: 0,
     aimDy: 0,
     castSlots: [],
+    slotPresses: [],
+    slotReleases: [],
     sampledAtMs: performance.now(),
   };
+}
+
+function updateChargeAim(player: RuntimePlayer): void {
+  if (!player.charging) {
+    return;
+  }
+  player.charging.aim = aimForAbility(player, player.charging.ability);
+}
+
+function chargeTicks(charge: RuntimeCharge): number {
+  return Math.max(0, tick - charge.startedTick);
 }
 
 function aimForAbility(player: RuntimePlayer, ability: Ability): Vec2 {

@@ -1,6 +1,6 @@
 # Beat
 
-Beat is a standalone prototype for hackable PWA-hosted arena rooms.
+Beat is a standalone prototype for PWA-hosted arena rooms.
 
 The important boundary: the browser can cache and run the game client, local rules, and Rapier2D simulation, but it does not host SpacetimeDB. The host PWA owns the live simulation and peers connect over WebRTC data channels. SpacetimeDB is the room directory, host identity record, join ledger, and WebRTC signaling mailbox.
 
@@ -17,7 +17,7 @@ npm run dev
 
 Open `http://127.0.0.1:5177`.
 
-For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, aim with the mouse, and cast skills with `Space`, left click, or `1`-`4`. On phones, use the left virtual joystick and the right skill buttons or fire pad.
+For a quick smoke test, press `Solo`, move with `WASD`/arrow keys, aim with the mouse, and cast skills with `Space`, left click, or `1`-`4`. Hold a charged skill to power it up; it fires automatically at full charge. On phones, use the left virtual joystick and press-drag-hold the right skill buttons to aim charged casts.
 
 For a quick multiplayer smoke test, open the app in two tabs:
 
@@ -27,14 +27,14 @@ For a quick multiplayer smoke test, open the app in two tabs:
 
 By default the directory uses `localStorage` and `BroadcastChannel`, so it is same-origin and same-browser. Copy `.env.example` to `.env.local` and set `VITE_DIRECTORY_DRIVER=spacetime` to use STDB directly.
 
-## Hackable Rules
+## Customizable Rules
 
 The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or reset the rules before starting a room. The initial rules surface includes:
 
 - arena size and static obstacles
 - player speed, HP, radius, damping, and respawn time
 - a four-slot loadout
-- projectile and melee ability definitions with targeting, damage, cooldown, range, radius, color, and shape-specific timing
+- projectile and melee ability definitions with targeting, optional charge tuning, damage, cooldown, range, radius, color, and shape-specific timing
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 

@@ -14,11 +14,24 @@ export type BaseAbility = {
   name: string;
   shape: AbilityShape;
   targeting: AbilityTargeting;
+  charge?: AbilityCharge;
   damage: number;
   cooldownTicks: number;
   radius: number;
   range: number;
   color: string;
+};
+
+export type AbilityCharge = {
+  maxTicks: number;
+  moveSpeedMultiplier: number;
+  damageMultiplierMin: number;
+  damageMultiplierMax: number;
+  rangeMultiplierMin?: number;
+  rangeMultiplierMax?: number;
+  radiusMultiplierMin?: number;
+  radiusMultiplierMax?: number;
+  autoRelease: true;
 };
 
 export type ProjectileAbility = BaseAbility & {
@@ -69,6 +82,8 @@ export type PlayerInput = {
   aimDx: number;
   aimDy: number;
   castSlots: number[];
+  slotPresses: number[];
+  slotReleases: number[];
   sampledAtMs: number;
 };
 
@@ -92,7 +107,21 @@ export type PlayerSnapshot = {
   alive: boolean;
   respawnTick: number;
   slotCooldownTicks: number[];
+  lastUsedSlot: number;
+  aimDx: number;
+  aimDy: number;
+  charging?: ChargingSnapshot;
   lastInputSequence: number;
+};
+
+export type ChargingSnapshot = {
+  slot: number;
+  abilityId: string;
+  chargeTicks: number;
+  maxTicks: number;
+  ratio: number;
+  aimDx: number;
+  aimDy: number;
 };
 
 export type ProjectileSnapshot = {
@@ -107,10 +136,21 @@ export type ProjectileSnapshot = {
 
 export type EffectSnapshot = {
   effectId: string;
-  kind: 'impact' | 'melee' | 'spawn';
+  kind: 'impact' | 'melee' | 'spawn' | 'death';
   x: number;
   y: number;
   radius: number;
+  color: string;
+  ageTicks: number;
+  lifetimeTicks: number;
+};
+
+export type CombatTextSnapshot = {
+  textId: string;
+  kind: 'damage' | 'heal';
+  x: number;
+  y: number;
+  amount: number;
   color: string;
   ageTicks: number;
   lifetimeTicks: number;
@@ -123,6 +163,7 @@ export type EngineSnapshot = {
   players: PlayerSnapshot[];
   projectiles: ProjectileSnapshot[];
   effects: EffectSnapshot[];
+  combatTexts: CombatTextSnapshot[];
 };
 
 export type EngineCommand =

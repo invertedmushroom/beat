@@ -1,4 +1,4 @@
-import type { Ability, MeleeAbility, ProjectileAbility, Ruleset } from './protocol';
+import type { Ability, AbilityCharge, MeleeAbility, ProjectileAbility, Ruleset } from './protocol';
 
 export function parseRulesetJson(json: string): Ruleset {
   const parsed = JSON.parse(json) as unknown;
@@ -81,6 +81,7 @@ function validateAbility(value: unknown): Ability {
     id: readId(ability.id, 'ability.id'),
     name: clampString(readString(ability.name, 'ability.name'), 1, 36, 'ability.name'),
     targeting: validateTargeting(ability.targeting),
+    charge: validateCharge(ability.charge),
     damage: readNumber(ability.damage, 'ability.damage', 0, 10_000),
     cooldownTicks: readInt(ability.cooldownTicks, 'ability.cooldownTicks', 1, 3_600),
     radius: readNumber(ability.radius, 'ability.radius', 0.05, 10),
@@ -106,6 +107,39 @@ function validateAbility(value: unknown): Ability {
     } satisfies MeleeAbility;
   }
   throw new Error('ability.shape must be projectile or melee');
+}
+
+function validateCharge(value: unknown): AbilityCharge | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const charge = assertRecord(value, 'ability.charge');
+  const damageMultiplierMin = readNumber(charge.damageMultiplierMin, 'ability.charge.damageMultiplierMin', 0, 20);
+  const damageMultiplierMax = readNumber(charge.damageMultiplierMax, 'ability.charge.damageMultiplierMax', 0, 20);
+  if (damageMultiplierMax < damageMultiplierMin) {
+    throw new Error('ability.charge.damageMultiplierMax must be greater than or equal to damageMultiplierMin');
+  }
+  const rangeMultiplierMin = readOptionalNumber(charge.rangeMultiplierMin, 'ability.charge.rangeMultiplierMin', 0, 20);
+  const rangeMultiplierMax = readOptionalNumber(charge.rangeMultiplierMax, 'ability.charge.rangeMultiplierMax', 0, 20);
+  validateOptionalMultiplierPair(rangeMultiplierMin, rangeMultiplierMax, 'ability.charge.rangeMultiplier');
+  const radiusMultiplierMin = readOptionalNumber(charge.radiusMultiplierMin, 'ability.charge.radiusMultiplierMin', 0, 20);
+  const radiusMultiplierMax = readOptionalNumber(charge.radiusMultiplierMax, 'ability.charge.radiusMultiplierMax', 0, 20);
+  validateOptionalMultiplierPair(radiusMultiplierMin, radiusMultiplierMax, 'ability.charge.radiusMultiplier');
+  const autoRelease = charge.autoRelease === undefined ? true : readBoolean(charge.autoRelease, 'ability.charge.autoRelease');
+  if (autoRelease !== true) {
+    throw new Error('ability.charge.autoRelease must be true');
+  }
+  return {
+    maxTicks: readInt(charge.maxTicks, 'ability.charge.maxTicks', 1, 600),
+    moveSpeedMultiplier: readOptionalNumber(charge.moveSpeedMultiplier, 'ability.charge.moveSpeedMultiplier', 0, 1) ?? 0.55,
+    damageMultiplierMin,
+    damageMultiplierMax,
+    ...(rangeMultiplierMin === undefined ? {} : { rangeMultiplierMin }),
+    ...(rangeMultiplierMax === undefined ? {} : { rangeMultiplierMax }),
+    ...(radiusMultiplierMin === undefined ? {} : { radiusMultiplierMin }),
+    ...(radiusMultiplierMax === undefined ? {} : { radiusMultiplierMax }),
+    autoRelease,
+  };
 }
 
 function validateTargeting(value: unknown): Ability['targeting'] {
@@ -137,6 +171,13 @@ function readString(value: unknown, label: string): string {
   return value;
 }
 
+function readBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${label} must be a boolean`);
+  }
+  return value;
+}
+
 function readId(value: unknown, label: string): string {
   const id = clampString(readString(value, label), 1, 96, label);
   if (!/^[a-zA-Z0-9:_-]+$/.test(id)) {
@@ -160,12 +201,28 @@ function readNumber(value: unknown, label: string, min: number, max: number): nu
   return value;
 }
 
+function readOptionalNumber(value: unknown, label: string, min: number, max: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readNumber(value, label, min, max);
+}
+
 function readInt(value: unknown, label: string, min: number, max: number): number {
   const number = readNumber(value, label, min, max);
   if (!Number.isInteger(number)) {
     throw new Error(`${label} must be an integer`);
   }
   return number;
+}
+
+function validateOptionalMultiplierPair(min: number | undefined, max: number | undefined, label: string): void {
+  if ((min === undefined) !== (max === undefined)) {
+    throw new Error(`${label}Min and ${label}Max must be provided together`);
+  }
+  if (min !== undefined && max !== undefined && max < min) {
+    throw new Error(`${label}Max must be greater than or equal to ${label}Min`);
+  }
 }
 
 function clampString(value: string, minLength: number, maxLength: number, label: string): string {

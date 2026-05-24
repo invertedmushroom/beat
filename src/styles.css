@@ -311,20 +311,39 @@ h2 {
   opacity: 0.72;
 }
 
+.skill-slot.is-ready-flash {
+  animation: skill-ready-flash 520ms ease-out;
+}
+
 .skill-slot:hover,
 .skill-slot:focus-visible {
   border-color: #ffe66d;
   outline: none;
 }
 
-.skill-slot__cooldown-fill {
+.skill-slot__cooldown-fill,
+.skill-slot__charge-fill {
   position: absolute;
   inset: 0;
   z-index: 0;
+  pointer-events: none;
+}
+
+.skill-slot__cooldown-fill {
   background: rgba(5, 5, 5, 0.56);
   transform: scaleY(var(--cooldown-ratio, 0));
   transform-origin: bottom;
-  pointer-events: none;
+}
+
+.skill-slot__charge-fill {
+  opacity: 0;
+  background: color-mix(in srgb, var(--skill-color, #ffe66d), transparent 54%);
+  transform: scaleX(var(--charge-ratio, 0));
+  transform-origin: left;
+}
+
+.skill-slot.is-charging .skill-slot__charge-fill {
+  opacity: 1;
 }
 
 .skill-slot__key,
@@ -366,6 +385,22 @@ h2 {
   color: #ffe66d;
   font: 700 18px ui-monospace, "SFMono-Regular", Consolas, monospace;
   pointer-events: none;
+}
+
+@keyframes skill-ready-flash {
+  0% {
+    border-color: #f5f3ed;
+    box-shadow: 0 0 0 0 rgba(245, 243, 237, 0.78);
+  }
+
+  50% {
+    border-color: #ffe66d;
+    box-shadow: 0 0 0 8px rgba(255, 230, 109, 0.16);
+  }
+
+  100% {
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+  }
 }
 
 .arena-log {

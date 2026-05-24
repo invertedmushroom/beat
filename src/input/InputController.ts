@@ -30,6 +30,8 @@ export class InputController {
   private firePressed = false;
   private aimOrigin?: Vec2;
   private queuedCastSlots: number[] = [];
+  private queuedSlotPresses: number[] = [];
+  private queuedSlotReleases: number[] = [];
   private interval?: number;
 
   constructor(
@@ -120,6 +122,8 @@ export class InputController {
     const fallbackAim = this.hasExplicitAim ? this.lastExplicitAim : magnitude(move) > 0.01 ? move : { x: 1, y: 0 };
     const aim = explicitAim ?? fallbackAim;
     const castSlots = this.drainCastSlots();
+    const slotPresses = this.drainSlotPresses();
+    const slotReleases = this.drainSlotReleases();
     const input: PlayerInput = {
       sequence: ++this.sequence,
       moveX: move.x,
@@ -127,6 +131,8 @@ export class InputController {
       aimDx: aim.x,
       aimDy: aim.y,
       castSlots,
+      slotPresses,
+      slotReleases,
       sampledAtMs: performance.now(),
     };
     for (const listener of this.listeners) {
@@ -142,6 +148,7 @@ export class InputController {
       event.preventDefault();
       const slot = slotForKey(event.code);
       if (slot !== undefined && !this.keys.has(event.code)) {
+        this.queueSlotPress(slot);
         this.queueCast(slot);
       }
       this.keys.add(event.code);
@@ -154,6 +161,10 @@ export class InputController {
     }
     if (isGameKey(event.code)) {
       event.preventDefault();
+      const slot = slotForKey(event.code);
+      if (slot !== undefined && this.keys.has(event.code)) {
+        this.queueSlotRelease(slot);
+      }
       this.keys.delete(event.code);
     }
   };
@@ -171,6 +182,7 @@ export class InputController {
     }
     event.preventDefault();
     this.updateMouseAim(event);
+    this.queueSlotPress(0);
     this.queueCast(0);
     this.target.setPointerCapture(event.pointerId);
   };
@@ -180,6 +192,7 @@ export class InputController {
       return;
     }
     this.updateMouseAim(event);
+    this.queueSlotRelease(0);
   };
 
   private readonly onJoystickPointerDown = (event: PointerEvent): void => {
@@ -209,6 +222,7 @@ export class InputController {
     this.firePressed = true;
     this.controls?.firePad.setPointerCapture(event.pointerId);
     this.updateFire(event);
+    this.queueSlotPress(0);
   };
 
   private readonly onFirePointerMove = (event: PointerEvent): void => {
@@ -224,6 +238,7 @@ export class InputController {
     this.updateFire(event);
     this.rememberTouchAim();
     this.queueCast(0);
+    this.queueSlotRelease(0);
     this.clearFirePointer();
   };
 
@@ -246,6 +261,7 @@ export class InputController {
     this.skillPointerElement = button;
     button.setPointerCapture(event.pointerId);
     this.updateSkillAim(event);
+    this.queueSlotPress(slot);
   };
 
   private readonly onSkillPointerMove = (event: PointerEvent): void => {
@@ -261,6 +277,7 @@ export class InputController {
     this.updateSkillAim(event);
     this.rememberTouchAim();
     this.queueCast(this.skillPointerSlot);
+    this.queueSlotRelease(this.skillPointerSlot);
     this.clearSkillPointer();
   };
 
@@ -349,9 +366,29 @@ export class InputController {
     this.queuedCastSlots.push(slot);
   }
 
+  private queueSlotPress(slot: number): void {
+    this.queuedSlotPresses.push(slot);
+  }
+
+  private queueSlotRelease(slot: number): void {
+    this.queuedSlotReleases.push(slot);
+  }
+
   private drainCastSlots(): number[] {
     const slots = Array.from(new Set(this.queuedCastSlots.filter((slot) => Number.isInteger(slot) && slot >= 0 && slot < 4)));
     this.queuedCastSlots = [];
+    return slots;
+  }
+
+  private drainSlotPresses(): number[] {
+    const slots = Array.from(new Set(this.queuedSlotPresses.filter((slot) => Number.isInteger(slot) && slot >= 0 && slot < 4)));
+    this.queuedSlotPresses = [];
+    return slots;
+  }
+
+  private drainSlotReleases(): number[] {
+    const slots = Array.from(new Set(this.queuedSlotReleases.filter((slot) => Number.isInteger(slot) && slot >= 0 && slot < 4)));
+    this.queuedSlotReleases = [];
     return slots;
   }
 }

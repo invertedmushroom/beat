@@ -7,7 +7,7 @@
   "display": "standalone",
   "background_color": "#141414",
   "theme_color": "#141414",
-  "description": "Hackable browser-hosted arena rooms with Rapier2D and WebRTC.",
+  "description": "Browser-hosted arena rooms with Rapier2D and WebRTC.",
   "icons": [
     {
       "src": "icon.svg",

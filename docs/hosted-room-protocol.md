@@ -14,6 +14,8 @@ type ClientToHost =
         aimDx: number;
         aimDy: number;
         castSlots: number[];
+        slotPresses: number[];
+        slotReleases: number[];
         sampledAtMs: number;
       };
     };
@@ -28,7 +30,7 @@ type HostToClient =
   | { type: 'notice'; message: string };
 ```
 
-Snapshots include players, active projectiles, and short-lived visual effects. Player snapshots include HP, alive/respawn state, last input sequence, and four loadout slot cooldowns.
+Snapshots include players, active projectiles, short-lived visual effects, and combat text. Player snapshots include HP, alive/respawn state, last input sequence, four loadout slot cooldowns, aim direction, last-used slot, and optional charge state.
 
 ## Authority
 
@@ -37,7 +39,7 @@ The host's worker is the authority for:
 - entity spawn/removal
 - collision and movement
 - hit detection
-- ability cooldowns, projectile/melee resolution, HP, death, and respawn
+- ability cooldowns, charge timing, projectile/melee resolution, HP, death, and respawn
 - tick number
 - snapshot publication
 

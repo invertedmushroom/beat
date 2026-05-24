@@ -55,6 +55,7 @@ export class BeatApp {
   private unsubscribeInput?: () => void;
   private unsubscribeSnapshot?: () => void;
   private lastSnapshot?: EngineSnapshot;
+  private previousSlotCooldowns?: number[];
   private editableRuleset: Ruleset = createDefaultRuleset();
   private editableRulesetHash = '';
 
@@ -291,6 +292,7 @@ export class BeatApp {
     this.localPlayerId = undefined;
     this.ruleset = undefined;
     this.lastSnapshot = undefined;
+    this.previousSlotCooldowns = undefined;
     window.__BEAT_SNAPSHOT__ = undefined;
     this.renderer.setRuleset(undefined);
     this.renderer.setEmptyMessage('No room active');
@@ -464,21 +466,34 @@ export class BeatApp {
   private updateSkillBar(snapshot: EngineSnapshot | undefined): void {
     const ruleset = this.ruleset;
     const local = this.localPlayerId ? snapshot?.players.find((player) => player.playerId === this.localPlayerId) : undefined;
+    const nextCooldowns: number[] = [];
     for (const [index, button] of this.skillButtons.entries()) {
       const abilityId = ruleset?.loadout.abilityIds[index];
       const ability = abilityId ? ruleset?.abilities.find((candidate) => candidate.id === abilityId) : undefined;
       const cooldown = local?.slotCooldownTicks[index] ?? 0;
+      const wasCooling = (this.previousSlotCooldowns?.[index] ?? 0) > 0;
+      const charging = local?.charging?.slot === index;
+      const chargeRatio = charging ? local.charging?.ratio ?? 0 : 0;
       const ratio = ability && ability.cooldownTicks > 0 ? Math.max(0, Math.min(1, cooldown / ability.cooldownTicks)) : 0;
+      nextCooldowns[index] = cooldown;
       button.style.setProperty('--skill-color', ability?.color ?? '#6a6760');
       button.style.setProperty('--cooldown-ratio', String(ratio));
+      button.style.setProperty('--charge-ratio', String(chargeRatio));
       button.classList.toggle('is-cooling', cooldown > 0);
+      button.classList.toggle('is-charging', charging);
       button.classList.toggle('is-unavailable', !ability || Boolean(local && !local.alive));
       button.disabled = !ability || Boolean(local && !local.alive);
+      if (ability && local?.alive && wasCooling && cooldown === 0) {
+        button.classList.remove('is-ready-flash');
+        void button.offsetWidth;
+        button.classList.add('is-ready-flash');
+      }
       button.title = ability ? `${index + 1} ${ability.name}` : `Slot ${index + 1}`;
       button.setAttribute('aria-label', ability ? `Slot ${index + 1}: ${ability.name}` : `Slot ${index + 1}`);
       button.querySelector('.skill-slot__name')?.replaceChildren(document.createTextNode(ability?.name ?? `Slot ${index + 1}`));
       button.querySelector('.skill-slot__timer')?.replaceChildren(document.createTextNode(cooldown > 0 ? String(cooldown) : ''));
     }
+    this.previousSlotCooldowns = snapshot ? nextCooldowns : undefined;
   }
 
   private touchControls(): TouchControlElements {
@@ -501,7 +516,7 @@ function shellHtml(): string {
           <div class="brand__mark"></div>
           <div>
             <h1>Beat</h1>
-            <p>PWA hosted hackable arena rooms</p>
+            <p>PWA hosted arena rooms</p>
           </div>
         </div>
         <div class="menu-grid">
@@ -552,24 +567,28 @@ function shellHtml(): string {
         <div id="skill-bar" class="skill-bar" aria-label="Skill bar">
           <button class="skill-slot" type="button" data-slot="0">
             <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__charge-fill"></span>
             <span class="skill-slot__key">1</span>
             <span class="skill-slot__name">Slot 1</span>
             <span class="skill-slot__timer"></span>
           </button>
           <button class="skill-slot" type="button" data-slot="1">
             <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__charge-fill"></span>
             <span class="skill-slot__key">2</span>
             <span class="skill-slot__name">Slot 2</span>
             <span class="skill-slot__timer"></span>
           </button>
           <button class="skill-slot" type="button" data-slot="2">
             <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__charge-fill"></span>
             <span class="skill-slot__key">3</span>
             <span class="skill-slot__name">Slot 3</span>
             <span class="skill-slot__timer"></span>
           </button>
           <button class="skill-slot" type="button" data-slot="3">
             <span class="skill-slot__cooldown-fill"></span>
+            <span class="skill-slot__charge-fill"></span>
             <span class="skill-slot__key">4</span>
             <span class="skill-slot__name">Slot 4</span>
             <span class="skill-slot__timer"></span>

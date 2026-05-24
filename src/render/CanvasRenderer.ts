@@ -105,6 +105,11 @@ export class CanvasRenderer {
       this.ctx.strokeRect(x, y, obstacle.halfWidth * 2 * scale, obstacle.halfHeight * 2 * scale);
     }
 
+    const local = this.snapshot?.players.find((player) => player.playerId === this.localPlayerId);
+    if (local?.alive) {
+      this.drawLocalTelegraph(local, originX, originY, scale);
+    }
+
     for (const effect of this.snapshot?.effects ?? []) {
       const x = originX + effect.x * scale;
       const y = originY + effect.y * scale;
@@ -113,9 +118,14 @@ export class CanvasRenderer {
       this.ctx.globalAlpha = Math.max(0, 1 - progress);
       this.ctx.beginPath();
       this.ctx.strokeStyle = effect.color;
-      this.ctx.lineWidth = effect.kind === 'melee' ? 2 : 3;
+      this.ctx.lineWidth = effect.kind === 'melee' ? 2 : effect.kind === 'death' ? 4 : 3;
       this.ctx.arc(x, y, effect.radius * scale * (0.7 + progress * 0.55), 0, Math.PI * 2);
       this.ctx.stroke();
+      if (effect.kind === 'death') {
+        this.ctx.globalAlpha = Math.max(0, 0.28 - progress * 0.28);
+        this.ctx.fillStyle = effect.color;
+        this.ctx.fill();
+      }
       this.ctx.restore();
     }
 
@@ -135,6 +145,9 @@ export class CanvasRenderer {
       const x = originX + player.x * scale;
       const y = originY + player.y * scale;
       const radius = this.ruleset.player.radius * scale;
+      if (player.charging) {
+        this.drawChargeAura(x, y, radius, player.charging.ratio, player.charging.abilityId);
+      }
       this.ctx.beginPath();
       this.ctx.fillStyle = player.alive ? `hsl(${player.hue} 76% 58%)` : '#55524a';
       this.ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -149,9 +162,25 @@ export class CanvasRenderer {
       this.ctx.fillText(player.displayName, x, y - radius - 9);
       this.drawHpBar(x, y + radius + 9, radius * 2.6, player.hp, player.maxHp, player.alive);
       if (!player.alive) {
-        this.ctx.fillStyle = '#b9b4a8';
-        this.ctx.fillText('respawn', x, y + 4);
+        this.drawDeathLabel(player, x, y, radius);
       }
+    }
+
+    for (const text of this.snapshot?.combatTexts ?? []) {
+      const x = originX + text.x * scale;
+      const y = originY + text.y * scale;
+      const progress = text.lifetimeTicks > 0 ? text.ageTicks / text.lifetimeTicks : 1;
+      this.ctx.save();
+      this.ctx.globalAlpha = Math.max(0, 1 - progress);
+      this.ctx.font = '700 15px ui-sans-serif, system-ui';
+      this.ctx.textAlign = 'center';
+      this.ctx.lineWidth = 3;
+      this.ctx.strokeStyle = '#141414';
+      this.ctx.fillStyle = text.color;
+      const label = `${text.kind === 'heal' ? '+' : '-'}${Math.round(text.amount)}`;
+      this.ctx.strokeText(label, x, y - progress * 18);
+      this.ctx.fillText(label, x, y - progress * 18);
+      this.ctx.restore();
     }
 
     this.ctx.font = '12px ui-monospace, monospace';
@@ -167,6 +196,82 @@ export class CanvasRenderer {
     this.ctx.fillRect(x - width / 2, y, width, height);
     this.ctx.fillStyle = alive ? '#2fd17c' : '#6a6760';
     this.ctx.fillRect(x - width / 2, y, width * ratio, height);
+  }
+
+  private drawLocalTelegraph(player: NonNullable<EngineSnapshot['players'][number]>, originX: number, originY: number, scale: number): void {
+    if (!this.ruleset) {
+      return;
+    }
+    const slot = player.charging?.slot ?? player.lastUsedSlot;
+    const ability = this.abilityForSlot(slot);
+    if (!ability) {
+      return;
+    }
+    const aim = normalized(player.charging?.aimDx ?? player.aimDx, player.charging?.aimDy ?? player.aimDy) ?? { x: 1, y: 0 };
+    const ratio = player.charging?.ratio ?? 0;
+    const range = ability.range * (ability.charge && player.charging ? lerp(ability.charge.rangeMultiplierMin ?? 1, ability.charge.rangeMultiplierMax ?? 1, ratio) : 1);
+    const x = originX + player.x * scale;
+    const y = originY + player.y * scale;
+    this.ctx.save();
+    this.ctx.strokeStyle = ability.color;
+    this.ctx.globalAlpha = player.charging ? 0.78 : 0.42;
+    this.ctx.lineWidth = player.charging ? 3 : 2;
+    this.ctx.setLineDash(player.charging ? [] : [8, 8]);
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, range * scale, 0, Math.PI * 2);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y);
+    this.ctx.lineTo(x + aim.x * range * scale, y + aim.y * range * scale);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+
+  private drawChargeAura(x: number, y: number, radius: number, ratio: number, abilityId: string): void {
+    const ability = this.ruleset?.abilities.find((candidate) => candidate.id === abilityId);
+    const color = ability?.color ?? '#ffe66d';
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.28 + ratio * 0.28;
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * (1.8 + ratio * 1.2), 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.globalAlpha = 0.95;
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = 3;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * 2.2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+
+  private drawDeathLabel(player: NonNullable<EngineSnapshot['players'][number]>, x: number, y: number, radius: number): void {
+    const remainingTicks = Math.max(0, player.respawnTick - (this.snapshot?.tick ?? 0));
+    const seconds = this.ruleset ? Math.ceil(remainingTicks / this.ruleset.tickRate) : remainingTicks;
+    this.ctx.save();
+    this.ctx.textAlign = 'center';
+    this.ctx.fillStyle = '#ffffff';
+    this.ctx.font = '800 14px ui-sans-serif, system-ui';
+    this.ctx.fillText('KO', x, y + 5);
+    this.ctx.fillStyle = '#b9b4a8';
+    this.ctx.font = '11px ui-monospace, monospace';
+    this.ctx.fillText(`${seconds}s`, x, y + radius + 22);
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.globalAlpha = 0.5;
+    this.ctx.lineWidth = 2;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, radius * 1.8, 0, Math.PI * 2);
+    this.ctx.stroke();
+    this.ctx.restore();
+  }
+
+  private abilityForSlot(slot: number): Ruleset['abilities'][number] | undefined {
+    if (!this.ruleset || !Number.isInteger(slot) || slot < 0 || slot >= this.ruleset.loadout.abilityIds.length) {
+      return undefined;
+    }
+    const abilityId = this.ruleset.loadout.abilityIds[slot];
+    return this.ruleset.abilities.find((ability) => ability.id === abilityId);
   }
 
   private drawGrid(originX: number, originY: number, scale: number, width: number, height: number): void {
@@ -204,4 +309,16 @@ export class CanvasRenderer {
     this.ctx.textAlign = 'center';
     this.ctx.fillText(text, this.canvas.clientWidth / 2, this.canvas.clientHeight / 2);
   }
+}
+
+function normalized(x: number, y: number): { x: number; y: number } | undefined {
+  const mag = Math.hypot(x, y);
+  if (mag < 0.001) {
+    return undefined;
+  }
+  return { x: x / mag, y: y / mag };
+}
+
+function lerp(min: number, max: number, ratio: number): number {
+  return min + (max - min) * Math.max(0, Math.min(1, ratio));
 }
