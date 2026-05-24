@@ -75,6 +75,9 @@ export class HostSession {
       if (peer.playerId) {
         this.options.engine.removePlayer(peer.playerId);
       }
+      if (peer.channel?.readyState === 'open') {
+        peer.channel.send(encodeMessage({ type: 'host-closed' }));
+      }
       peer.channel?.close();
       peer.connection.close();
       this.peers.delete(peerId);
@@ -262,6 +265,8 @@ export class ClientSession {
   private connection?: RTCPeerConnection;
   private channel?: RTCDataChannel;
   private unsubscribeSignals?: () => void;
+  private unsubscribeRooms?: () => void;
+  private hostSilenceHandle?: number;
   private currentRoom?: RoomInfo;
   private readonly sessionId = createId('session');
   private readonly pendingIce: RTCIceCandidateInit[] = [];
@@ -271,6 +276,8 @@ export class ClientSession {
   private readonly logListeners = new Set<LogListener>();
   private readonly disconnectListeners = new Set<() => void>();
   private localPlayerId?: string;
+  private disconnected = false;
+  private lastHostMessageAt = 0;
 
   constructor(
     private readonly options: {
@@ -282,10 +289,14 @@ export class ClientSession {
 
   async connect(room: RoomInfo): Promise<void> {
     this.currentRoom = room;
+    this.disconnected = false;
+    this.lastHostMessageAt = Date.now();
     this.connection = new RTCPeerConnection(RTC_CONFIG);
     this.channel = this.connection.createDataChannel('beat');
     this.bindConnectionLogs(this.connection, `client->${shortPeer(room.hostPeerId)}`);
     this.configureClientChannel();
+    this.unsubscribeRooms = this.options.directory.subscribeRooms((rooms) => this.handleRooms(rooms));
+    this.hostSilenceHandle = window.setInterval(() => this.checkHostSilence(), 1_000);
 
     this.connection.onicecandidate = (event) => {
       if (event.candidate) {
@@ -334,10 +345,20 @@ export class ClientSession {
   }
 
   destroy(): void {
-    this.unsubscribeSignals?.();
-    this.channel?.close();
-    this.connection?.close();
+    this.disconnected = true;
+    this.cleanupTransport();
     this.pendingIce.length = 0;
+  }
+
+  private handleRooms(rooms: RoomInfo[]): void {
+    if (this.disconnected || !this.currentRoom || !this.localPlayerId) {
+      return;
+    }
+    const roomOpen = rooms.some((room) => room.roomId === this.currentRoom?.roomId && room.status !== 'closed');
+    if (!roomOpen) {
+      this.log('room closed');
+      this.notifyDisconnect();
+    }
   }
 
   private async handleSignal(signal: RoomSignal): Promise<void> {
@@ -393,6 +414,12 @@ export class ClientSession {
       if (!message) {
         return;
       }
+      this.lastHostMessageAt = Date.now();
+      if (message.type === 'host-closed') {
+        this.log('host closed room');
+        this.notifyDisconnect();
+        return;
+      }
       if (message.type === 'welcome') {
         this.localPlayerId = message.playerId;
         for (const listener of this.welcomeListeners) {
@@ -406,8 +433,20 @@ export class ClientSession {
         }
         return;
       }
-      this.log(message.message);
+      if (message.type === 'notice') {
+        this.log(message.message);
+      }
     };
+  }
+
+  private checkHostSilence(): void {
+    if (this.disconnected || !this.localPlayerId) {
+      return;
+    }
+    if (Date.now() - this.lastHostMessageAt > 5_000) {
+      this.log('host timed out');
+      this.notifyDisconnect();
+    }
   }
 
   private async flushIce(): Promise<void> {
@@ -432,9 +471,40 @@ export class ClientSession {
   }
 
   private notifyDisconnect(): void {
+    if (this.disconnected) {
+      return;
+    }
+    this.disconnected = true;
+    this.cleanupTransport();
     for (const listener of this.disconnectListeners) {
       listener();
     }
+  }
+
+  private cleanupTransport(): void {
+    this.unsubscribeSignals?.();
+    this.unsubscribeSignals = undefined;
+    this.unsubscribeRooms?.();
+    this.unsubscribeRooms = undefined;
+    if (this.hostSilenceHandle !== undefined) {
+      window.clearInterval(this.hostSilenceHandle);
+      this.hostSilenceHandle = undefined;
+    }
+    if (this.channel) {
+      this.channel.onclose = null;
+      this.channel.onerror = null;
+      this.channel.onmessage = null;
+      this.channel.onopen = null;
+    }
+    if (this.connection) {
+      this.connection.onconnectionstatechange = null;
+      this.connection.onicecandidate = null;
+      this.connection.oniceconnectionstatechange = null;
+    }
+    this.channel?.close();
+    this.connection?.close();
+    this.channel = undefined;
+    this.connection = undefined;
   }
 }
 

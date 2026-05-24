@@ -27,7 +27,8 @@ type ClientToHost =
 type HostToClient =
   | { type: 'welcome'; playerId: string; room: RoomInfo; ruleset: Ruleset }
   | { type: 'snapshot'; snapshot: EngineSnapshot }
-  | { type: 'notice'; message: string };
+  | { type: 'notice'; message: string }
+  | { type: 'host-closed' };
 ```
 
 Snapshots include players, active projectiles, short-lived visual effects, and combat text. Player snapshots include HP, alive/respawn state, last input sequence, four loadout slot cooldowns, aim direction, body facing direction, last-used slot, optional status effects, and optional charge state.

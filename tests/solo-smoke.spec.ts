@@ -42,17 +42,11 @@ test('solo mode initializes Rapier and advances snapshots without console noise'
     )
     .toBeLessThan(0);
 
-  const beforeSlotCast = await page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0));
   await page.keyboard.press('Digit2');
-  await expect
-    .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
-    .toBeGreaterThan(beforeSlotCast);
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[1] ?? 0)).toBeGreaterThan(0);
 
-  const beforeButtonCast = await page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0));
   await page.locator('.skill-slot[data-slot="3"]').click();
-  await expect
-    .poll(async () => page.evaluate(() => (window.__BEAT_SNAPSHOT__?.projectiles.length ?? 0) + (window.__BEAT_SNAPSHOT__?.effects.length ?? 0)))
-    .toBeGreaterThan(beforeButtonCast);
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[3] ?? 0)).toBeGreaterThan(0);
 
   expect(consoleMessages.filter((line) => /rawintegrationparameters_new|deprecated parameters|Cannot read/.test(line))).toEqual([]);
 });
@@ -94,6 +88,23 @@ test('mobile viewport can move and fire with touch controls', async ({ page }) =
   await page.mouse.move(skill.x + skill.width / 2 - 28, skill.y + skill.height / 2, { steps: 3 });
   await page.mouse.up();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.slotCooldownTicks[2] ?? 0)).toBeGreaterThan(0);
+});
+
+test('keyboard movement resets on browser focus loss', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Solo' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  await page.keyboard.down('KeyD');
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.vx ?? 0)).toBeGreaterThan(0.5);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect.poll(async () => page.evaluate(() => Math.abs(window.__BEAT_SNAPSHOT__?.players[0]?.vx ?? 0))).toBeLessThan(0.2);
+
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await page.getByRole('button', { name: 'Solo' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+  await expect.poll(async () => page.evaluate(() => Math.abs(window.__BEAT_SNAPSHOT__?.players[0]?.vx ?? 0))).toBeLessThan(0.2);
+  await page.keyboard.up('KeyD');
 });
 
 test('charged skills telegraph and auto-release on desktop', async ({ page }) => {
@@ -220,9 +231,10 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
 });
 
 test('authored effects are visible in multiplayer combat', async ({ context, page: host }) => {
+  const roomName = `Effects Lab ${Date.now()}`;
   await host.goto('/');
   await host.locator('#display-name').fill('Host');
-  await host.locator('#room-name').fill('Effects Lab');
+  await host.locator('#room-name').fill(roomName);
   const patchedRules = await host.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       obstacles: unknown[];
@@ -234,11 +246,12 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
       throw new Error('pulse-bolt missing');
     }
     Object.assign(pulse, {
+      targeting: 'aim-assist',
       damage: 24,
       cooldownTicks: 6,
-      radius: 0.45,
-      range: 46,
-      speed: 2.4,
+      radius: 1.4,
+      range: 60,
+      speed: 3,
       lifetimeTicks: 40,
       effects: [
         { kind: 'knockback', force: 2.8 },
@@ -263,7 +276,7 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
   const client = await context.newPage();
   await client.goto('/');
   await client.locator('#display-name').fill('Client');
-  const roomRow = client.locator('.room-row').filter({ hasText: 'Effects Lab' });
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
   await expect(roomRow).toBeVisible();
   await roomRow.click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
@@ -272,7 +285,8 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
   const clientBeforeHitX = await host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.x ?? 0);
   await host.bringToFront();
   await aimCanvas(host, 'right');
-  await host.keyboard.press('Space');
+  await pressGameKey(host, 'Space');
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.slotCooldownTicks[0] ?? 0)).toBeGreaterThan(0);
   await expect
     .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.status?.slowTicks ?? 0))
     .toBeGreaterThan(0);
@@ -283,7 +297,8 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
   const hostHpBeforeHit = await host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.hp ?? 0);
   await client.bringToFront();
   await aimCanvas(client, 'left');
-  await client.keyboard.press('Space');
+  await client.locator('.skill-slot[data-slot="0"]').click();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.slotCooldownTicks[0] ?? 0)).toBeGreaterThan(0);
   await expect
     .poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.hp ?? 0))
     .toBeLessThan(hostHpBeforeHit);
@@ -298,6 +313,29 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.combatTexts.some((text) => text.kind === 'heal') ?? false)).toBeTruthy();
 });
 
+test('mobile client returns to menu when host leaves', async ({ context, page: host }) => {
+  const roomName = `Host Leave Lab ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.setViewportSize({ width: 390, height: 844 });
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  await host.bringToFront();
+  await host.getByRole('button', { name: 'Menu' }).click();
+  await expect(client.locator('#menu-view')).toBeVisible();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__ === undefined)).toBeTruthy();
+});
+
 async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
   const canvas = await page.locator('#arena').boundingBox();
   if (!canvas) {
@@ -305,4 +343,11 @@ async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
   }
   const x = side === 'right' ? canvas.x + canvas.width - 24 : canvas.x + 24;
   await page.mouse.move(x, canvas.y + canvas.height / 2);
+}
+
+async function pressGameKey(page: Page, code: string): Promise<void> {
+  await page.evaluate((keyCode) => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: keyCode, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: keyCode, bubbles: true }));
+  }, code);
 }

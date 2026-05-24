@@ -8,7 +8,8 @@ export type ClientToHostMessage =
 export type HostToClientMessage =
   | { type: 'welcome'; playerId: string; room: RoomInfo; ruleset: Ruleset }
   | { type: 'snapshot'; snapshot: EngineSnapshot }
-  | { type: 'notice'; message: string };
+  | { type: 'notice'; message: string }
+  | { type: 'host-closed' };
 
 export function encodeMessage(message: ClientToHostMessage | HostToClientMessage): string {
   return JSON.stringify(message);
@@ -19,7 +20,7 @@ export function decodeClientMessage(raw: string): ClientToHostMessage | undefine
 }
 
 export function decodeHostMessage(raw: string): HostToClientMessage | undefined {
-  return decodeMessage<HostToClientMessage>(raw, ['welcome', 'snapshot', 'notice']);
+  return decodeMessage<HostToClientMessage>(raw, ['welcome', 'snapshot', 'notice', 'host-closed']);
 }
 
 function decodeMessage<T extends { type: string }>(raw: string, allowed: string[]): T | undefined {
@@ -30,4 +31,3 @@ function decodeMessage<T extends { type: string }>(raw: string, allowed: string[
     return undefined;
   }
 }
-

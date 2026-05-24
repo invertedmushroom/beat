@@ -281,6 +281,7 @@ export class BeatApp {
   }
 
   private stopActiveMode(): void {
+    this.input.reset(Boolean(this.localPlayerId));
     this.unsubscribeSnapshot?.();
     this.unsubscribeSnapshot = undefined;
     this.hostSession?.destroy();

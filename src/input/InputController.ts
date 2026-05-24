@@ -40,6 +40,9 @@ export class InputController {
   ) {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('blur', this.onFocusLost);
+    window.addEventListener('pagehide', this.onFocusLost);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     target.addEventListener('pointermove', this.onPointerMove);
     target.addEventListener('pointerdown', this.onPointerDown);
     target.addEventListener('pointerup', this.onPointerUp);
@@ -81,10 +84,40 @@ export class InputController {
     this.aimOrigin = origin;
   }
 
+  reset(emitNeutral = true): void {
+    this.keys.clear();
+    this.mouseAim = undefined;
+    this.touchMove = { x: 0, y: 0 };
+    this.touchAim = { x: 0, y: 0 };
+    this.firePressed = false;
+    this.releasePointerCapture(this.controls?.joystick, this.joystickPointerId);
+    this.releasePointerCapture(this.controls?.firePad, this.firePointerId);
+    this.releasePointerCapture(this.skillPointerElement, this.skillPointerId);
+    this.joystickPointerId = undefined;
+    this.firePointerId = undefined;
+    this.skillPointerId = undefined;
+    this.skillPointerSlot = undefined;
+    this.skillPointerElement = undefined;
+    this.controls?.joystickKnob.style.setProperty('--knob-x', '0px');
+    this.controls?.joystickKnob.style.setProperty('--knob-y', '0px');
+    this.controls?.fireKnob.style.setProperty('--knob-x', '0px');
+    this.controls?.fireKnob.style.setProperty('--knob-y', '0px');
+    if (emitNeutral) {
+      this.emit();
+    } else {
+      this.queuedCastSlots = [];
+      this.queuedSlotPresses = [];
+      this.queuedSlotReleases = [];
+    }
+  }
+
   destroy(): void {
     this.stop();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('blur', this.onFocusLost);
+    window.removeEventListener('pagehide', this.onFocusLost);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.target.removeEventListener('pointermove', this.onPointerMove);
     this.target.removeEventListener('pointerdown', this.onPointerDown);
     this.target.removeEventListener('pointerup', this.onPointerUp);
@@ -166,6 +199,16 @@ export class InputController {
         this.queueSlotRelease(slot);
       }
       this.keys.delete(event.code);
+    }
+  };
+
+  private readonly onFocusLost = (): void => {
+    this.reset();
+  };
+
+  private readonly onVisibilityChange = (): void => {
+    if (document.visibilityState === 'hidden') {
+      this.reset();
     }
   };
 
@@ -372,6 +415,12 @@ export class InputController {
 
   private queueSlotRelease(slot: number): void {
     this.queuedSlotReleases.push(slot);
+  }
+
+  private releasePointerCapture(element: HTMLElement | undefined, pointerId: number | undefined): void {
+    if (element && pointerId !== undefined && element.hasPointerCapture(pointerId)) {
+      element.releasePointerCapture(pointerId);
+    }
   }
 
   private drainCastSlots(): number[] {
