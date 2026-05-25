@@ -1,7 +1,7 @@
 import type { AbilityEffect, MechanicAction, MechanicCondition, PhysicsBodySpec, Ruleset } from '../../engine/protocol';
 import type { WorkbenchState, WorkbenchTab } from './state';
 
-export type WorkbenchFieldKind = 'rules' | 'ability' | 'trigger' | 'npc';
+export type WorkbenchFieldKind = 'rules' | 'ability' | 'trigger' | 'npc' | 'team' | 'objective' | 'scoreZone';
 export type WorkbenchFieldInput = 'text' | 'number' | 'checkbox' | 'select' | 'color';
 
 export type WorkbenchField = {
@@ -37,12 +37,16 @@ export type WorkbenchFieldEdit =
   | { kind: 'mechanicConditionKind'; conditionIndex: number; value: string }
   | { kind: 'mechanicAction'; actionIndex: number; fieldId: string; value: string }
   | { kind: 'mechanicActionKind'; actionIndex: number; value: string }
-  | { kind: 'npc'; fieldId: string; value: string; checked?: boolean };
+  | { kind: 'npc'; fieldId: string; value: string; checked?: boolean }
+  | { kind: 'team'; fieldId: string; value: string }
+  | { kind: 'objective'; fieldId: string; value: string; checked?: boolean }
+  | { kind: 'scoreZone'; fieldId: string; value: string };
 
 export type WorkbenchCommand =
   | { kind: 'abilityEffect'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; effectIndex?: number; effectKind?: AbilityEffect['kind'] }
   | { kind: 'mechanicCondition'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; conditionIndex?: number }
-  | { kind: 'mechanicAction'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; actionIndex?: number };
+  | { kind: 'mechanicAction'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; actionIndex?: number }
+  | { kind: 'scoreZone'; command: 'add' | 'duplicate' | 'remove'; scoreZoneId?: string };
 
 export const WORKBENCH_FIELDS: WorkbenchField[] = [
   { id: 'name', label: 'Name', section: 'match', kind: 'rules', path: 'name', controlId: 'workbench-rule-name', input: 'text', maxLength: 48 },
@@ -76,28 +80,6 @@ export const WORKBENCH_FIELDS: WorkbenchField[] = [
     path: 'match.friendlyFire',
     controlId: 'workbench-friendly-fire',
     input: 'checkbox',
-  },
-  {
-    id: 'objectiveRadius',
-    label: 'First zone radius',
-    section: 'match',
-    kind: 'rules',
-    path: 'objectives[0].scoreZones[0].radius',
-    controlId: 'workbench-objective-radius',
-    input: 'number',
-    min: 0.1,
-    step: 0.05,
-  },
-  {
-    id: 'objectivePoints',
-    label: 'First zone points',
-    section: 'match',
-    kind: 'rules',
-    path: 'objectives[0].scoreZones[0].points',
-    controlId: 'workbench-objective-points',
-    input: 'number',
-    min: 1,
-    step: 1,
   },
   {
     id: 'movementMode',
@@ -424,6 +406,15 @@ export function workbenchFieldPath(edit: WorkbenchFieldEdit, state: WorkbenchSta
   if (edit.kind === 'mechanicActionKind') {
     return `mechanics.triggers[${state.selectedTriggerId || 'selected'}].actions[${edit.actionIndex}].kind`;
   }
+  if (edit.kind === 'team') {
+    return `match.teams[${state.selectedTeamId || 'selected'}].${edit.fieldId}`;
+  }
+  if (edit.kind === 'objective') {
+    return `objectives[${state.selectedObjectiveId || 'selected'}].${edit.fieldId}`;
+  }
+  if (edit.kind === 'scoreZone') {
+    return `objectives[${state.selectedObjectiveId || 'selected'}].scoreZones[${state.selectedScoreZoneId || 'selected'}].${edit.fieldId}`;
+  }
   const field = workbenchField(edit.kind, edit.fieldId);
   if (!field) {
     return '$';
@@ -441,7 +432,10 @@ export function workbenchCommandPath(command: WorkbenchCommand, state: Workbench
   if (command.kind === 'mechanicCondition') {
     return `mechanics.triggers[${state.selectedTriggerId || 'selected'}].conditions`;
   }
-  return `mechanics.triggers[${state.selectedTriggerId || 'selected'}].actions`;
+  if (command.kind === 'mechanicAction') {
+    return `mechanics.triggers[${state.selectedTriggerId || 'selected'}].actions`;
+  }
+  return `objectives[${state.selectedObjectiveId || 'selected'}].scoreZones`;
 }
 
 export function workbenchEditFromControl(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): WorkbenchFieldEdit | undefined {
@@ -470,6 +464,18 @@ export function workbenchEditFromControl(target: HTMLInputElement | HTMLSelectEl
   const triggerField = target.dataset.triggerField;
   if (triggerField) {
     return { kind: 'trigger', fieldId: triggerField, value: target.value };
+  }
+  const teamField = target.dataset.teamField;
+  if (teamField) {
+    return { kind: 'team', fieldId: teamField, value: target.value };
+  }
+  const objectiveField = target.dataset.objectiveField;
+  if (objectiveField) {
+    return { kind: 'objective', fieldId: objectiveField, value: target.value, checked: target instanceof HTMLInputElement ? target.checked : undefined };
+  }
+  const scoreZoneField = target.dataset.scoreZoneField;
+  if (scoreZoneField) {
+    return { kind: 'scoreZone', fieldId: scoreZoneField, value: target.value };
   }
   const conditionIndex = readIndex(target.dataset.conditionIndex);
   if (conditionIndex !== undefined) {
@@ -524,6 +530,14 @@ export function workbenchCommandFromButton(button: HTMLButtonElement): Workbench
       actionIndex: readIndex(button.dataset.actionIndex),
     };
   }
+  const scoreZoneCommand = button.dataset.scoreZoneCommand;
+  if (scoreZoneCommand === 'add' || scoreZoneCommand === 'duplicate' || scoreZoneCommand === 'remove') {
+    return {
+      kind: 'scoreZone',
+      command: scoreZoneCommand,
+      scoreZoneId: button.dataset.scoreZoneId,
+    };
+  }
   return undefined;
 }
 
@@ -553,7 +567,16 @@ export function applyWorkbenchFieldEdit(ruleset: Ruleset, state: WorkbenchState,
   if (edit.kind === 'mechanicAction' || edit.kind === 'mechanicActionKind') {
     return applyMechanicActionEdit(ruleset, state, edit);
   }
-  return applyNpcField(ruleset, state, edit);
+  if (edit.kind === 'npc') {
+    return applyNpcField(ruleset, state, edit);
+  }
+  if (edit.kind === 'team') {
+    return applyTeamField(ruleset, state, edit);
+  }
+  if (edit.kind === 'objective') {
+    return applyObjectiveField(ruleset, state, edit);
+  }
+  return applyScoreZoneField(ruleset, state, edit);
 }
 
 export function applyWorkbenchCommand(ruleset: Ruleset, state: WorkbenchState, command: WorkbenchCommand): boolean {
@@ -563,7 +586,10 @@ export function applyWorkbenchCommand(ruleset: Ruleset, state: WorkbenchState, c
   if (command.kind === 'mechanicCondition') {
     return applyMechanicConditionCommand(ruleset, state, command);
   }
-  return applyMechanicActionCommand(ruleset, state, command);
+  if (command.kind === 'mechanicAction') {
+    return applyMechanicActionCommand(ruleset, state, command);
+  }
+  return applyScoreZoneCommand(ruleset, state, command);
 }
 
 export function diagnosticsFromError(error: unknown): WorkbenchDiagnostic[] {
@@ -666,28 +692,6 @@ function applyRulesField(ruleset: Ruleset, edit: Extract<WorkbenchFieldEdit, { k
   }
   if (edit.fieldId === 'friendlyFire') {
     ruleset.match.friendlyFire = Boolean(edit.checked);
-    return true;
-  }
-  if (edit.fieldId === 'objectiveRadius') {
-    const value = readNumber(edit.value);
-    if (value === undefined) {
-      return false;
-    }
-    const zone = ruleset.objectives[0]?.scoreZones[0];
-    if (zone) {
-      zone.radius = value;
-    }
-    return true;
-  }
-  if (edit.fieldId === 'objectivePoints') {
-    const value = readNumber(edit.value);
-    if (value === undefined) {
-      return false;
-    }
-    const zone = ruleset.objectives[0]?.scoreZones[0];
-    if (zone) {
-      zone.points = Math.round(value);
-    }
     return true;
   }
   if (edit.fieldId === 'movementMode') {
@@ -970,6 +974,138 @@ function applyNpcField(ruleset: Ruleset, state: WorkbenchState, edit: Extract<Wo
   return true;
 }
 
+function applyTeamField(ruleset: Ruleset, state: WorkbenchState, edit: Extract<WorkbenchFieldEdit, { kind: 'team' }>): boolean {
+  const team = selectedTeam(ruleset, state);
+  if (!team) {
+    return false;
+  }
+  state.selectedTeamId = team.id;
+  if (edit.fieldId === 'name') {
+    team.name = edit.value;
+    return true;
+  }
+  if (edit.fieldId === 'color') {
+    team.color = edit.value;
+    return true;
+  }
+  return false;
+}
+
+function applyObjectiveField(ruleset: Ruleset, state: WorkbenchState, edit: Extract<WorkbenchFieldEdit, { kind: 'objective' }>): boolean {
+  const objective = selectedObjective(ruleset, state);
+  if (!objective) {
+    return false;
+  }
+  state.selectedObjectiveId = objective.id;
+  if (edit.fieldId === 'name') {
+    objective.name = edit.value;
+    return true;
+  }
+  if (edit.fieldId === 'resetOnScore') {
+    objective.resetOnScore = Boolean(edit.checked);
+    return true;
+  }
+  if (edit.fieldId === 'body.color') {
+    objective.body.color = edit.value;
+    return true;
+  }
+  const value = readNumber(edit.value);
+  if (value === undefined) {
+    return false;
+  }
+  if (edit.fieldId === 'spawn.x') {
+    objective.spawn.x = value;
+  } else if (edit.fieldId === 'spawn.y') {
+    objective.spawn.y = value;
+  } else if (edit.fieldId === 'body.radius') {
+    objective.body.radius = value;
+  } else if (edit.fieldId === 'body.mass') {
+    objective.body.mass = value;
+  } else if (edit.fieldId === 'scoreCooldownTicks') {
+    objective.scoreCooldownTicks = Math.round(value);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function applyScoreZoneField(ruleset: Ruleset, state: WorkbenchState, edit: Extract<WorkbenchFieldEdit, { kind: 'scoreZone' }>): boolean {
+  const objective = selectedObjective(ruleset, state);
+  const zone = objective ? selectedScoreZone(objective, state) : undefined;
+  if (!objective || !zone) {
+    return false;
+  }
+  state.selectedObjectiveId = objective.id;
+  state.selectedScoreZoneId = zone.id;
+  if (edit.fieldId === 'team') {
+    zone.team = edit.value;
+    return true;
+  }
+  if (edit.fieldId === 'color') {
+    if (edit.value.trim() === '') {
+      delete zone.color;
+    } else {
+      zone.color = edit.value;
+    }
+    return true;
+  }
+  const value = readNumber(edit.value);
+  if (value === undefined) {
+    return false;
+  }
+  if (edit.fieldId === 'x') {
+    zone.x = value;
+  } else if (edit.fieldId === 'y') {
+    zone.y = value;
+  } else if (edit.fieldId === 'radius') {
+    zone.radius = value;
+  } else if (edit.fieldId === 'points') {
+    zone.points = Math.round(value);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function applyScoreZoneCommand(ruleset: Ruleset, state: WorkbenchState, command: Extract<WorkbenchCommand, { kind: 'scoreZone' }>): boolean {
+  const objective = selectedObjective(ruleset, state);
+  if (!objective) {
+    return false;
+  }
+  state.selectedObjectiveId = objective.id;
+  if (command.command === 'add') {
+    const zone = defaultScoreZone(ruleset, objective);
+    objective.scoreZones.push(zone);
+    state.selectedScoreZoneId = zone.id;
+    return true;
+  }
+  const selectedId = command.scoreZoneId ?? state.selectedScoreZoneId;
+  const index = objective.scoreZones.findIndex((zone) => zone.id === selectedId);
+  if (index < 0) {
+    return false;
+  }
+  if (command.command === 'duplicate') {
+    const source = objective.scoreZones[index];
+    if (!source) {
+      return false;
+    }
+    const duplicate = {
+      ...source,
+      id: uniqueScoreZoneId(objective, `${source.id}-copy`),
+      x: source.x + 1,
+    };
+    objective.scoreZones.splice(index + 1, 0, duplicate);
+    state.selectedScoreZoneId = duplicate.id;
+    return true;
+  }
+  if (objective.scoreZones.length <= 1) {
+    return false;
+  }
+  objective.scoreZones.splice(index, 1);
+  state.selectedScoreZoneId = objective.scoreZones[Math.max(0, index - 1)]?.id ?? '';
+  return true;
+}
+
 function applyEffectField(effect: AbilityEffect, fieldId: string, value: string, ruleset: Ruleset, color: string): boolean {
   const mutable = effect as unknown as Record<string, unknown>;
   if (fieldId === 'body.radius' || fieldId === 'body.mass' || fieldId === 'body.friction' || fieldId === 'body.restitution' || fieldId === 'body.linearDamping') {
@@ -1073,6 +1209,48 @@ function selectedAbility(ruleset: Ruleset, state: WorkbenchState): Ruleset['abil
 
 function selectedTrigger(ruleset: Ruleset, state: WorkbenchState): Ruleset['mechanics']['triggers'][number] | undefined {
   return ruleset.mechanics.triggers.find((candidate) => candidate.id === state.selectedTriggerId) ?? ruleset.mechanics.triggers[0];
+}
+
+function selectedTeam(ruleset: Ruleset, state: WorkbenchState): Ruleset['match']['teams'][number] | undefined {
+  return ruleset.match.teams.find((candidate) => candidate.id === state.selectedTeamId) ?? ruleset.match.teams[0];
+}
+
+function selectedObjective(ruleset: Ruleset, state: WorkbenchState): Ruleset['objectives'][number] | undefined {
+  return ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId) ?? ruleset.objectives[0];
+}
+
+function selectedScoreZone(
+  objective: Ruleset['objectives'][number],
+  state: WorkbenchState,
+): Ruleset['objectives'][number]['scoreZones'][number] | undefined {
+  return objective.scoreZones.find((candidate) => candidate.id === state.selectedScoreZoneId) ?? objective.scoreZones[0];
+}
+
+function defaultScoreZone(ruleset: Ruleset, objective: Ruleset['objectives'][number]): Ruleset['objectives'][number]['scoreZones'][number] {
+  const usedTeams = new Set(objective.scoreZones.map((zone) => zone.team));
+  const team = ruleset.match.teams.find((candidate) => !usedTeams.has(candidate.id)) ?? ruleset.match.teams[0];
+  return {
+    id: uniqueScoreZoneId(objective, `${team?.id ?? 'team'}-zone`),
+    team: team?.id ?? 'players',
+    x: 0,
+    y: 0,
+    radius: 2.45,
+    points: 1,
+    color: team?.color,
+  };
+}
+
+function uniqueScoreZoneId(objective: Ruleset['objectives'][number], baseId: string): string {
+  const base = baseId.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'zone';
+  const ids = new Set(objective.scoreZones.map((zone) => zone.id));
+  if (!ids.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (ids.has(`${base}-${index}`)) {
+    index += 1;
+  }
+  return `${base}-${index}`;
 }
 
 function setBodyNumber(effect: AbilityEffect, key: keyof PhysicsBodySpec, value: string, round = false): boolean {
@@ -1196,6 +1374,15 @@ function inferDiagnosticPath(message: string): string {
   }
   if (path === 'ability.effect') {
     return 'abilities.effects';
+  }
+  if (path === 'objective.scoreZone') {
+    return 'objectives.scoreZones';
+  }
+  if (path === 'objective.spawn') {
+    return 'objectives.spawn';
+  }
+  if (path === 'objective.body') {
+    return 'objectives.body';
   }
   return path;
 }

@@ -77,6 +77,9 @@ function readEditorState(value: Record<string, unknown>): WorkbenchEditorState {
     selectedTriggerConditionIndex: typeof value.selectedTriggerConditionIndex === 'number' ? value.selectedTriggerConditionIndex : undefined,
     selectedTriggerActionIndex: typeof value.selectedTriggerActionIndex === 'number' ? value.selectedTriggerActionIndex : undefined,
     selectedNpcId: typeof value.selectedNpcId === 'string' ? value.selectedNpcId : undefined,
+    selectedObjectiveId: typeof value.selectedObjectiveId === 'string' ? value.selectedObjectiveId : undefined,
+    selectedScoreZoneId: typeof value.selectedScoreZoneId === 'string' ? value.selectedScoreZoneId : undefined,
+    selectedTeamId: typeof value.selectedTeamId === 'string' ? value.selectedTeamId : undefined,
   };
 }
 

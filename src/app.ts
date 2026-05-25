@@ -31,7 +31,7 @@ import {
 } from './ui/workbench/fields';
 import { escapeHtml, formatMeters, aiTraceLabel, mechanicsChipHtml, mechanicsFlowHtml, rulesInspectorHtml, traceLabel } from './ui/workbench/inspector';
 import { parseWorkbenchDocumentJson, stringifyRulesDocument } from './ui/workbench/jsonSync';
-import { abilityEffectsHtml, mechanicsChainHtml } from './ui/workbench/sections';
+import { abilityEffectsHtml, matchObjectivesHtml, mechanicsChainHtml } from './ui/workbench/sections';
 import {
   createWorkbenchState,
   ensureWorkbenchSelections,
@@ -686,6 +686,21 @@ export class BeatApp {
       this.syncWorkbenchControls();
       return;
     }
+    if (target.dataset.teamSelect === 'true') {
+      this.workbenchState.selectedTeamId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
+    if (target.dataset.objectiveSelect === 'true') {
+      this.workbenchState.selectedObjectiveId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
+    if (target.dataset.scoreZoneSelect === 'true') {
+      this.workbenchState.selectedScoreZoneId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
 
     const next = structuredClone(this.editableRuleset) as Ruleset;
     const edit = workbenchEditFromControl(target);
@@ -700,7 +715,7 @@ export class BeatApp {
 
   private async handleWorkbenchCommand(event: Event): Promise<void> {
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>(
-      'button[data-effect-command], button[data-condition-command], button[data-action-command]',
+      'button[data-effect-command], button[data-condition-command], button[data-action-command], button[data-score-zone-command]',
     );
     if (!button || button.disabled) {
       return;
@@ -779,8 +794,11 @@ export class BeatApp {
     setControlValue(this.workbenchView, '#workbench-duration', String(Math.round(ruleset.match.durationTicks / ruleset.tickRate)));
     setControlValue(this.workbenchView, '#workbench-score-limit', String(ruleset.match.scoreLimit));
     setControlChecked(this.workbenchView, '#workbench-friendly-fire', ruleset.match.friendlyFire);
-    setControlValue(this.workbenchView, '#workbench-objective-radius', String(ruleset.objectives[0]?.scoreZones[0]?.radius ?? 1));
-    setControlValue(this.workbenchView, '#workbench-objective-points', String(ruleset.objectives[0]?.scoreZones[0]?.points ?? 1));
+    setControlValue(this.workbenchView, '#workbench-respawn-mode', ruleset.match.respawnMode === 'timed' ? 'Timed' : ruleset.match.respawnMode);
+    const matchObjectives = this.workbenchView.querySelector<HTMLElement>('#workbench-match-objectives');
+    if (matchObjectives) {
+      matchObjectives.innerHTML = matchObjectivesHtml(ruleset, this.workbenchState);
+    }
 
     setControlValue(this.workbenchView, '#workbench-movement-mode', ruleset.player.movement.mode);
     setControlValue(this.workbenchView, '#workbench-aim-mode', ruleset.player.aim.mode);
@@ -1479,7 +1497,12 @@ function readControlNumber(target: HTMLInputElement | HTMLSelectElement | HTMLTe
 }
 
 function shouldPreferEditPath(diagnosticPath: string): boolean {
-  return diagnosticPath === '$' || diagnosticPath.startsWith('ability.effect') || diagnosticPath.startsWith('mechanics.trigger');
+  return (
+    diagnosticPath === '$' ||
+    diagnosticPath.startsWith('ability.effect') ||
+    diagnosticPath.startsWith('mechanics.trigger') ||
+    diagnosticPath.startsWith('objective.')
+  );
 }
 
 function setControlValue(root: ParentNode, selector: string, value: string): void {

@@ -55,7 +55,17 @@ function panelHtml(tab: WorkbenchTab, title: string, body: string): string {
 }
 
 function matchPanelHtml(): string {
-  return panelHtml('match', 'Match / Objectives', `<div class="workbench-grid">${fieldsHtml('match')}</div>`);
+  return panelHtml(
+    'match',
+    'Game Type / Match / Objectives',
+    `
+              <div class="workbench-grid">
+                ${fieldsHtml('match')}
+                <label class="field"><span>Respawn mode</span><input id="workbench-respawn-mode" value="Timed" data-workbench-path="match.respawnMode" disabled /></label>
+              </div>
+              <div id="workbench-match-objectives" class="workbench-chain" aria-live="polite"></div>
+    `,
+  );
 }
 
 function playerPanelHtml(): string {

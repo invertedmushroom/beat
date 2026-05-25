@@ -18,6 +18,9 @@ export type WorkbenchEditorState = {
   selectedTriggerConditionIndex?: number;
   selectedTriggerActionIndex?: number;
   selectedNpcId?: string;
+  selectedObjectiveId?: string;
+  selectedScoreZoneId?: string;
+  selectedTeamId?: string;
 };
 
 export type WorkbenchState = {
@@ -28,6 +31,9 @@ export type WorkbenchState = {
   selectedTriggerConditionIndex: number;
   selectedTriggerActionIndex: number;
   selectedNpcId: string;
+  selectedObjectiveId: string;
+  selectedScoreZoneId: string;
+  selectedTeamId: string;
   draftRuleset: Ruleset;
 };
 
@@ -64,6 +70,9 @@ export function createWorkbenchState(ruleset: Ruleset, editor: WorkbenchEditorSt
     selectedTriggerConditionIndex: editor.selectedTriggerConditionIndex ?? 0,
     selectedTriggerActionIndex: editor.selectedTriggerActionIndex ?? 0,
     selectedNpcId: editor.selectedNpcId ?? '',
+    selectedObjectiveId: editor.selectedObjectiveId ?? '',
+    selectedScoreZoneId: editor.selectedScoreZoneId ?? '',
+    selectedTeamId: editor.selectedTeamId ?? '',
     draftRuleset: ruleset,
   };
   ensureWorkbenchSelections(state, ruleset);
@@ -86,6 +95,16 @@ export function ensureWorkbenchSelections(state: WorkbenchState, ruleset: Rulese
   state.selectedNpcId = ruleset.npcs.archetypes.some((npc) => npc.id === state.selectedNpcId)
     ? state.selectedNpcId
     : (ruleset.npcs.archetypes[0]?.id ?? '');
+  state.selectedObjectiveId = ruleset.objectives.some((objective) => objective.id === state.selectedObjectiveId)
+    ? state.selectedObjectiveId
+    : (ruleset.objectives[0]?.id ?? '');
+  const objective = ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId);
+  state.selectedScoreZoneId = objective?.scoreZones.some((zone) => zone.id === state.selectedScoreZoneId)
+    ? state.selectedScoreZoneId
+    : (objective?.scoreZones[0]?.id ?? '');
+  state.selectedTeamId = ruleset.match.teams.some((team) => team.id === state.selectedTeamId)
+    ? state.selectedTeamId
+    : (ruleset.match.teams[0]?.id ?? '');
 }
 
 export function updateWorkbenchDraft(state: WorkbenchState, ruleset: Ruleset): void {
@@ -102,6 +121,9 @@ export function toWorkbenchEditorState(state: WorkbenchState): WorkbenchEditorSt
     selectedTriggerConditionIndex: state.selectedTriggerConditionIndex,
     selectedTriggerActionIndex: state.selectedTriggerActionIndex,
     selectedNpcId: state.selectedNpcId || undefined,
+    selectedObjectiveId: state.selectedObjectiveId || undefined,
+    selectedScoreZoneId: state.selectedScoreZoneId || undefined,
+    selectedTeamId: state.selectedTeamId || undefined,
   };
 }
 

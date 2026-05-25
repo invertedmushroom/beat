@@ -515,6 +515,26 @@ h2 {
   font-size: 12px;
 }
 
+.workbench-summary {
+  display: grid;
+  gap: 3px;
+  min-height: 42px;
+  padding: 10px;
+  border: 1px solid #34332f;
+  border-radius: 6px;
+  background: #1d1d1a;
+}
+
+.workbench-summary strong {
+  color: #ffe66d;
+  font-size: 13px;
+}
+
+.workbench-summary span {
+  color: #b9b4a8;
+  font-size: 12px;
+}
+
 .mechanics-flow__row {
   display: grid;
   grid-template-columns: minmax(105px, 0.8fr) auto minmax(140px, 1fr) auto minmax(140px, 1fr);
