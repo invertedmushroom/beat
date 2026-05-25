@@ -19,11 +19,20 @@ describe('workbench json sync', () => {
     const wrapped = stringifyWorkbenchDocument(ruleset, {
       selectedTab: 'npcs',
       selectedAbilityId: 'pulse-bolt',
+      selectedObjectiveId: 'center-relic',
+      selectedScoreZoneId: 'players-goal',
+      selectedTeamId: 'players',
     });
     const parsed = parseWorkbenchDocumentJson(wrapped);
 
     expect(parsed.wrapped).toBe(true);
-    expect(parsed.editor).toMatchObject({ selectedTab: 'npcs', selectedAbilityId: 'pulse-bolt' });
+    expect(parsed.editor).toMatchObject({
+      selectedTab: 'npcs',
+      selectedAbilityId: 'pulse-bolt',
+      selectedObjectiveId: 'center-relic',
+      selectedScoreZoneId: 'players-goal',
+      selectedTeamId: 'players',
+    });
     expect(parsed.ruleset).toEqual(ruleset);
   });
 
@@ -44,7 +53,17 @@ describe('workbench json sync', () => {
   it('excludes editor metadata from rules fingerprints', () => {
     const ruleset = createDefaultRuleset();
     const wrappedA = { schemaVersion: 1 as const, rules: ruleset, editor: { selectedTab: 'player' as const } };
-    const wrappedB = { schemaVersion: 1 as const, rules: ruleset, editor: { selectedTab: 'advanced' as const, selectedNpcId: 'spark-chaser' } };
+    const wrappedB = {
+      schemaVersion: 1 as const,
+      rules: ruleset,
+      editor: {
+        selectedTab: 'advanced' as const,
+        selectedNpcId: 'spark-chaser',
+        selectedObjectiveId: 'center-relic',
+        selectedScoreZoneId: 'players-goal',
+        selectedTeamId: 'players',
+      },
+    };
 
     expect(workbenchRulesFingerprint(wrappedA)).toBe(workbenchRulesFingerprint(wrappedB));
     expect(workbenchRulesFingerprint(wrappedA)).toBe(rulesetFingerprint(ruleset));

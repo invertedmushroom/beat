@@ -8,6 +8,7 @@ import {
   workbenchFieldPath,
   workbenchFieldsForSection,
 } from './fields';
+import { matchGameTypeLabel } from './sections';
 import { createWorkbenchState } from './state';
 
 describe('workbench field registry', () => {
@@ -29,6 +30,58 @@ describe('workbench field registry', () => {
 
     expect(playerFields.find((field) => field.id === 'tankTurn')?.visibleWhen).toEqual({ fieldId: 'movementMode', equals: 'tank' });
     expect(playerFields.find((field) => field.id === 'platform.gravity')?.visibleWhen).toEqual({ fieldId: 'movementMode', equals: 'platform' });
+  });
+
+  it('infers game type labels from objectives', () => {
+    const ruleset = createDefaultRuleset();
+    expect(matchGameTypeLabel(ruleset)).toBe('Relic Push');
+
+    const empty = structuredClone(ruleset);
+    empty.objectives = [];
+    expect(matchGameTypeLabel(empty)).toBe('No objective scoring');
+
+    const custom = structuredClone(ruleset);
+    custom.objectives.push({ ...custom.objectives[0], id: 'side-relic', name: 'Side Relic' });
+    expect(matchGameTypeLabel(custom)).toBe('Custom Relic Push');
+  });
+
+  it('applies team, objective, and score zone edits', () => {
+    const ruleset = createDefaultRuleset();
+    const state = createWorkbenchState(ruleset, {
+      selectedTeamId: 'players',
+      selectedObjectiveId: 'center-relic',
+      selectedScoreZoneId: 'players-goal',
+    });
+
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'team', fieldId: 'name', value: 'Green Team' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'team', fieldId: 'color', value: '#33cc88' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'objective', fieldId: 'spawn.x', value: '1.5' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'objective', fieldId: 'body.mass', value: '14' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'objective', fieldId: 'scoreCooldownTicks', value: '12' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'objective', fieldId: 'resetOnScore', value: '', checked: false })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'scoreZone', fieldId: 'radius', value: '3.1' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'scoreZone', fieldId: 'points', value: '2' })).toBe(true);
+
+    const parsed = validateRuleset(ruleset);
+    expect(parsed.match.teams[0]).toMatchObject({ name: 'Green Team', color: '#33cc88' });
+    expect(parsed.objectives[0]).toMatchObject({ spawn: { x: 1.5 }, body: { mass: 14 }, scoreCooldownTicks: 12, resetOnScore: false });
+    expect(parsed.objectives[0]?.scoreZones[0]).toMatchObject({ radius: 3.1, points: 2 });
+  });
+
+  it('adds, duplicates, and removes score zones without invalidating relic objectives', () => {
+    const ruleset = createDefaultRuleset();
+    const state = createWorkbenchState(ruleset, {
+      selectedObjectiveId: 'center-relic',
+      selectedScoreZoneId: 'players-goal',
+    });
+
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'add' })).toBe(true);
+    expect(ruleset.objectives[0]?.scoreZones).toHaveLength(3);
+    expect(state.selectedScoreZoneId).toBeTruthy();
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'duplicate' })).toBe(true);
+    expect(ruleset.objectives[0]?.scoreZones).toHaveLength(4);
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'remove' })).toBe(true);
+    expect(validateRuleset(ruleset).objectives[0]?.scoreZones.length).toBe(3);
   });
 
   it('applies selected ability, loadout, npc, and ability effect edits', () => {

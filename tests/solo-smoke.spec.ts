@@ -302,6 +302,20 @@ test('workbench keyboard tabs edit structured fields and starts play', async ({ 
 
   await page.getByRole('tab', { name: 'Match' }).click();
   await page.locator('#workbench-rule-name').fill('Workbench Smoke');
+  await expect(page.locator('#workbench-match-objectives')).toContainText('Relic Push');
+  await page.locator('#workbench-team-select').selectOption('players');
+  await page.locator('#workbench-team-name').fill('Green Team');
+  await page.locator('#workbench-team-color').fill('#33cc88');
+  await page.locator('#workbench-objective-select').selectOption('center-relic');
+  await page.locator('#workbench-objective-spawn-x').fill('1.5');
+  await page.locator('#workbench-objective-scoreCooldownTicks').fill('12');
+  await page.locator('#workbench-objective-resetOnScore').uncheck();
+  await page.locator('#workbench-score-zone-select').selectOption('players-goal');
+  await page.locator('#workbench-score-zone-radius').fill('3.1');
+  await page.locator('#workbench-score-zone-points').fill('2');
+  await page.locator('#workbench-add-score-zone').click();
+  await page.locator('#workbench-duplicate-score-zone').click();
+  await page.locator('#workbench-remove-score-zone').click();
   await page.getByRole('tab', { name: 'Abilities' }).click();
   await page.locator('#workbench-ability-select').selectOption('pulse-bolt');
   await page.locator('#workbench-ability-damage').fill('13');
@@ -359,6 +373,12 @@ test('advanced JSON wrapper and invalid edits preserve last accepted rules', asy
   await expect(page.locator('#workbench-diagnostics')).toContainText('abilities[anchor-orb].effects[0].body.mass');
   await expect(page.locator('#workbench-effect-0-body-mass')).toHaveValue('8');
 
+  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.locator('#workbench-score-zone-select').selectOption('players-goal');
+  await page.locator('#workbench-score-zone-radius').fill('0');
+  await expect(page.locator('#workbench-diagnostics')).toContainText('objectives[center-relic].scoreZones[players-goal].radius');
+  await expect(page.locator('#workbench-score-zone-radius')).toHaveValue('2.45');
+
   await page.getByRole('tab', { name: 'Advanced JSON' }).click();
   await page.locator('#rules-json').fill('{"id":');
   await expect(page.locator('#rules-validation-line')).toContainText('invalid');
@@ -370,32 +390,15 @@ test('advanced JSON wrapper and invalid edits preserve last accepted rules', asy
 
 test('relic push objective scores and ends a match', async ({ page }) => {
   await page.goto('/');
-  await openAdvancedJson(page);
-  const patchedRules = await page.locator('#rules-json').evaluate((node) => {
-    const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
-      obstacles: unknown[];
-      match: {
-        durationTicks: number;
-        scoreLimit: number;
-      };
-      objectives: Array<{
-        id: string;
-        scoreCooldownTicks: number;
-        scoreZones: Array<Record<string, unknown>>;
-      }>;
-    };
-    rules.obstacles = [];
-    rules.match.durationTicks = 300;
-    rules.match.scoreLimit = 1;
-    const relic = rules.objectives.find((objective) => objective.id === 'center-relic');
-    if (!relic) {
-      throw new Error('center relic missing');
-    }
-    relic.scoreCooldownTicks = 1;
-    relic.scoreZones = [{ id: 'instant-goal', team: 'players', x: 0, y: 0, radius: 3, points: 1, color: '#2fd17c' }];
-    return `${JSON.stringify(rules, null, 2)}\n`;
-  });
-  await page.locator('#rules-json').fill(patchedRules);
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.locator('#workbench-score-limit').fill('1');
+  await page.locator('#workbench-objective-scoreCooldownTicks').fill('1');
+  await page.locator('#workbench-score-zone-select').selectOption('players-goal');
+  await page.locator('#workbench-score-zone-x').fill('0');
+  await page.locator('#workbench-score-zone-y').fill('0');
+  await page.locator('#workbench-score-zone-radius').fill('3');
+  await page.locator('#workbench-score-zone-points').fill('1');
   await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Solo' }).click();
 
