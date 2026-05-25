@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier2d-compat';
 import { chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
+import { nextPlatformVelocity } from './platformMovement';
 import type {
   Ability,
   AbilityEffect,
@@ -60,6 +61,7 @@ type RuntimePlayer = {
   charging?: RuntimeCharge;
   statuses: Map<string, RuntimeStatus>;
   resources: Map<string, RuntimeResource>;
+  wasJumpPressed: boolean;
 };
 
 type RuntimeProjectile = {
@@ -336,7 +338,10 @@ function handleCommand(command: EngineCommand): void {
 function initialize(nextRuleset: Ruleset): void {
   stop();
   ruleset = nextRuleset;
-  world = new RAPIER.World({ x: 0, y: 0 });
+  world = new RAPIER.World({
+    x: 0,
+    y: nextRuleset.player.movement.mode === 'platform' ? nextRuleset.player.movement.platform.gravity : 0,
+  });
   tick = 0;
   spawnIndex = 0;
   projectileIndex = 0;
@@ -445,6 +450,7 @@ function addPlayer(spawn: PlayerSpawn): void {
     lastHandledInputSequence: 0,
     statuses: new Map(),
     resources: initialResources(),
+    wasJumpPressed: false,
   });
 }
 
@@ -512,6 +518,7 @@ function step(): void {
   }
 
   world.step();
+  clampPlatformFallSpeeds();
   enforceActiveConstraints();
   stepObjectives();
   stepProjectiles();
@@ -1051,6 +1058,7 @@ function respawnPlayer(player: RuntimePlayer): void {
   player.body.setEnabled(true);
   player.body.setTranslation(point, true);
   player.body.setLinvel({ x: 0, y: 0 }, true);
+  player.wasJumpPressed = false;
   effects.push({
     effectId: `spawn-${++effectIndex}`,
     kind: 'spawn',
@@ -2283,11 +2291,45 @@ function updateMovementAndFacing(player: RuntimePlayer, speedMultiplier: number)
   }
   const axisX = clamp(player.input.moveX, -1, 1);
   const axisY = clamp(player.input.moveY, -1, 1);
+  if (ruleset.player.movement.mode === 'platform') {
+    updatePlatformMovement(player, axisX, axisY, speedMultiplier);
+    return;
+  }
   if (ruleset.player.movement.mode === 'tank') {
     updateTankMovement(player, axisX, axisY, speedMultiplier);
     return;
   }
   updateTwinStickMovement(player, axisX, axisY, speedMultiplier);
+}
+
+function updatePlatformMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
+  if (!ruleset) {
+    return;
+  }
+  const result = nextPlatformVelocity({
+    axisX,
+    axisY,
+    speed: ruleset.player.speed,
+    speedMultiplier,
+    currentVelocity: player.body.linvel(),
+    position: player.body.translation(),
+    radius: ruleset.player.radius,
+    arena: ruleset.arena,
+    obstacles: ruleset.obstacles,
+    platform: ruleset.player.movement.platform,
+    wasJumpPressed: player.wasJumpPressed,
+  });
+  player.wasJumpPressed = result.jumpPressed;
+  player.body.setLinvel(result.velocity, true);
+
+  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
+  if (ruleset.player.aim.mode === 'free' && explicitAim) {
+    player.facing = explicitAim;
+    return;
+  }
+  if (Math.abs(axisX) > 0.05) {
+    player.facing = { x: Math.sign(axisX), y: 0 };
+  }
 }
 
 function updateTwinStickMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
@@ -2317,6 +2359,22 @@ function updateTankMovement(player: RuntimePlayer, turnInput: number, throttleIn
   const reverseMultiplier = throttle < 0 ? ruleset.player.movement.reverseMultiplier : 1;
   const speed = ruleset.player.speed * speedMultiplier * reverseMultiplier;
   player.body.setLinvel({ x: player.facing.x * throttle * speed, y: player.facing.y * throttle * speed }, true);
+}
+
+function clampPlatformFallSpeeds(): void {
+  if (!ruleset || ruleset.player.movement.mode !== 'platform') {
+    return;
+  }
+  const maxFallSpeed = ruleset.player.movement.platform.maxFallSpeed;
+  for (const player of players.values()) {
+    if (!player.alive) {
+      continue;
+    }
+    const velocity = player.body.linvel();
+    if (velocity.y > maxFallSpeed) {
+      player.body.setLinvel({ x: velocity.x, y: maxFallSpeed }, true);
+    }
+  }
 }
 
 function readSnapshot(): EngineSnapshot {

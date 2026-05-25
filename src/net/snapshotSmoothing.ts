@@ -1,4 +1,5 @@
 import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
+import { applyPlatformGravity, nextPlatformVelocity } from '../engine/platformMovement';
 
 export const REMOTE_BUFFER_TICKS = 2;
 export const MAX_EXTRAPOLATION_SECONDS = 0.15;
@@ -246,11 +247,34 @@ export function replayPendingInputs(
   let facing = normalizeOr(authoritative.facingDx, authoritative.facingDy, { x: 1, y: 0 });
   let aim = normalizeOr(authoritative.aimDx, authoritative.aimDy, facing);
   let velocity = { x: authoritative.vx, y: authoritative.vy };
+  let wasJumpPressed = false;
   const dt = 1 / ruleset.tickRate;
 
   for (const input of pendingInputs.slice().sort((a, b) => a.sequence - b.sequence)) {
     aim = normalizeOr(input.aimDx, input.aimDy, aim);
-    if (ruleset.player.movement.mode === 'tank') {
+    if (ruleset.player.movement.mode === 'platform') {
+      const platform = nextPlatformVelocity({
+        axisX: clamp(input.moveX, -1, 1),
+        axisY: clamp(input.moveY, -1, 1),
+        speed: ruleset.player.speed,
+        speedMultiplier: 1,
+        currentVelocity: velocity,
+        position: { x, y },
+        radius: ruleset.player.radius,
+        arena: ruleset.arena,
+        obstacles: ruleset.obstacles,
+        platform: ruleset.player.movement.platform,
+        wasJumpPressed,
+      });
+      wasJumpPressed = platform.jumpPressed;
+      velocity = applyPlatformGravity(platform.velocity, ruleset.player.movement.platform.gravity, ruleset.player.movement.platform.maxFallSpeed, dt);
+      const explicitAim = normalizeOr(input.aimDx, input.aimDy, aim);
+      if (ruleset.player.aim.mode === 'free') {
+        facing = explicitAim;
+      } else if (Math.abs(input.moveX) > 0.05) {
+        facing = { x: Math.sign(input.moveX), y: 0 };
+      }
+    } else if (ruleset.player.movement.mode === 'tank') {
       const turnRadians = (ruleset.player.movement.turnSpeedDegrees * Math.PI) / 180 / ruleset.tickRate;
       facing = rotate(facing, clamp(input.moveX, -1, 1) * turnRadians);
       const throttle = clamp(-input.moveY, -1, 1);

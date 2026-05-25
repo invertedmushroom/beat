@@ -24,6 +24,13 @@ export function createDefaultRuleset(): Ruleset {
         mode: 'twinStick',
         turnSpeedDegrees: 300,
         reverseMultiplier: 0.65,
+        platform: {
+          gravity: 28,
+          jumpVelocity: 11,
+          airControl: 0.42,
+          maxFallSpeed: 18,
+          groundProbeDistance: 0.18,
+        },
       },
       aim: {
         mode: 'free',

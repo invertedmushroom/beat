@@ -92,13 +92,34 @@ function validatePlayer(value: unknown): Ruleset['player'] {
 function validatePlayerMovement(value: unknown): Ruleset['player']['movement'] {
   const movement = assertRecord(value, 'player.movement');
   const mode = readString(movement.mode, 'player.movement.mode');
-  if (mode !== 'twinStick' && mode !== 'tank') {
-    throw new Error('player.movement.mode must be twinStick or tank');
+  if (mode !== 'twinStick' && mode !== 'tank' && mode !== 'platform') {
+    throw new Error('player.movement.mode must be twinStick, tank, or platform');
   }
   return {
     mode,
     turnSpeedDegrees: readNumber(movement.turnSpeedDegrees, 'player.movement.turnSpeedDegrees', 30, 1_440),
     reverseMultiplier: readNumber(movement.reverseMultiplier, 'player.movement.reverseMultiplier', 0, 1),
+    platform: validatePlatformMovement(movement.platform),
+  };
+}
+
+function validatePlatformMovement(value: unknown): Ruleset['player']['movement']['platform'] {
+  if (value === undefined) {
+    return {
+      gravity: 28,
+      jumpVelocity: 11,
+      airControl: 0.42,
+      maxFallSpeed: 18,
+      groundProbeDistance: 0.18,
+    };
+  }
+  const platform = assertRecord(value, 'player.movement.platform');
+  return {
+    gravity: readNumber(platform.gravity, 'player.movement.platform.gravity', 1, 120),
+    jumpVelocity: readNumber(platform.jumpVelocity, 'player.movement.platform.jumpVelocity', 1, 60),
+    airControl: readNumber(platform.airControl, 'player.movement.platform.airControl', 0, 1),
+    maxFallSpeed: readNumber(platform.maxFallSpeed, 'player.movement.platform.maxFallSpeed', 1, 120),
+    groundProbeDistance: readNumber(platform.groundProbeDistance, 'player.movement.platform.groundProbeDistance', 0.01, 1),
   };
 }
 
