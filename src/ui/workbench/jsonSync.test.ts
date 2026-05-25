@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultRuleset } from '../../engine/defaultRules';
 import { rulesetFingerprint } from '../../engine/rulesHash';
 import { parseWorkbenchDocumentJson, stringifyRulesDocument, stringifyWorkbenchDocument, workbenchRulesFingerprint } from './jsonSync';
+import { createWorkbenchState } from './state';
 
 describe('workbench json sync', () => {
   it('imports bare rules and exports canonical bare rules by default', () => {
@@ -24,6 +25,20 @@ describe('workbench json sync', () => {
     expect(parsed.wrapped).toBe(true);
     expect(parsed.editor).toMatchObject({ selectedTab: 'npcs', selectedAbilityId: 'pulse-bolt' });
     expect(parsed.ruleset).toEqual(ruleset);
+  });
+
+  it('allows legacy wrapped documents that reference the removed physics tab', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = parseWorkbenchDocumentJson(
+      JSON.stringify({
+        schemaVersion: 1,
+        rules: ruleset,
+        editor: { selectedTab: 'physics' },
+      }),
+    );
+
+    expect(parsed.editor?.selectedTab).toBe('physics');
+    expect(createWorkbenchState(parsed.ruleset, parsed.editor).selectedTab).toBe('abilities');
   });
 
   it('excludes editor metadata from rules fingerprints', () => {

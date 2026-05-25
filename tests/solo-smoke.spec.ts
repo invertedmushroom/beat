@@ -253,7 +253,14 @@ test('workbench edits platform controls and local preferences persist', async ({
   await page.goto('/');
   await openWorkbench(page);
   await page.getByRole('tab', { name: 'Player' }).click();
+  await expect(page.locator('#workbench-platform-gravity')).toBeHidden();
+  await expect(page.locator('#workbench-tank-turn')).toBeHidden();
+  await page.locator('#workbench-movement-mode').selectOption('tank');
+  await expect(page.locator('#workbench-tank-turn')).toBeVisible();
+  await expect(page.locator('#workbench-platform-gravity')).toBeHidden();
   await page.locator('#workbench-movement-mode').selectOption('platform');
+  await expect(page.locator('#workbench-platform-gravity')).toBeVisible();
+  await expect(page.locator('#workbench-tank-turn')).toBeHidden();
   await page.locator('#workbench-platform-gravity').fill('34');
   await page.getByRole('tab', { name: 'Preferences' }).click();
   await page.locator('#pref-hud-scale').fill('1.2');
@@ -298,6 +305,19 @@ test('workbench keyboard tabs edit structured fields and starts play', async ({ 
   await page.getByRole('tab', { name: 'Abilities' }).click();
   await page.locator('#workbench-ability-select').selectOption('pulse-bolt');
   await page.locator('#workbench-ability-damage').fill('13');
+  await page.getByRole('tab', { name: 'Mechanics' }).click();
+  await page.locator('#workbench-add-condition').click();
+  await page.locator('#workbench-condition-2-kind').selectOption('hpBelow');
+  await page.locator('#workbench-condition-2-ratio').fill('0.5');
+  await page.locator('#workbench-add-condition').click();
+  await page.locator('button[data-condition-command="remove"][data-condition-index="3"]').click();
+  await page.locator('#workbench-add-action').click();
+  await page.locator('#workbench-action-2-kind').selectOption('heal');
+  await page.locator('#workbench-action-2-target').selectOption('source');
+  await page.locator('#workbench-action-2-amount').fill('6');
+  await page.locator('button[data-action-command="moveUp"][data-action-index="2"]').click();
+  await page.locator('#workbench-add-action').click();
+  await page.locator('button[data-action-command="remove"][data-action-index="3"]').click();
   await page.getByRole('tab', { name: 'NPCs' }).click();
   await page.locator('#workbench-npc-select').selectOption('spark-chaser');
   await page.locator('#workbench-npc-speed').fill('0.9');
@@ -332,6 +352,12 @@ test('advanced JSON wrapper and invalid edits preserve last accepted rules', asy
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByRole('tab', { name: 'NPCs' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#rules-inspector')).toContainText('Wrapped Workbench');
+
+  await page.getByRole('tab', { name: 'Abilities' }).click();
+  await page.locator('#workbench-ability-select').selectOption('anchor-orb');
+  await page.locator('#workbench-effect-0-body-mass').fill('0');
+  await expect(page.locator('#workbench-diagnostics')).toContainText('abilities[anchor-orb].effects[0].body.mass');
+  await expect(page.locator('#workbench-effect-0-body-mass')).toHaveValue('8');
 
   await page.getByRole('tab', { name: 'Advanced JSON' }).click();
   await page.locator('#rules-json').fill('{"id":');
@@ -453,6 +479,13 @@ test('lab physics preset materializes bodies and tethers actors', async ({ page 
   await page.getByRole('button', { name: 'Physics' }).click();
   await expect(page.locator('#rules-inspector')).toContainText('Anchor Orb');
   await expect(page.locator('#rules-inspector')).toContainText('phase walls');
+  await page.getByRole('tab', { name: 'Abilities' }).click();
+  await page.locator('#workbench-ability-select').selectOption('anchor-orb');
+  await page.locator('#workbench-effect-0-body-mass').fill('9.5');
+  await page.locator('#workbench-effect-0-body-lifetimeTicks').fill('180');
+  await page.locator('#workbench-effect-1-stiffness').fill('150');
+  await page.locator('#workbench-ability-select').selectOption('wrecking-weight');
+  await page.locator('#workbench-effect-0-leashLength').fill('2.8');
   await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Lab' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
