@@ -1,4 +1,13 @@
 import type { EngineSnapshot, Ruleset } from '../engine/protocol';
+import { createCameraState, viewportToWorld, worldToViewport, type CameraState, type Vec2 } from './camera';
+
+export type PickedActor = {
+  id: string;
+  role: EngineSnapshot['players'][number]['role'];
+  x: number;
+  y: number;
+  distance: number;
+};
 
 export class CanvasRenderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -8,6 +17,7 @@ export class CanvasRenderer {
   private localPlayerId?: string;
   private emptyMessage = 'No room active';
   private snapshotProvider?: () => EngineSnapshot | undefined;
+  private cameraZoom = 1;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const context = canvas.getContext('2d');
@@ -43,15 +53,53 @@ export class CanvasRenderer {
   }
 
   worldToClient(x: number, y: number): { x: number; y: number } | undefined {
-    if (!this.ruleset) {
+    const camera = this.cameraForCurrentViewport();
+    if (!camera) {
       return undefined;
     }
     const rect = this.canvas.getBoundingClientRect();
-    const scale = Math.min(rect.width / (this.ruleset.arena.width + 4), rect.height / (this.ruleset.arena.height + 4));
+    const point = worldToViewport(camera, x, y);
     return {
-      x: rect.left + rect.width / 2 + x * scale,
-      y: rect.top + rect.height / 2 + y * scale,
+      x: rect.left + point.x,
+      y: rect.top + point.y,
     };
+  }
+
+  clientToWorld(clientX: number, clientY: number): Vec2 | undefined {
+    const camera = this.cameraForCurrentViewport();
+    if (!camera) {
+      return undefined;
+    }
+    const rect = this.canvas.getBoundingClientRect();
+    return viewportToWorld(camera, clientX - rect.left, clientY - rect.top);
+  }
+
+  setCameraZoom(zoom: number): void {
+    this.cameraZoom = Math.max(0.1, Math.min(8, zoom));
+  }
+
+  pickActorAtClient(clientX: number, clientY: number): PickedActor | undefined {
+    const world = this.clientToWorld(clientX, clientY);
+    const snapshot = this.snapshot;
+    const ruleset = this.ruleset;
+    if (!world || !snapshot || !ruleset) {
+      return undefined;
+    }
+    const pickRadius = ruleset.player.radius * 1.35;
+    let picked: PickedActor | undefined;
+    for (const player of snapshot.players) {
+      const distance = Math.hypot(player.x - world.x, player.y - world.y);
+      if (distance <= pickRadius && (!picked || distance < picked.distance)) {
+        picked = {
+          id: player.playerId,
+          role: player.role,
+          x: player.x,
+          y: player.y,
+          distance,
+        };
+      }
+    }
+    return picked;
   }
 
   update(snapshot: EngineSnapshot): void {
@@ -98,33 +146,29 @@ export class CanvasRenderer {
       return;
     }
 
-    const scale = Math.min(width / (this.ruleset.arena.width + 4), height / (this.ruleset.arena.height + 4));
-    const originX = width / 2;
-    const originY = height / 2;
+    const camera = this.cameraForFrame(width, height);
 
-    this.drawGrid(originX, originY, scale, width, height);
-    this.drawArena(originX, originY, scale);
+    this.drawGrid(camera, width, height);
+    this.drawArena(camera);
 
     for (const obstacle of this.ruleset.obstacles) {
-      const x = originX + (obstacle.x - obstacle.halfWidth) * scale;
-      const y = originY + (obstacle.y - obstacle.halfHeight) * scale;
+      const topLeft = worldToViewport(camera, obstacle.x - obstacle.halfWidth, obstacle.y - obstacle.halfHeight);
       this.ctx.fillStyle = '#30302d';
       this.ctx.strokeStyle = '#5d5a4f';
       this.ctx.lineWidth = 1;
-      this.ctx.fillRect(x, y, obstacle.halfWidth * 2 * scale, obstacle.halfHeight * 2 * scale);
-      this.ctx.strokeRect(x, y, obstacle.halfWidth * 2 * scale, obstacle.halfHeight * 2 * scale);
+      this.ctx.fillRect(topLeft.x, topLeft.y, obstacle.halfWidth * 2 * camera.scale, obstacle.halfHeight * 2 * camera.scale);
+      this.ctx.strokeRect(topLeft.x, topLeft.y, obstacle.halfWidth * 2 * camera.scale, obstacle.halfHeight * 2 * camera.scale);
     }
 
-    this.drawObjectives(originX, originY, scale);
+    this.drawObjectives(camera);
 
     const local = this.snapshot?.players.find((player) => player.playerId === this.localPlayerId);
     if (local?.alive) {
-      this.drawLocalTelegraph(local, originX, originY, scale);
+      this.drawLocalTelegraph(local, camera);
     }
 
     for (const effect of this.snapshot?.effects ?? []) {
-      const x = originX + effect.x * scale;
-      const y = originY + effect.y * scale;
+      const { x, y } = worldToViewport(camera, effect.x, effect.y);
       const progress = effect.lifetimeTicks > 0 ? effect.ageTicks / effect.lifetimeTicks : 1;
       this.ctx.save();
       this.ctx.globalAlpha = Math.max(0, 1 - progress);
@@ -132,7 +176,7 @@ export class CanvasRenderer {
       this.ctx.strokeStyle = effect.color;
       this.ctx.lineWidth = effect.kind === 'melee' ? 2 : effect.kind === 'death' ? 4 : effect.kind === 'slow' ? 2 : 3;
       const pulseScale = effect.kind === 'dash' || effect.kind === 'knockback' ? 0.85 + progress * 0.95 : 0.7 + progress * 0.55;
-      this.ctx.arc(x, y, effect.radius * scale * pulseScale, 0, Math.PI * 2);
+      this.ctx.arc(x, y, effect.radius * camera.scale * pulseScale, 0, Math.PI * 2);
       this.ctx.stroke();
       if (effect.kind === 'death' || effect.kind === 'heal') {
         this.ctx.globalAlpha = Math.max(0, 0.28 - progress * 0.28);
@@ -142,25 +186,23 @@ export class CanvasRenderer {
       this.ctx.restore();
     }
 
-    this.drawConstraints(originX, originY, scale);
-    this.drawPhysicsBodies(originX, originY, scale);
+    this.drawConstraints(camera);
+    this.drawPhysicsBodies(camera);
 
     for (const projectile of this.snapshot?.projectiles ?? []) {
-      const x = originX + projectile.x * scale;
-      const y = originY + projectile.y * scale;
+      const { x, y } = worldToViewport(camera, projectile.x, projectile.y);
       this.ctx.beginPath();
       this.ctx.fillStyle = projectile.color;
       this.ctx.shadowColor = projectile.color;
       this.ctx.shadowBlur = 12;
-      this.ctx.arc(x, y, Math.max(3, projectile.radius * scale), 0, Math.PI * 2);
+      this.ctx.arc(x, y, Math.max(3, projectile.radius * camera.scale), 0, Math.PI * 2);
       this.ctx.fill();
       this.ctx.shadowBlur = 0;
     }
 
     for (const player of this.snapshot?.players ?? []) {
-      const x = originX + player.x * scale;
-      const y = originY + player.y * scale;
-      const radius = this.ruleset.player.radius * scale;
+      const { x, y } = worldToViewport(camera, player.x, player.y);
+      const radius = this.ruleset.player.radius * camera.scale;
       if (player.statuses.length > 0) {
         this.drawStatusRings(x, y, radius, player.statuses);
       }
@@ -197,8 +239,7 @@ export class CanvasRenderer {
     }
 
     for (const text of this.snapshot?.combatTexts ?? []) {
-      const x = originX + text.x * scale;
-      const y = originY + text.y * scale;
+      const { x, y } = worldToViewport(camera, text.x, text.y);
       const progress = text.lifetimeTicks > 0 ? text.ageTicks / text.lifetimeTicks : 1;
       this.ctx.save();
       this.ctx.globalAlpha = Math.max(0, 1 - progress);
@@ -309,7 +350,7 @@ export class CanvasRenderer {
     this.ctx.restore();
   }
 
-  private drawLocalTelegraph(player: NonNullable<EngineSnapshot['players'][number]>, originX: number, originY: number, scale: number): void {
+  private drawLocalTelegraph(player: NonNullable<EngineSnapshot['players'][number]>, camera: CameraState): void {
     if (!this.ruleset) {
       return;
     }
@@ -321,20 +362,19 @@ export class CanvasRenderer {
     const aim = normalized(player.charging?.aimDx ?? player.aimDx, player.charging?.aimDy ?? player.aimDy) ?? { x: 1, y: 0 };
     const ratio = player.charging?.ratio ?? 0;
     const range = ability.range * (ability.charge && player.charging ? lerp(ability.charge.rangeMultiplierMin ?? 1, ability.charge.rangeMultiplierMax ?? 1, ratio) : 1);
-    const x = originX + player.x * scale;
-    const y = originY + player.y * scale;
+    const { x, y } = worldToViewport(camera, player.x, player.y);
     this.ctx.save();
     this.ctx.strokeStyle = ability.color;
     this.ctx.globalAlpha = player.charging ? 0.78 : 0.42;
     this.ctx.lineWidth = player.charging ? 3 : 2;
     this.ctx.setLineDash(player.charging ? [] : [8, 8]);
     this.ctx.beginPath();
-    this.ctx.arc(x, y, range * scale, 0, Math.PI * 2);
+    this.ctx.arc(x, y, range * camera.scale, 0, Math.PI * 2);
     this.ctx.stroke();
     this.ctx.setLineDash([]);
     this.ctx.beginPath();
     this.ctx.moveTo(x, y);
-    this.ctx.lineTo(x + aim.x * range * scale, y + aim.y * range * scale);
+    this.ctx.lineTo(x + aim.x * range * camera.scale, y + aim.y * range * camera.scale);
     this.ctx.stroke();
     this.ctx.restore();
   }
@@ -357,24 +397,23 @@ export class CanvasRenderer {
     this.ctx.restore();
   }
 
-  private drawObjectives(originX: number, originY: number, scale: number): void {
+  private drawObjectives(camera: CameraState): void {
     for (const objective of this.snapshot?.objectives ?? []) {
       for (const zone of objective.zones) {
-        const x = originX + zone.x * scale;
-        const y = originY + zone.y * scale;
+        const { x, y } = worldToViewport(camera, zone.x, zone.y);
         const active = objective.activeZoneId === zone.zoneId;
         this.ctx.save();
         this.ctx.globalAlpha = active ? 0.2 : 0.1;
         this.ctx.fillStyle = zone.color;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, zone.radius * scale, 0, Math.PI * 2);
+        this.ctx.arc(x, y, zone.radius * camera.scale, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.globalAlpha = active ? 0.82 : 0.48;
         this.ctx.strokeStyle = zone.color;
         this.ctx.lineWidth = active ? 3 : 2;
         this.ctx.setLineDash(active ? [] : [9, 6]);
         this.ctx.beginPath();
-        this.ctx.arc(x, y, zone.radius * scale, 0, Math.PI * 2);
+        this.ctx.arc(x, y, zone.radius * camera.scale, 0, Math.PI * 2);
         this.ctx.stroke();
         this.ctx.setLineDash([]);
         this.ctx.fillStyle = '#f5f3ed';
@@ -383,20 +422,19 @@ export class CanvasRenderer {
         this.ctx.fillText(`${zone.team} +${zone.points}`, x, y + 4);
         this.ctx.restore();
       }
-      const relicX = originX + objective.x * scale;
-      const relicY = originY + objective.y * scale;
+      const { x: relicX, y: relicY } = worldToViewport(camera, objective.x, objective.y);
       this.ctx.save();
       this.ctx.strokeStyle = objective.color;
       this.ctx.globalAlpha = objective.scoreCooldownTicks > 0 ? 0.35 : 0.72;
       this.ctx.lineWidth = 2;
       this.ctx.beginPath();
-      this.ctx.arc(relicX, relicY, Math.max(7, objective.radius * scale * 1.55), 0, Math.PI * 2);
+      this.ctx.arc(relicX, relicY, Math.max(7, objective.radius * camera.scale * 1.55), 0, Math.PI * 2);
       this.ctx.stroke();
       this.ctx.restore();
     }
   }
 
-  private drawConstraints(originX: number, originY: number, scale: number): void {
+  private drawConstraints(camera: CameraState): void {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
@@ -409,10 +447,8 @@ export class CanvasRenderer {
       const anchorBody = constraint.anchorBodyId
         ? snapshot.physicsBodies.find((body) => body.bodyId === constraint.anchorBodyId)
         : undefined;
-      const targetX = originX + target.x * scale;
-      const targetY = originY + target.y * scale;
-      const anchorX = originX + (anchorBody?.x ?? constraint.anchorX) * scale;
-      const anchorY = originY + (anchorBody?.y ?? constraint.anchorY) * scale;
+      const targetPoint = worldToViewport(camera, target.x, target.y);
+      const anchorPoint = worldToViewport(camera, anchorBody?.x ?? constraint.anchorX, anchorBody?.y ?? constraint.anchorY);
       const fade = Math.max(0.28, Math.min(1, constraint.remainingTicks / 40));
       this.ctx.save();
       this.ctx.globalAlpha = fade;
@@ -420,28 +456,27 @@ export class CanvasRenderer {
       this.ctx.lineWidth = constraint.kind === 'drag' ? 3 : 2;
       this.ctx.setLineDash(constraint.kind === 'drag' ? [8, 5] : [4, 4]);
       this.ctx.beginPath();
-      this.ctx.moveTo(targetX, targetY);
-      this.ctx.lineTo(anchorX, anchorY);
+      this.ctx.moveTo(targetPoint.x, targetPoint.y);
+      this.ctx.lineTo(anchorPoint.x, anchorPoint.y);
       this.ctx.stroke();
       this.ctx.setLineDash([]);
       this.ctx.globalAlpha = fade * 0.65;
       this.ctx.beginPath();
-      this.ctx.arc(anchorX, anchorY, Math.max(5, constraint.length * scale), 0, Math.PI * 2);
+      this.ctx.arc(anchorPoint.x, anchorPoint.y, Math.max(5, constraint.length * camera.scale), 0, Math.PI * 2);
       this.ctx.stroke();
       this.ctx.globalAlpha = fade;
       this.ctx.fillStyle = constraint.color;
       this.ctx.beginPath();
-      this.ctx.arc(anchorX, anchorY, 4.5, 0, Math.PI * 2);
+      this.ctx.arc(anchorPoint.x, anchorPoint.y, 4.5, 0, Math.PI * 2);
       this.ctx.fill();
       this.ctx.restore();
     }
   }
 
-  private drawPhysicsBodies(originX: number, originY: number, scale: number): void {
+  private drawPhysicsBodies(camera: CameraState): void {
     for (const body of this.snapshot?.physicsBodies ?? []) {
-      const x = originX + body.x * scale;
-      const y = originY + body.y * scale;
-      const radius = Math.max(5, body.radius * scale);
+      const { x, y } = worldToViewport(camera, body.x, body.y);
+      const radius = Math.max(5, body.radius * camera.scale);
       const fade = Math.max(0.25, Math.min(1, body.remainingTicks / 30));
       this.ctx.save();
       this.ctx.globalAlpha = fade;
@@ -463,7 +498,7 @@ export class CanvasRenderer {
         this.ctx.globalAlpha = 0.55 * fade;
         this.ctx.beginPath();
         this.ctx.moveTo(x, y);
-        this.ctx.lineTo(x - body.vx * scale * 0.35, y - body.vy * scale * 0.35);
+        this.ctx.lineTo(x - body.vx * camera.scale * 0.35, y - body.vy * camera.scale * 0.35);
         this.ctx.stroke();
       }
       this.ctx.restore();
@@ -498,17 +533,40 @@ export class CanvasRenderer {
     return this.ruleset.abilities.find((ability) => ability.id === abilityId);
   }
 
-  private drawGrid(originX: number, originY: number, scale: number, width: number, height: number): void {
+  private cameraForCurrentViewport(): CameraState | undefined {
+    if (!this.ruleset) {
+      return undefined;
+    }
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    if (width <= 0 || height <= 0) {
+      return undefined;
+    }
+    return this.cameraForFrame(width, height);
+  }
+
+  private cameraForFrame(width: number, height: number): CameraState {
+    if (!this.ruleset) {
+      throw new Error('camera unavailable without ruleset');
+    }
+    return createCameraState(this.ruleset, width, height, this.cameraTarget(), this.cameraZoom);
+  }
+
+  private cameraTarget(): Vec2 | undefined {
+    return this.snapshot?.players.find((player) => player.playerId === this.localPlayerId && player.alive);
+  }
+
+  private drawGrid(camera: CameraState, width: number, height: number): void {
     this.ctx.strokeStyle = '#242421';
     this.ctx.lineWidth = 1;
-    const step = scale * 2;
-    for (let x = originX % step; x < width; x += step) {
+    const step = camera.scale * 2;
+    for (let x = camera.originX % step; x < width; x += step) {
       this.ctx.beginPath();
       this.ctx.moveTo(x, 0);
       this.ctx.lineTo(x, height);
       this.ctx.stroke();
     }
-    for (let y = originY % step; y < height; y += step) {
+    for (let y = camera.originY % step; y < height; y += step) {
       this.ctx.beginPath();
       this.ctx.moveTo(0, y);
       this.ctx.lineTo(width, y);
@@ -516,15 +574,14 @@ export class CanvasRenderer {
     }
   }
 
-  private drawArena(originX: number, originY: number, scale: number): void {
+  private drawArena(camera: CameraState): void {
     if (!this.ruleset) {
       return;
     }
-    const x = originX - (this.ruleset.arena.width / 2) * scale;
-    const y = originY - (this.ruleset.arena.height / 2) * scale;
+    const { x, y } = worldToViewport(camera, -this.ruleset.arena.width / 2, -this.ruleset.arena.height / 2);
     this.ctx.strokeStyle = '#2fd17c';
     this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(x, y, this.ruleset.arena.width * scale, this.ruleset.arena.height * scale);
+    this.ctx.strokeRect(x, y, this.ruleset.arena.width * camera.scale, this.ruleset.arena.height * camera.scale);
   }
 
   private drawCentered(text: string): void {

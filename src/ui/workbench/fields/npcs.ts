@@ -1,0 +1,50 @@
+import type { WorkbenchField } from '../fieldTypes';
+
+export const NPC_FIELDS: WorkbenchField[] = [
+  {
+    id: 'behavior',
+    label: 'Behavior',
+    section: 'npcs',
+    kind: 'npc',
+    path: 'npcs.archetypes[selected].behavior.mode',
+    controlId: 'workbench-npc-behavior',
+    input: 'select',
+    options: [
+      { value: 'idle', label: 'Idle' },
+      { value: 'wander', label: 'Wander' },
+      { value: 'seek', label: 'Seek' },
+      { value: 'kite', label: 'Kite' },
+    ],
+  },
+  {
+    id: 'aggroRange',
+    label: 'Aggro range',
+    section: 'npcs',
+    kind: 'npc',
+    path: 'npcs.archetypes[selected].behavior.aggroRange',
+    controlId: 'workbench-npc-aggro',
+    input: 'number',
+    min: 0,
+    step: 0.5,
+  },
+  {
+    id: 'speedMultiplier',
+    label: 'Speed multiplier',
+    section: 'npcs',
+    kind: 'npc',
+    path: 'npcs.archetypes[selected].speedMultiplier',
+    controlId: 'workbench-npc-speed',
+    input: 'number',
+    min: 0,
+    step: 0.05,
+  },
+  {
+    id: 'sessionSpawn',
+    label: 'Spawn in Solo/Host',
+    section: 'npcs',
+    kind: 'npc',
+    path: 'npcs.sessionSpawns',
+    controlId: 'workbench-npc-session',
+    input: 'checkbox',
+  },
+];

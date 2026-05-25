@@ -13,6 +13,7 @@ import type {
   RuntimeNpcConfig,
 } from './engine/protocol';
 import { InputController, type TouchControlElements } from './input/InputController';
+import { PointerWorldAdapter } from './input/PointerWorldAdapter';
 import { SnapshotSmoother, type SnapshotSmoothingStats } from './net/snapshotSmoothing';
 import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
@@ -67,6 +68,7 @@ export class BeatApp {
   };
   private readonly renderer: CanvasRenderer;
   private readonly input: InputController;
+  private readonly pointerWorld: PointerWorldAdapter;
   private readonly root: HTMLElement;
   private mode: Mode = 'idle';
   private displayNameInput!: HTMLInputElement;
@@ -144,6 +146,11 @@ export class BeatApp {
     this.uiPreferences = loadUiPreferences();
     this.renderer = new CanvasRenderer(this.canvas);
     this.input = new InputController(this.canvas, this.touchControls());
+    this.pointerWorld = new PointerWorldAdapter({
+      target: this.canvas,
+      clientToWorld: (clientX, clientY) => this.renderer.clientToWorld(clientX, clientY),
+      pickActorAtClient: (clientX, clientY) => this.renderer.pickActorAtClient(clientX, clientY),
+    });
     this.applyUiPreferences();
   }
 
@@ -205,6 +212,7 @@ export class BeatApp {
     window.removeEventListener('pageshow', this.handlePageShow);
     window.removeEventListener('focus', this.handleWindowFocus);
     window.removeEventListener('beforeunload', this.beforeUnloadHandler);
+    this.pointerWorld.destroy();
     this.input.destroy();
     this.renderer.destroy();
     this.directory.destroy();
