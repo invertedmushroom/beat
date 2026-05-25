@@ -50,6 +50,12 @@ export class LocalRoomDirectory implements RoomDirectory {
     return this.activeRooms();
   }
 
+  refreshRooms(): void {
+    this.prune();
+    this.emitRooms();
+    this.pollSignals();
+  }
+
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void {
     this.roomListeners.add(listener);
     listener(this.activeRooms());

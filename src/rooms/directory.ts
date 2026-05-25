@@ -33,6 +33,7 @@ export type RoomDirectory = {
   advertiseRoom(room: RoomInfo): void | Promise<void>;
   closeRoom(roomId: string): void | Promise<void>;
   listRooms(): RoomInfo[];
+  refreshRooms?(): void | Promise<void>;
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void;
   requestJoinRoom?(roomId: string, peerId: string, displayName: string): void | Promise<void>;
   sendSignal(signal: RoomSignal): void | Promise<void>;

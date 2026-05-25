@@ -51,6 +51,17 @@ export class BeatApp {
   private readonly directory = this.directoryRuntime.directory;
   private readonly peerId = createId('peer');
   private readonly handleFullscreenChange = () => this.syncFullscreenButton();
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      void this.refreshRoomsNow();
+    }
+  };
+  private readonly handlePageShow = () => {
+    void this.refreshRoomsNow();
+  };
+  private readonly handleWindowFocus = () => {
+    void this.refreshRoomsNow();
+  };
   private readonly beforeUnloadHandler = () => {
     this.hostSession?.destroy();
   };
@@ -66,6 +77,7 @@ export class BeatApp {
   private workbenchButton!: HTMLButtonElement;
   private workbenchBackButton!: HTMLButtonElement;
   private leaveButton!: HTMLButtonElement;
+  private refreshRoomsButton!: HTMLButtonElement;
   private roomList!: HTMLDivElement;
   private roomSummary!: HTMLDivElement;
   private statusLine!: HTMLDivElement;
@@ -101,7 +113,6 @@ export class BeatApp {
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
   private fullscreenButtons: HTMLButtonElement[] = [];
-  private fullscreenButton!: HTMLButtonElement;
   private engine?: EngineClient;
   private hostSession?: HostSession;
   private clientSession?: ClientSession;
@@ -147,6 +158,7 @@ export class BeatApp {
     this.workbenchButton.addEventListener('click', () => this.showWorkbench());
     this.workbenchBackButton.addEventListener('click', () => this.showMenu());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
+    this.refreshRoomsButton.addEventListener('click', () => void this.refreshRoomsNow());
     for (const button of this.fullscreenButtons) {
       button.addEventListener('click', () => void this.toggleFullscreen());
     }
@@ -168,10 +180,10 @@ export class BeatApp {
     for (const button of this.rulesExampleButtons) {
       button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
     }
-    for (const button of this.fullscreenButtons) {
-      button.addEventListener('click', () => void this.toggleFullscreen());
-    }
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    window.addEventListener('pageshow', this.handlePageShow);
+    window.addEventListener('focus', this.handleWindowFocus);
     window.addEventListener('beforeunload', this.beforeUnloadHandler);
     this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
     this.syncWorkbenchControls();
@@ -181,6 +193,7 @@ export class BeatApp {
     this.setStatus('idle: local directory ready');
     this.hashLine.textContent = this.directoryRuntime.label;
     this.peerLine.textContent = `peer ${shortHash(this.peerId)}`;
+    void this.refreshRoomsNow();
   }
 
   destroy(): void {
@@ -188,6 +201,9 @@ export class BeatApp {
     this.unsubscribeRooms?.();
     this.unsubscribeInput?.();
     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    window.removeEventListener('pageshow', this.handlePageShow);
+    window.removeEventListener('focus', this.handleWindowFocus);
     window.removeEventListener('beforeunload', this.beforeUnloadHandler);
     this.input.destroy();
     this.renderer.destroy();
@@ -208,6 +224,7 @@ export class BeatApp {
     this.workbenchButton = requireNode<HTMLButtonElement>('#open-workbench');
     this.workbenchBackButton = requireNode<HTMLButtonElement>('#workbench-back-menu');
     this.leaveButton = requireNode<HTMLButtonElement>('#leave-room');
+    this.refreshRoomsButton = requireNode<HTMLButtonElement>('#refresh-rooms');
     this.roomList = requireNode<HTMLDivElement>('#room-list');
     this.roomSummary = requireNode<HTMLDivElement>('#room-summary');
     this.statusLine = requireNode<HTMLDivElement>('#status-line');
@@ -231,9 +248,7 @@ export class BeatApp {
     this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
     this.rulesInspector = requireNode<HTMLDivElement>('#rules-inspector');
     this.workbenchDiagnosticsRoot = requireNode<HTMLDivElement>('#workbench-diagnostics');
-    this.roomSummary = requireNode<HTMLDivElement>('#room-summary');
     this.fullscreenButtons = Array.from(this.root.querySelectorAll<HTMLButtonElement>('.fullscreen-toggle-button'));
-    this.fullscreenButton = this.fullscreenButtons[0];
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
@@ -353,7 +368,8 @@ export class BeatApp {
   }
 
   private async joinRoom(room: RoomInfo): Promise<void> {
-    const liveRoom = this.currentRooms.find((candidate) => candidate.roomId === room.roomId) ?? this.directory.listRooms().find((candidate) => candidate.roomId === room.roomId);
+    const rooms = await this.refreshRoomsNow();
+    const liveRoom = rooms.find((candidate) => candidate.roomId === room.roomId);
     if (!liveRoom || liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers) {
       this.log(`join blocked: ${room.name} is unavailable`);
       this.setStatus(`room unavailable: ${room.name}`);
@@ -463,13 +479,26 @@ export class BeatApp {
     this.setStatus(`idle: ${this.directoryRuntime.label}`);
   }
 
+  private async refreshRoomsNow(): Promise<RoomInfo[]> {
+    try {
+      if (typeof this.directory.refreshRooms === 'function') {
+        await Promise.resolve(this.directory.refreshRooms());
+      }
+    } catch (error) {
+      this.log(`room refresh failed: ${readError(error)}`);
+    }
+    const rooms = this.directory.listRooms();
+    this.renderRooms(rooms);
+    return rooms;
+  }
+
   private renderRooms(rooms: RoomInfo[]): void {
     this.currentRooms = rooms;
     this.roomSummary.innerHTML = '';
     const openRooms = rooms.filter((room) => room.status === 'open' && room.playerCount < room.maxPlayers);
     const fullRooms = rooms.filter((room) => room.status !== 'open' || room.playerCount >= room.maxPlayers);
     const activeCount = openRooms.length + fullRooms.length;
-    this.roomSummary.textContent = activeCount > 0 ? `Active rooms: ${activeCount} · available ${openRooms.length} · full ${fullRooms.length}` : 'No hosted rooms visible on this origin.';
+    this.roomSummary.textContent = activeCount > 0 ? `Active rooms: ${activeCount} · available ${openRooms.length} · full ${fullRooms.length}` : 'Active rooms: 0';
     this.roomList.innerHTML = '';
     if (rooms.length === 0) {
       const empty = document.createElement('div');
@@ -503,6 +532,11 @@ export class BeatApp {
   }
 
   private setStatus(status: string): void {
+    if (this.mode === 'idle') {
+      this.statusLine.textContent = status;
+      this.menuStatusLine.textContent = status;
+      return;
+    }
     const players = this.lastSnapshot?.players.filter((player) => player.role === 'player').length ?? 0;
     const entities = this.lastSnapshot?.players.length ?? 0;
     const text = `${status} · players ${players} · entities ${entities}`;
@@ -1115,7 +1149,7 @@ export class BeatApp {
     this.workbenchView.hidden = true;
     this.arenaView.hidden = true;
     this.syncLabControls();
-    this.renderRooms(this.directory.listRooms());
+    void this.refreshRoomsNow();
     this.syncFullscreenButton();
   }
 
@@ -1333,7 +1367,10 @@ function shellHtml(): string {
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
             <section class="room-section">
-              <h2>Rooms</h2>
+              <div class="room-section__header">
+                <h2>Rooms</h2>
+                <button id="refresh-rooms" class="button room-refresh-button" type="button">Refresh</button>
+              </div>
               <div id="room-summary" class="room-summary"></div>
               <div id="room-list" class="room-list"></div>
             </section>

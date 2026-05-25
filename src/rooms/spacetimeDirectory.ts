@@ -70,6 +70,11 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
     return activeRooms([...this.rooms.values()]);
   }
 
+  async refreshRooms(): Promise<void> {
+    this.emitRoomsFromCache();
+    await this.withConnection((connection) => connection.reducers.pruneHostedRooms({}));
+  }
+
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void {
     this.roomListeners.add(listener);
     listener(this.listRooms());

@@ -573,6 +573,24 @@ h2 {
   margin-top: 18px;
 }
 
+.room-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.room-section__header h2 {
+  margin: 0;
+}
+
+.room-refresh-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .room-list {
   display: grid;
   gap: 8px;

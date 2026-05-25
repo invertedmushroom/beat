@@ -9,6 +9,7 @@ export class HttpRoomDirectory implements RoomDirectory {
   private readonly roomListeners = new Set<(rooms: RoomInfo[]) => void>();
   private readonly signalListeners = new Map<string, Set<(signal: RoomSignal) => void>>();
   private readonly seenSignals = new Set<string>();
+  private roomsCache: RoomInfo[] = [];
   private pollHandle?: number;
   private eventSource?: EventSource;
 
@@ -21,21 +22,26 @@ export class HttpRoomDirectory implements RoomDirectory {
     void this.request(`/rooms/${encodeURIComponent(room.roomId)}`, {
       method: 'PUT',
       body: JSON.stringify(room),
-    }).then(() => this.emitRooms());
+    }).then(() => void this.refreshRooms());
   }
 
   closeRoom(roomId: string): void {
-    void this.request(`/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' }).then(() => this.emitRooms());
+    void this.request(`/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' }).then(() => void this.refreshRooms());
   }
 
   listRooms(): RoomInfo[] {
-    void this.emitRooms();
-    return [];
+    return [...this.roomsCache];
+  }
+
+  async refreshRooms(): Promise<void> {
+    this.roomsCache = await this.fetchRooms();
+    this.notifyRooms();
   }
 
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void {
     this.roomListeners.add(listener);
-    void this.emitRooms();
+    listener(this.listRooms());
+    void this.refreshRooms();
     return () => this.roomListeners.delete(listener);
   }
 
@@ -76,20 +82,19 @@ export class HttpRoomDirectory implements RoomDirectory {
 
   private startPolling(): void {
     this.pollHandle = window.setInterval(() => {
-      void this.emitRooms();
+      void this.refreshRooms();
       for (const peerId of this.signalListeners.keys()) {
         void this.pollSignals(peerId);
       }
     }, 1_500);
   }
 
-  private async emitRooms(): Promise<void> {
+  private notifyRooms(): void {
     if (this.roomListeners.size === 0) {
       return;
     }
-    const rooms = await this.fetchRooms();
     for (const listener of this.roomListeners) {
-      listener(rooms);
+      listener(this.listRooms());
     }
   }
 
@@ -118,9 +123,8 @@ export class HttpRoomDirectory implements RoomDirectory {
         return;
       }
       if (message.type === 'rooms') {
-        for (const listener of this.roomListeners) {
-          listener(message.rooms);
-        }
+        this.roomsCache = message.rooms;
+        this.notifyRooms();
       } else {
         this.dispatchSignal(message.signal);
       }
