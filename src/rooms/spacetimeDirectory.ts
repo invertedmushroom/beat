@@ -14,11 +14,13 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
   private readonly roomListeners = new Set<(rooms: RoomInfo[]) => void>();
   private readonly signalListeners = new Map<string, Set<(signal: RoomSignal) => void>>();
   private readonly signalSubscriptions = new Map<string, SubscriptionHandle>();
+  private readonly hostedRooms = new Map<string, RoomInfo>();
   private readonly advertisedRooms = new Set<string>();
   private readonly rooms = new Map<string, RoomInfo>();
   private readonly seenSignals = new Set<string>();
-  private readonly ready: Promise<DbConnection>;
+  private ready: Promise<DbConnection>;
   private connection?: DbConnection;
+  private connectionActive = false;
   private roomSubscription?: SubscriptionHandle;
   private pruneHandle?: number;
   private destroyed = false;
@@ -27,11 +29,12 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
     this.ready = this.connect();
     this.ready.catch((error: unknown) => console.warn('SpacetimeDB directory connection failed', error));
     this.pruneHandle = window.setInterval(() => {
-      void this.withConnection((connection) => connection.reducers.pruneHostedRooms({}));
+      void this.ensureConnectedAndRefresh();
     }, 30_000);
   }
 
   async advertiseRoom(room: RoomInfo): Promise<void> {
+    this.hostedRooms.set(room.roomId, room);
     await this.withConnection(async (connection) => {
       if (this.advertisedRooms.has(room.roomId)) {
         await connection.reducers.heartbeatHostedRoom({
@@ -60,6 +63,7 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
   }
 
   async closeRoom(roomId: string): Promise<void> {
+    this.hostedRooms.delete(roomId);
     this.advertisedRooms.delete(roomId);
     this.rooms.delete(roomId);
     this.emitRooms();
@@ -71,8 +75,21 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
   }
 
   async refreshRooms(): Promise<void> {
+    await this.ensureConnectedAndRefresh();
+  }
+
+  private async ensureConnectedAndRefresh(): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    if (!this.connectionActive) {
+      this.reconnect();
+    }
     this.emitRoomsFromCache();
-    await this.withConnection((connection) => connection.reducers.pruneHostedRooms({}));
+    await this.withConnection(async (connection) => {
+      await connection.reducers.pruneHostedRooms({});
+      await this.reAdvertiseHostedRooms(connection);
+    });
   }
 
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void {
@@ -168,6 +185,8 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
       .onConnect((connection, _identity, nextToken) => {
         window.localStorage.setItem(tokenKey, nextToken);
         this.connection = connection;
+        this.connectionActive = true;
+        this.advertisedRooms.clear();
         this.installRoomCallbacks(connection);
         this.installSignalCallbacks(connection);
         this.roomSubscription = connection
@@ -175,14 +194,81 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
           .onApplied(() => this.emitRoomsFromCache())
           .onError((ctx) => console.warn('Room subscription failed', ctx.event))
           .subscribe(tables.hostedRoom);
+        for (const peerId of this.signalListeners.keys()) {
+          void this.ensureSignalSubscription(peerId);
+        }
         void connection.reducers.pruneHostedRooms({});
+        void this.reAdvertiseHostedRooms(connection);
         resolveReady(connection);
       })
-      .onConnectError((_ctx, error) => rejectReady(error));
+      .onConnectError((_ctx, error) => {
+        this.connectionActive = false;
+        rejectReady(error);
+      })
+      .onDisconnect(() => {
+        this.connectionActive = false;
+        for (const subscription of this.signalSubscriptions.values()) {
+          if (!subscription.isEnded()) {
+            subscription.unsubscribe();
+          }
+        }
+        this.signalSubscriptions.clear();
+        if (this.roomSubscription && !this.roomSubscription.isEnded()) {
+          this.roomSubscription.unsubscribe();
+        }
+        this.roomSubscription = undefined;
+      });
 
     const connection = builder.build();
     this.connection = connection;
     return ready;
+  }
+
+  private reconnect(): void {
+    if (this.destroyed) {
+      return;
+    }
+    try {
+      this.connection?.disconnect();
+    } catch {
+      // ignore — connection may already be dead
+    }
+    this.connection = undefined;
+    this.connectionActive = false;
+    this.advertisedRooms.clear();
+    this.ready = this.connect();
+    this.ready.catch((error: unknown) => console.warn('SpacetimeDB directory reconnect failed', error));
+  }
+
+  private async reAdvertiseHostedRooms(connection: DbConnection): Promise<void> {
+    for (const room of this.hostedRooms.values()) {
+      try {
+        if (this.advertisedRooms.has(room.roomId)) {
+          await connection.reducers.heartbeatHostedRoom({
+            roomId: room.roomId,
+            playerCount: room.playerCount,
+            status: room.status,
+          });
+        } else {
+          await connection.reducers.createHostedRoom({
+            roomId: room.roomId,
+            hostPeerId: room.hostPeerId,
+            name: room.name,
+            rulesetId: room.rulesetId,
+            rulesetHash: room.rulesetHash,
+            contentHash: room.contentHash,
+            mapBundleId: room.mapBundleId,
+            playerCount: room.playerCount,
+            maxPlayers: room.maxPlayers,
+            transport: room.transport,
+            status: room.status,
+          });
+          this.advertisedRooms.add(room.roomId);
+        }
+      } catch (error) {
+        console.warn('Re-advertise hosted room failed', room.roomId, error);
+      }
+    }
   }
 
   private installRoomCallbacks(connection: DbConnection): void {
