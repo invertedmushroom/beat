@@ -67,6 +67,7 @@ export class BeatApp {
   private workbenchBackButton!: HTMLButtonElement;
   private leaveButton!: HTMLButtonElement;
   private roomList!: HTMLDivElement;
+  private roomSummary!: HTMLDivElement;
   private statusLine!: HTMLDivElement;
   private menuStatusLine!: HTMLDivElement;
   private hashLine!: HTMLDivElement;
@@ -99,6 +100,7 @@ export class BeatApp {
   private rulesExampleButtons!: HTMLButtonElement[];
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
+  private fullscreenButtons: HTMLButtonElement[] = [];
   private fullscreenButton!: HTMLButtonElement;
   private engine?: EngineClient;
   private hostSession?: HostSession;
@@ -108,6 +110,7 @@ export class BeatApp {
   private unsubscribeRooms?: () => void;
   private unsubscribeInput?: () => void;
   private unsubscribeSnapshot?: () => void;
+  private currentRooms: RoomInfo[] = [];
   private lastSnapshot?: EngineSnapshot;
   private snapshotSmoother?: SnapshotSmoother;
   private networkStats?: NetDiagnostics;
@@ -144,7 +147,9 @@ export class BeatApp {
     this.workbenchButton.addEventListener('click', () => this.showWorkbench());
     this.workbenchBackButton.addEventListener('click', () => this.showMenu());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
-    this.fullscreenButton.addEventListener('click', () => void this.toggleFullscreen());
+    for (const button of this.fullscreenButtons) {
+      button.addEventListener('click', () => void this.toggleFullscreen());
+    }
     this.labSpawnButton.addEventListener('click', () => this.spawnSelectedLabActor());
     this.labClearActorsButton.addEventListener('click', () => this.clearLabActors());
     this.labResetButton.addEventListener('click', () => this.resetLabActors());
@@ -162,6 +167,9 @@ export class BeatApp {
     this.workbenchView.addEventListener('click', (event) => void this.handleWorkbenchCommand(event));
     for (const button of this.rulesExampleButtons) {
       button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
+    }
+    for (const button of this.fullscreenButtons) {
+      button.addEventListener('click', () => void this.toggleFullscreen());
     }
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     window.addEventListener('beforeunload', this.beforeUnloadHandler);
@@ -201,6 +209,7 @@ export class BeatApp {
     this.workbenchBackButton = requireNode<HTMLButtonElement>('#workbench-back-menu');
     this.leaveButton = requireNode<HTMLButtonElement>('#leave-room');
     this.roomList = requireNode<HTMLDivElement>('#room-list');
+    this.roomSummary = requireNode<HTMLDivElement>('#room-summary');
     this.statusLine = requireNode<HTMLDivElement>('#status-line');
     this.menuStatusLine = requireNode<HTMLDivElement>('#menu-status-line');
     this.hashLine = requireNode<HTMLDivElement>('#hash-line');
@@ -222,7 +231,9 @@ export class BeatApp {
     this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
     this.rulesInspector = requireNode<HTMLDivElement>('#rules-inspector');
     this.workbenchDiagnosticsRoot = requireNode<HTMLDivElement>('#workbench-diagnostics');
-    this.fullscreenButton = requireNode<HTMLButtonElement>('#fullscreen-toggle');
+    this.roomSummary = requireNode<HTMLDivElement>('#room-summary');
+    this.fullscreenButtons = Array.from(this.root.querySelectorAll<HTMLButtonElement>('.fullscreen-toggle-button'));
+    this.fullscreenButton = this.fullscreenButtons[0];
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
@@ -342,11 +353,13 @@ export class BeatApp {
   }
 
   private async joinRoom(room: RoomInfo): Promise<void> {
-    if (room.status !== 'open' || room.playerCount >= room.maxPlayers) {
-      this.log(`join blocked: ${room.name} is full`);
+    const liveRoom = this.currentRooms.find((candidate) => candidate.roomId === room.roomId) ?? this.directory.listRooms().find((candidate) => candidate.roomId === room.roomId);
+    if (!liveRoom || liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers) {
+      this.log(`join blocked: ${room.name} is unavailable`);
       this.setStatus(`room unavailable: ${room.name}`);
       return;
     }
+    room = liveRoom;
     this.stopActiveMode();
     this.mode = 'client';
     this.localPlayerId = undefined;
@@ -446,12 +459,17 @@ export class BeatApp {
     this.renderTrace([], []);
     this.mode = 'idle';
     this.setRulesLocked(false);
-    void this.exitFullscreen();
     this.showMenu();
     this.setStatus(`idle: ${this.directoryRuntime.label}`);
   }
 
   private renderRooms(rooms: RoomInfo[]): void {
+    this.currentRooms = rooms;
+    this.roomSummary.innerHTML = '';
+    const openRooms = rooms.filter((room) => room.status === 'open' && room.playerCount < room.maxPlayers);
+    const fullRooms = rooms.filter((room) => room.status !== 'open' || room.playerCount >= room.maxPlayers);
+    const activeCount = openRooms.length + fullRooms.length;
+    this.roomSummary.textContent = activeCount > 0 ? `Active rooms: ${activeCount} · available ${openRooms.length} · full ${fullRooms.length}` : 'No hosted rooms visible on this origin.';
     this.roomList.innerHTML = '';
     if (rooms.length === 0) {
       const empty = document.createElement('div');
@@ -460,10 +478,11 @@ export class BeatApp {
       this.roomList.append(empty);
       return;
     }
-    for (const room of rooms) {
+    const sortedRooms = [...openRooms, ...fullRooms];
+    for (const room of sortedRooms) {
       const row = document.createElement('button');
       const joinable = room.status === 'open' && room.playerCount < room.maxPlayers;
-      row.className = 'room-row';
+      row.className = `room-row${joinable ? '' : ' room-row--full'}`;
       row.type = 'button';
       row.disabled = !joinable;
       const rulesLabel = room.rulesetName ? `${room.rulesetName} (${room.rulesetId})` : room.rulesetId;
@@ -484,9 +503,9 @@ export class BeatApp {
   }
 
   private setStatus(status: string): void {
-    const humans = this.lastSnapshot?.players.filter((player) => player.role === 'player').length ?? 0;
-    const actors = this.lastSnapshot?.players.length ?? 0;
-    const text = `${status} · humans ${humans} · actors ${actors}`;
+    const players = this.lastSnapshot?.players.filter((player) => player.role === 'player').length ?? 0;
+    const entities = this.lastSnapshot?.players.length ?? 0;
+    const text = `${status} · players ${players} · entities ${entities}`;
     this.statusLine.textContent = text;
     this.menuStatusLine.textContent = text;
   }
@@ -1096,6 +1115,8 @@ export class BeatApp {
     this.workbenchView.hidden = true;
     this.arenaView.hidden = true;
     this.syncLabControls();
+    this.renderRooms(this.directory.listRooms());
+    this.syncFullscreenButton();
   }
 
   private showWorkbench(): void {
@@ -1121,15 +1142,17 @@ export class BeatApp {
   }
 
   private canFullscreen(): boolean {
-    return typeof this.arenaView.requestFullscreen === 'function' && document.fullscreenEnabled !== false;
+    return typeof this.root.requestFullscreen === 'function' && document.fullscreenEnabled !== false;
   }
 
   private syncFullscreenButton(): void {
-    const active = document.fullscreenElement === this.arenaView;
-    this.fullscreenButton.disabled = !this.canFullscreen();
-    this.fullscreenButton.textContent = active ? 'Window' : 'Fullscreen';
-    this.fullscreenButton.setAttribute('aria-pressed', String(active));
-    this.fullscreenButton.title = this.canFullscreen() ? (active ? 'Exit fullscreen' : 'Enter fullscreen') : 'Fullscreen is unavailable in this browser';
+    const active = document.fullscreenElement === this.root;
+    for (const button of this.fullscreenButtons) {
+      button.disabled = !this.canFullscreen();
+      button.textContent = active ? 'Window' : 'Fullscreen';
+      button.setAttribute('aria-pressed', String(active));
+      button.title = this.canFullscreen() ? (active ? 'Exit fullscreen' : 'Enter fullscreen') : 'Fullscreen is unavailable in this browser';
+    }
   }
 
   private async toggleFullscreen(): Promise<void> {
@@ -1137,11 +1160,11 @@ export class BeatApp {
       return;
     }
     try {
-      if (document.fullscreenElement === this.arenaView) {
+      if (document.fullscreenElement === this.root) {
         await document.exitFullscreen();
         return;
       }
-      await this.arenaView.requestFullscreen({ navigationUI: 'hide' });
+      await this.root.requestFullscreen({ navigationUI: 'hide' });
     } catch (error) {
       this.log(`fullscreen unavailable: ${readError(error)}`);
     } finally {
@@ -1150,7 +1173,7 @@ export class BeatApp {
   }
 
   private async exitFullscreen(): Promise<void> {
-    if (document.fullscreenElement !== this.arenaView) {
+    if (document.fullscreenElement !== this.root) {
       this.syncFullscreenButton();
       return;
     }
@@ -1306,10 +1329,12 @@ function shellHtml(): string {
               <button id="solo-room" class="button" type="button">Solo</button>
               <button id="lab-room" class="button" type="button">Lab</button>
               <button id="open-workbench" class="button" type="button">Workbench</button>
+              <button id="menu-fullscreen-toggle" class="button fullscreen-toggle-button" type="button">Fullscreen</button>
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
             <section class="room-section">
               <h2>Rooms</h2>
+              <div id="room-summary" class="room-summary"></div>
               <div id="room-list" class="room-list"></div>
             </section>
           </section>
@@ -1328,7 +1353,6 @@ function shellHtml(): string {
           <div id="local-mechanics" class="local-mechanics"></div>
         </div>
         <div class="arena-actions">
-          <button id="fullscreen-toggle" class="button arena-action-button" type="button" aria-pressed="false">Fullscreen</button>
           <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
         </div>
         <div id="lab-controls" class="lab-controls" hidden>
