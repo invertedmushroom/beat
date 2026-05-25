@@ -20,14 +20,18 @@ import type { RoomInfo } from './rooms/directory';
 import { createRoomDirectory } from './rooms/directoryFactory';
 import { defaultUiPreferences, loadUiPreferences, saveUiPreferences, type UiPreferences } from './ui/preferences';
 import {
+  applyWorkbenchCommand,
   applyWorkbenchFieldEdit,
   diagnosticsFromError,
+  workbenchCommandFromButton,
+  workbenchCommandPath,
   workbenchEditFromControl,
   workbenchFieldPath,
   type WorkbenchDiagnostic,
 } from './ui/workbench/fields';
 import { escapeHtml, formatMeters, aiTraceLabel, mechanicsChipHtml, mechanicsFlowHtml, rulesInspectorHtml, traceLabel } from './ui/workbench/inspector';
 import { parseWorkbenchDocumentJson, stringifyRulesDocument } from './ui/workbench/jsonSync';
+import { abilityEffectsHtml, mechanicsChainHtml } from './ui/workbench/sections';
 import {
   createWorkbenchState,
   ensureWorkbenchSelections,
@@ -155,6 +159,7 @@ export class BeatApp {
     this.workbenchDiagnosticsRoot.addEventListener('click', (event) => this.handleWorkbenchDiagnosticClick(event));
     this.workbenchView.addEventListener('input', (event) => void this.handleWorkbenchInput(event));
     this.workbenchView.addEventListener('change', (event) => void this.handleWorkbenchInput(event));
+    this.workbenchView.addEventListener('click', (event) => void this.handleWorkbenchCommand(event));
     for (const button of this.rulesExampleButtons) {
       button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
     }
@@ -640,6 +645,24 @@ export class BeatApp {
     await this.commitWorkbenchRules(next, workbenchFieldPath(edit, this.workbenchState));
   }
 
+  private async handleWorkbenchCommand(event: Event): Promise<void> {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>(
+      'button[data-effect-command], button[data-condition-command], button[data-action-command]',
+    );
+    if (!button || button.disabled) {
+      return;
+    }
+    const command = workbenchCommandFromButton(button);
+    if (!command) {
+      return;
+    }
+    const next = structuredClone(this.editableRuleset) as Ruleset;
+    if (!applyWorkbenchCommand(next, this.workbenchState, command)) {
+      return;
+    }
+    await this.commitWorkbenchRules(next, workbenchCommandPath(command, this.workbenchState));
+  }
+
   private updatePreferenceFromControl(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): void {
     const field = target.dataset.prefField as keyof UiPreferences | undefined;
     if (!field) {
@@ -674,7 +697,7 @@ export class BeatApp {
     } catch (error) {
       this.workbenchDiagnostics = diagnosticsFromError(error).map((diagnostic) => ({
         ...diagnostic,
-        path: diagnostic.path === '$' ? path ?? diagnostic.path : diagnostic.path,
+        path: shouldPreferEditPath(diagnostic.path) ? path ?? diagnostic.path : diagnostic.path,
       }));
       this.renderWorkbenchDiagnostics();
       this.log(`workbench rejected: ${readError(error)}`);
@@ -734,6 +757,10 @@ export class BeatApp {
       setControlValue(this.workbenchView, '#workbench-ability-targeting', ability.targeting);
       setControlValue(this.workbenchView, '#workbench-ability-color', ability.color);
     }
+    const abilityEffects = this.workbenchView.querySelector<HTMLElement>('#workbench-ability-effects');
+    if (abilityEffects) {
+      abilityEffects.innerHTML = abilityEffectsHtml(ruleset, this.workbenchState.selectedAbilityId);
+    }
 
     const triggerOptions = ruleset.mechanics.triggers.map((trigger) => ({ value: trigger.id, label: trigger.name ?? trigger.id }));
     setSelectOptions(this.workbenchView, '#workbench-trigger-select', triggerOptions, this.workbenchState.selectedTriggerId);
@@ -741,8 +768,10 @@ export class BeatApp {
     if (trigger) {
       setControlValue(this.workbenchView, '#workbench-trigger-name', trigger.name ?? trigger.id);
       setControlValue(this.workbenchView, '#workbench-trigger-event', trigger.event);
-      const action = trigger.actions.find((candidate) => 'amount' in candidate);
-      setControlValue(this.workbenchView, '#workbench-trigger-amount', action && 'amount' in action ? String(action.amount) : '');
+    }
+    const mechanicsChain = this.workbenchView.querySelector<HTMLElement>('#workbench-mechanics-chain');
+    if (mechanicsChain) {
+      mechanicsChain.innerHTML = mechanicsChainHtml(ruleset, this.workbenchState.selectedTriggerId);
     }
     const mechanicsFlow = this.workbenchView.querySelector<HTMLElement>('#workbench-mechanics-flow');
     if (mechanicsFlow) {
@@ -759,14 +788,6 @@ export class BeatApp {
       setControlChecked(this.workbenchView, '#workbench-npc-session', ruleset.npcs.sessionSpawns.some((spawn) => spawn.archetypeId === npc.id));
     }
 
-    const anchorBody = ruleset.abilities
-      .find((candidate) => candidate.id === 'anchor-orb')
-      ?.effects?.find((effect) => effect.kind === 'spawnBody');
-    if (anchorBody?.kind === 'spawnBody') {
-      setControlValue(this.workbenchView, '#workbench-anchor-mass', String(anchorBody.body.mass));
-      setControlValue(this.workbenchView, '#workbench-anchor-lifetime', String(anchorBody.body.lifetimeTicks));
-    }
-
     setControlValue(this.workbenchView, '#pref-hud-scale', String(this.uiPreferences.hudScale));
     setControlValue(this.workbenchView, '#pref-skill-position', this.uiPreferences.skillBarPosition);
     setControlValue(this.workbenchView, '#pref-touch-handedness', this.uiPreferences.touchHandedness);
@@ -774,7 +795,19 @@ export class BeatApp {
     setControlValue(this.workbenchView, '#pref-touch-opacity', String(this.uiPreferences.touchOpacity));
     setControlChecked(this.workbenchView, '#pref-trace-open', this.uiPreferences.traceDefaultOpen);
     setControlValue(this.workbenchView, '#pref-hud-density', this.uiPreferences.hudDensity);
+    this.syncConditionalWorkbenchFields(ruleset);
     this.renderWorkbenchDiagnostics();
+  }
+
+  private syncConditionalWorkbenchFields(ruleset: Ruleset): void {
+    for (const field of this.workbenchView.querySelectorAll<HTMLElement>('[data-visible-when]')) {
+      const [fieldId, expected] = (field.dataset.visibleWhen ?? '').split(':');
+      const visible = fieldId === 'movementMode' ? ruleset.player.movement.mode === expected : true;
+      field.hidden = !visible;
+      for (const control of field.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')) {
+        control.disabled = !visible;
+      }
+    }
   }
 
   private renderWorkbenchDiagnostics(): void {
@@ -1382,6 +1415,10 @@ function blurActiveElement(): void {
 function readControlNumber(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): number | undefined {
   const value = Number(target.value);
   return Number.isFinite(value) ? value : undefined;
+}
+
+function shouldPreferEditPath(diagnosticPath: string): boolean {
+  return diagnosticPath === '$' || diagnosticPath.startsWith('ability.effect') || diagnosticPath.startsWith('mechanics.trigger');
 }
 
 function setControlValue(root: ParentNode, selector: string, value: string): void {

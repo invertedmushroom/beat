@@ -28,7 +28,6 @@ export function workbenchHtml(): string {
             ${abilitiesPanelHtml()}
             ${mechanicsPanelHtml()}
             ${npcsPanelHtml()}
-            ${physicsPanelHtml()}
             ${presetsPanelHtml()}
             ${preferencesPanelHtml()}
             ${advancedPanelHtml()}
@@ -78,6 +77,7 @@ function abilitiesPanelHtml(): string {
                 <label class="field"><span>Edit ability</span><select id="workbench-ability-select" data-ability-select="true"></select></label>
                 ${fieldsHtml('abilities')}
               </div>
+              <div id="workbench-ability-effects" class="workbench-chain" aria-live="polite"></div>
     `,
   );
 }
@@ -91,6 +91,7 @@ function mechanicsPanelHtml(): string {
                 <label class="field"><span>Edit trigger</span><select id="workbench-trigger-select" data-trigger-select="true"></select></label>
                 ${fieldsHtml('mechanics')}
               </div>
+              <div id="workbench-mechanics-chain" class="workbench-chain" aria-live="polite"></div>
               <div id="workbench-mechanics-flow" class="mechanics-flow"></div>
     `,
   );
@@ -107,10 +108,6 @@ function npcsPanelHtml(): string {
               </div>
     `,
   );
-}
-
-function physicsPanelHtml(): string {
-  return panelHtml('physics', 'Physics', `<div class="workbench-grid">${fieldsHtml('physics')}</div>`);
 }
 
 function presetsPanelHtml(): string {
@@ -157,6 +154,12 @@ function fieldsHtml(section: WorkbenchTab): string {
 
 function fieldHtml(field: WorkbenchField): string {
   const dataAttribute = fieldDataAttribute(field);
+  const fieldData = [
+    `data-workbench-field="${escapeHtml(`${field.kind}:${field.id}`)}"`,
+    field.visibleWhen ? `data-visible-when="${escapeHtml(`${field.visibleWhen.fieldId}:${field.visibleWhen.equals}`)}"` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' ');
   const attrs = [
     `id="${field.controlId}"`,
     `${dataAttribute}="${escapeHtml(field.id)}"`,
@@ -173,14 +176,14 @@ function fieldHtml(field: WorkbenchField): string {
     .join(' ');
 
   if (field.input === 'checkbox') {
-    return `<label class="field field--inline"><input ${attrs} /><span>${escapeHtml(field.label)}</span></label>`;
+    return `<label class="field field--inline" ${fieldData}><input ${attrs} /><span>${escapeHtml(field.label)}</span></label>`;
   }
   if (field.input === 'select') {
-    return `<label class="field"><span>${escapeHtml(field.label)}</span><select ${attrs}>${(field.options ?? [])
+    return `<label class="field" ${fieldData}><span>${escapeHtml(field.label)}</span><select ${attrs}>${(field.options ?? [])
       .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
       .join('')}</select></label>`;
   }
-  return `<label class="field"><span>${escapeHtml(field.label)}</span><input ${attrs} /></label>`;
+  return `<label class="field" ${fieldData}><span>${escapeHtml(field.label)}</span><input ${attrs} /></label>`;
 }
 
 function fieldDataAttribute(field: WorkbenchField): string {
@@ -196,5 +199,5 @@ function fieldDataAttribute(field: WorkbenchField): string {
   if (field.kind === 'npc') {
     return 'data-npc-field';
   }
-  return 'data-physics-field';
+  return 'data-rules-field';
 }

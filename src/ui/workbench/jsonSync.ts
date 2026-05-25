@@ -72,7 +72,10 @@ function readEditorState(value: Record<string, unknown>): WorkbenchEditorState {
   return {
     selectedTab: typeof value.selectedTab === 'string' ? value.selectedTab as WorkbenchEditorState['selectedTab'] : undefined,
     selectedAbilityId: typeof value.selectedAbilityId === 'string' ? value.selectedAbilityId : undefined,
+    selectedAbilityEffectIndex: typeof value.selectedAbilityEffectIndex === 'number' ? value.selectedAbilityEffectIndex : undefined,
     selectedTriggerId: typeof value.selectedTriggerId === 'string' ? value.selectedTriggerId : undefined,
+    selectedTriggerConditionIndex: typeof value.selectedTriggerConditionIndex === 'number' ? value.selectedTriggerConditionIndex : undefined,
+    selectedTriggerActionIndex: typeof value.selectedTriggerActionIndex === 'number' ? value.selectedTriggerActionIndex : undefined,
     selectedNpcId: typeof value.selectedNpcId === 'string' ? value.selectedNpcId : undefined,
   };
 }

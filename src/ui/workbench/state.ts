@@ -6,22 +6,27 @@ export type WorkbenchTab =
   | 'abilities'
   | 'mechanics'
   | 'npcs'
-  | 'physics'
   | 'presets'
   | 'preferences'
   | 'advanced';
 
 export type WorkbenchEditorState = {
-  selectedTab?: WorkbenchTab;
+  selectedTab?: WorkbenchTab | 'physics';
   selectedAbilityId?: string;
+  selectedAbilityEffectIndex?: number;
   selectedTriggerId?: string;
+  selectedTriggerConditionIndex?: number;
+  selectedTriggerActionIndex?: number;
   selectedNpcId?: string;
 };
 
 export type WorkbenchState = {
   selectedTab: WorkbenchTab;
   selectedAbilityId: string;
+  selectedAbilityEffectIndex: number;
   selectedTriggerId: string;
+  selectedTriggerConditionIndex: number;
+  selectedTriggerActionIndex: number;
   selectedNpcId: string;
   draftRuleset: Ruleset;
 };
@@ -32,7 +37,6 @@ export const WORKBENCH_TABS: Array<{ id: WorkbenchTab; label: string }> = [
   { id: 'abilities', label: 'Abilities' },
   { id: 'mechanics', label: 'Mechanics' },
   { id: 'npcs', label: 'NPCs' },
-  { id: 'physics', label: 'Physics' },
   { id: 'presets', label: 'Presets' },
   { id: 'preferences', label: 'Preferences' },
   { id: 'advanced', label: 'Advanced JSON' },
@@ -44,11 +48,21 @@ export function isWorkbenchTab(value: string): value is WorkbenchTab {
   return WORKBENCH_TAB_IDS.has(value as WorkbenchTab);
 }
 
+export function normalizeWorkbenchTab(value: string | undefined): WorkbenchTab | undefined {
+  if (value === 'physics') {
+    return 'abilities';
+  }
+  return value && isWorkbenchTab(value) ? value : undefined;
+}
+
 export function createWorkbenchState(ruleset: Ruleset, editor: WorkbenchEditorState = {}): WorkbenchState {
   const state: WorkbenchState = {
-    selectedTab: editor.selectedTab && isWorkbenchTab(editor.selectedTab) ? editor.selectedTab : 'player',
+    selectedTab: normalizeWorkbenchTab(editor.selectedTab) ?? 'player',
     selectedAbilityId: editor.selectedAbilityId ?? '',
+    selectedAbilityEffectIndex: editor.selectedAbilityEffectIndex ?? 0,
     selectedTriggerId: editor.selectedTriggerId ?? '',
+    selectedTriggerConditionIndex: editor.selectedTriggerConditionIndex ?? 0,
+    selectedTriggerActionIndex: editor.selectedTriggerActionIndex ?? 0,
     selectedNpcId: editor.selectedNpcId ?? '',
     draftRuleset: ruleset,
   };
@@ -61,9 +75,14 @@ export function ensureWorkbenchSelections(state: WorkbenchState, ruleset: Rulese
   state.selectedAbilityId = ruleset.abilities.some((ability) => ability.id === state.selectedAbilityId)
     ? state.selectedAbilityId
     : (ruleset.abilities[0]?.id ?? '');
+  const ability = ruleset.abilities.find((candidate) => candidate.id === state.selectedAbilityId);
+  state.selectedAbilityEffectIndex = clampIndex(state.selectedAbilityEffectIndex, ability?.effects?.length ?? 0);
   state.selectedTriggerId = ruleset.mechanics.triggers.some((trigger) => trigger.id === state.selectedTriggerId)
     ? state.selectedTriggerId
     : (ruleset.mechanics.triggers[0]?.id ?? '');
+  const trigger = ruleset.mechanics.triggers.find((candidate) => candidate.id === state.selectedTriggerId);
+  state.selectedTriggerConditionIndex = clampIndex(state.selectedTriggerConditionIndex, trigger?.conditions?.length ?? 0);
+  state.selectedTriggerActionIndex = clampIndex(state.selectedTriggerActionIndex, trigger?.actions.length ?? 0);
   state.selectedNpcId = ruleset.npcs.archetypes.some((npc) => npc.id === state.selectedNpcId)
     ? state.selectedNpcId
     : (ruleset.npcs.archetypes[0]?.id ?? '');
@@ -78,7 +97,17 @@ export function toWorkbenchEditorState(state: WorkbenchState): WorkbenchEditorSt
   return {
     selectedTab: state.selectedTab,
     selectedAbilityId: state.selectedAbilityId || undefined,
+    selectedAbilityEffectIndex: state.selectedAbilityEffectIndex,
     selectedTriggerId: state.selectedTriggerId || undefined,
+    selectedTriggerConditionIndex: state.selectedTriggerConditionIndex,
+    selectedTriggerActionIndex: state.selectedTriggerActionIndex,
     selectedNpcId: state.selectedNpcId || undefined,
   };
+}
+
+function clampIndex(index: number, length: number): number {
+  if (length <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(length - 1, Math.trunc(index)));
 }
