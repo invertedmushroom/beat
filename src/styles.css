@@ -1094,6 +1094,30 @@ h2 {
   }
 }
 
+@media (max-width: 940px) {
+  .workbench-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workbench-grid,
+  .workbench-grid--chain {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-grid--slots {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+
+  .workbench-panels,
+  .workbench-inspector-panel {
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 760px) {
   .menu-view {
     padding: 14px;
