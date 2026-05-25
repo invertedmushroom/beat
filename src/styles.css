@@ -754,6 +754,35 @@ h2 {
   min-width: 68px;
 }
 
+.control-profile-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font: 11px ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: #f5f3ed;
+  background: rgba(20, 20, 20, 0.78);
+  border: 1px solid #34332f;
+  border-radius: 6px;
+}
+
+.control-profile-picker__label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #a8a497;
+}
+
+.control-profile-picker__select {
+  min-width: 132px;
+  min-height: 28px;
+  padding: 2px 6px;
+  background: #1a1a1a;
+  color: #f5f3ed;
+  border: 1px solid #34332f;
+  border-radius: 4px;
+  font: inherit;
+}
+
 .lab-controls {
   position: absolute;
   z-index: 5;

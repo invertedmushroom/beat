@@ -29,6 +29,7 @@ export class InputController {
   private skillPointerElement?: HTMLElement;
   private firePressed = false;
   private aimOrigin?: Vec2;
+  private clickToCastEnabled = true;
   private queuedCastSlots: number[] = [];
   private queuedSlotPresses: number[] = [];
   private queuedSlotReleases: number[] = [];
@@ -82,6 +83,15 @@ export class InputController {
 
   setAimOrigin(origin: Vec2 | undefined): void {
     this.aimOrigin = origin;
+  }
+
+  /**
+   * Controls whether a primary-button mouse pointerdown on the canvas queues
+   * slot 0 (click-to-cast). Tap-move profiles disable this so canvas clicks
+   * are interpreted as world tap targets instead of casts.
+   */
+  setClickToCastEnabled(enabled: boolean): void {
+    this.clickToCastEnabled = enabled;
   }
 
   reset(emitNeutral = true): void {
@@ -225,8 +235,10 @@ export class InputController {
     }
     event.preventDefault();
     this.updateMouseAim(event);
-    this.queueSlotPress(0);
-    this.queueCast(0);
+    if (this.clickToCastEnabled) {
+      this.queueSlotPress(0);
+      this.queueCast(0);
+    }
     this.target.setPointerCapture(event.pointerId);
   };
 
@@ -235,7 +247,9 @@ export class InputController {
       return;
     }
     this.updateMouseAim(event);
-    this.queueSlotRelease(0);
+    if (this.clickToCastEnabled) {
+      this.queueSlotRelease(0);
+    }
   };
 
   private readonly onJoystickPointerDown = (event: PointerEvent): void => {

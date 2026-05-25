@@ -12,14 +12,26 @@ import type {
   Ruleset,
   RuntimeNpcConfig,
 } from './engine/protocol';
+import { detectCapabilities, type InputCapabilities } from './input/capabilities';
 import { InputController, type TouchControlElements } from './input/InputController';
 import { PointerWorldAdapter } from './input/PointerWorldAdapter';
+import { adaptProfileToRules, BUILTIN_PROFILE_IDS, type UiProfileId } from './input/profiles';
 import { SnapshotSmoother, type SnapshotSmoothingStats } from './net/snapshotSmoothing';
 import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
 import type { RoomInfo } from './rooms/directory';
 import { createRoomDirectory } from './rooms/directoryFactory';
-import { defaultUiPreferences, loadUiPreferences, saveUiPreferences, type UiPreferences } from './ui/preferences';
+import {
+  defaultUiPreferences,
+  defaultUiPreferencesV2,
+  loadUiPreferences,
+  loadUiPreferencesV2,
+  resolveActiveProfileId,
+  saveUiPreferences,
+  saveUiPreferencesV2,
+  type UiPreferences,
+  type UiPreferencesV2,
+} from './ui/preferences';
 import {
   applyWorkbenchCommand,
   applyWorkbenchFieldEdit,
@@ -114,6 +126,7 @@ export class BeatApp {
   private rulesExampleButtons!: HTMLButtonElement[];
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
+  private controlProfileSelect!: HTMLSelectElement;
   private fullscreenButtons: HTMLButtonElement[] = [];
   private engine?: EngineClient;
   private hostSession?: HostSession;
@@ -133,6 +146,11 @@ export class BeatApp {
   private editableRulesetHash = '';
   private rulesInspectorRefreshId = 0;
   private uiPreferences: UiPreferences = defaultUiPreferences();
+  private uiPreferencesV2: UiPreferencesV2 = defaultUiPreferencesV2();
+  private readonly capabilities: InputCapabilities = detectCapabilities();
+  private activeControlProfile: UiProfileId = 'desktop-kbm';
+  private tapMoveTarget?: { x: number; y: number };
+  private unsubscribePointerWorld?: () => void;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
   private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
   private labActorIds = new Set<string>();
@@ -144,6 +162,10 @@ export class BeatApp {
     this.root.innerHTML = shellHtml();
     this.bindDom();
     this.uiPreferences = loadUiPreferences();
+    this.uiPreferencesV2 = loadUiPreferencesV2();
+    // Persist v2 immediately so the v1→v2 migration sticks even if the user
+    // never explicitly edits preferences again.
+    saveUiPreferencesV2(this.uiPreferencesV2);
     this.renderer = new CanvasRenderer(this.canvas);
     this.input = new InputController(this.canvas, this.touchControls());
     this.pointerWorld = new PointerWorldAdapter({
@@ -165,6 +187,7 @@ export class BeatApp {
     this.workbenchButton.addEventListener('click', () => this.showWorkbench());
     this.workbenchBackButton.addEventListener('click', () => this.showMenu());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
+    this.controlProfileSelect.addEventListener('change', () => this.handleControlProfileChange());
     this.refreshRoomsButton.addEventListener('click', () => void this.refreshRoomsNow());
     for (const button of this.fullscreenButtons) {
       button.addEventListener('click', () => void this.toggleFullscreen());
@@ -207,6 +230,7 @@ export class BeatApp {
     this.stopActiveMode();
     this.unsubscribeRooms?.();
     this.unsubscribeInput?.();
+    this.unsubscribePointerWorld?.();
     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('pageshow', this.handlePageShow);
@@ -266,6 +290,7 @@ export class BeatApp {
       throw new Error('missing skill slots');
     }
     this.canvas = requireNode<HTMLCanvasElement>('#arena');
+    this.controlProfileSelect = requireNode<HTMLSelectElement>('#control-profile-select');
   }
 
   private async hostRoom(): Promise<void> {
@@ -276,6 +301,7 @@ export class BeatApp {
     this.stopActiveMode();
     this.mode = 'host';
     this.ruleset = selectedRuleset;
+    this.applyUiPreferences();
     const rulesetHash = await hashRuleset(this.ruleset);
     const hostPlayerId = createId('player');
     this.localPlayerId = hostPlayerId;
@@ -343,6 +369,7 @@ export class BeatApp {
     this.stopActiveMode();
     this.mode = lab ? 'lab' : 'solo';
     this.ruleset = selectedRuleset;
+    this.applyUiPreferences();
     const rulesetHash = await hashRuleset(this.ruleset);
     const playerId = createId('player');
     this.localPlayerId = playerId;
@@ -403,6 +430,7 @@ export class BeatApp {
     this.clientSession.onWelcome((playerId, joinedRoom, ruleset) => {
       this.localPlayerId = playerId;
       this.ruleset = ruleset;
+      this.applyUiPreferences();
       this.snapshotSmoother = new SnapshotSmoother(ruleset, playerId);
       this.renderer.setSnapshotProvider(() => {
         const renderSnapshot = this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []);
@@ -439,17 +467,44 @@ export class BeatApp {
     if (!this.localPlayerId) {
       return;
     }
+    const adjusted = this.applyTapMoveOverride(input);
     if (this.mode === 'host' || this.mode === 'solo' || this.mode === 'lab') {
-      this.engine?.submitInput(this.localPlayerId, input);
+      this.engine?.submitInput(this.localPlayerId, adjusted);
       return;
     }
     if (this.mode === 'client') {
-      this.clientSession?.submitInput(input);
+      this.clientSession?.submitInput(adjusted);
     }
+  }
+
+  /**
+   * When the `tap-move` profile is active and a world tap target exists,
+   * override the raw movement vector with a unit direction toward the target.
+   * Clears the target when the local player reaches it. Returns the original
+   * input unchanged for every other profile.
+   */
+  private applyTapMoveOverride(input: PlayerInput): PlayerInput {
+    if (this.activeControlProfile !== 'tap-move' || !this.tapMoveTarget) {
+      return input;
+    }
+    const player = this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    if (!player) {
+      return input;
+    }
+    const dx = this.tapMoveTarget.x - player.x;
+    const dy = this.tapMoveTarget.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    const ARRIVAL_RADIUS = 0.4;
+    if (dist <= ARRIVAL_RADIUS) {
+      this.tapMoveTarget = undefined;
+      return { ...input, moveX: 0, moveY: 0 };
+    }
+    return { ...input, moveX: dx / dist, moveY: dy / dist };
   }
 
   private stopActiveMode(): void {
     this.input.reset(Boolean(this.localPlayerId));
+    this.tapMoveTarget = undefined;
     this.unsubscribeSnapshot?.();
     this.unsubscribeSnapshot = undefined;
     this.hostSession?.destroy();
@@ -483,6 +538,7 @@ export class BeatApp {
     this.renderTrace([], []);
     this.mode = 'idle';
     this.setRulesLocked(false);
+    this.applyUiPreferences();
     this.showMenu();
     this.setStatus(`idle: ${this.directoryRuntime.label}`);
   }
@@ -929,10 +985,84 @@ export class BeatApp {
     shell.dataset.skillBarPosition = this.uiPreferences.skillBarPosition;
     shell.dataset.touchHandedness = this.uiPreferences.touchHandedness;
     shell.dataset.hudDensity = this.uiPreferences.hudDensity;
+    shell.dataset.controlBucket = this.capabilities.bucket;
+    const profileId = this.resolveControlProfileId();
+    shell.dataset.controlProfile = profileId;
+    if (this.controlProfileSelect) {
+      const selectedRaw = resolveActiveProfileId(this.uiPreferencesV2, this.capabilities.bucket);
+      this.controlProfileSelect.value = selectedRaw;
+    }
+    this.applyControlProfile(profileId);
     const log = this.root.querySelector<HTMLDetailsElement>('#arena-log');
     if (log) {
       log.open = this.uiPreferences.traceDefaultOpen;
     }
+  }
+
+  /**
+   * Picks the active control profile for the current capability bucket and
+   * coerces it to be coherent with the active ruleset's movement/aim modes.
+   * Surfaced via `data-control-profile` on the app shell so tests and CSS can
+   * branch on it; runtime gating lives in {@link applyControlProfile}.
+   */
+  private resolveControlProfileId(): UiProfileId {
+    const base = resolveActiveProfileId(this.uiPreferencesV2, this.capabilities.bucket);
+    const rules = this.ruleset ?? this.editableRuleset;
+    if (!rules) return base;
+    return adaptProfileToRules(base, {
+      movement: rules.player.movement.mode,
+      aim: rules.player.aim.mode,
+    });
+  }
+
+  /**
+   * Switches runtime input ownership based on the active profile.
+   *
+   * - `tap-move`: subscribe to {@link PointerWorldAdapter} so a canvas click
+   *   sets a world tap target (or engage target on an actor); InputController
+   *   suppresses its click-to-cast so the same click doesn't also fire slot 0.
+   * - Any other profile: unsubscribe, clear the target, restore click-to-cast.
+   */
+  private applyControlProfile(profileId: UiProfileId): void {
+    const alreadyApplied =
+      this.activeControlProfile === profileId &&
+      (this.unsubscribePointerWorld !== undefined) === (profileId === 'tap-move');
+    if (alreadyApplied) {
+      return;
+    }
+    this.activeControlProfile = profileId;
+    this.unsubscribePointerWorld?.();
+    this.unsubscribePointerWorld = undefined;
+    this.tapMoveTarget = undefined;
+    if (profileId === 'tap-move') {
+      this.input.setClickToCastEnabled(false);
+      this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
+        this.tapMoveTarget = { x: intent.worldX, y: intent.worldY };
+      });
+    } else {
+      this.input.setClickToCastEnabled(true);
+    }
+  }
+
+  /**
+   * Persists the user's profile choice for the current capability bucket and
+   * re-applies UI prefs so the rules-adapted profile id, data attributes, and
+   * pointer-world subscription update in lock-step.
+   */
+  private handleControlProfileChange(): void {
+    const raw = this.controlProfileSelect.value;
+    if (!isUiProfileId(raw)) {
+      return;
+    }
+    this.uiPreferencesV2 = {
+      ...this.uiPreferencesV2,
+      activeProfileByBucket: {
+        ...this.uiPreferencesV2.activeProfileByBucket,
+        [this.capabilities.bucket]: raw,
+      },
+    };
+    saveUiPreferencesV2(this.uiPreferencesV2);
+    this.applyUiPreferences();
   }
 
   private spawnNpcSpawns(spawns: NpcSpawn[], scope: 'lab' | 'session'): void {
@@ -1362,6 +1492,21 @@ export class BeatApp {
   }
 }
 
+const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string }> = [
+  { value: 'desktop-kbm', label: 'Keyboard + mouse' },
+  { value: 'mmo-touch', label: 'Touch: stick + fire' },
+  { value: 'tap-move', label: 'Tap to move' },
+  { value: 'tank-touch', label: 'Tank touch' },
+  { value: 'platform-touch', label: 'Platform touch' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const UI_PROFILE_ID_SET: ReadonlySet<UiProfileId> = new Set<UiProfileId>([...BUILTIN_PROFILE_IDS, 'custom']);
+
+function isUiProfileId(value: string): value is UiProfileId {
+  return UI_PROFILE_ID_SET.has(value as UiProfileId);
+}
+
 function shellHtml(): string {
   return `
     <main class="app-shell">
@@ -1416,6 +1561,14 @@ function shellHtml(): string {
           <div id="local-mechanics" class="local-mechanics"></div>
         </div>
         <div class="arena-actions">
+          <label class="control-profile-picker">
+            <span class="control-profile-picker__label">Controls</span>
+            <select id="control-profile-select" class="control-profile-picker__select" aria-label="Control profile">
+              ${CONTROL_PROFILE_OPTIONS.map(
+                (option) => `<option value="${option.value}">${option.label}</option>`,
+              ).join('')}
+            </select>
+          </label>
           <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
         </div>
         <div id="lab-controls" class="lab-controls" hidden>
