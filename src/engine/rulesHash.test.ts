@@ -13,6 +13,13 @@ describe('rulesetFingerprint', () => {
         radius: a.player.radius,
         respawnTicks: a.player.respawnTicks,
         movement: {
+          platform: {
+            groundProbeDistance: a.player.movement.platform.groundProbeDistance,
+            maxFallSpeed: a.player.movement.platform.maxFallSpeed,
+            airControl: a.player.movement.platform.airControl,
+            jumpVelocity: a.player.movement.platform.jumpVelocity,
+            gravity: a.player.movement.platform.gravity,
+          },
           reverseMultiplier: a.player.movement.reverseMultiplier,
           turnSpeedDegrees: a.player.movement.turnSpeedDegrees,
           mode: a.player.movement.mode,

@@ -33,8 +33,45 @@ describe('rulesValidation', () => {
       mode: 'tank',
       turnSpeedDegrees: 420,
       reverseMultiplier: 0.4,
+      platform: {
+        gravity: 28,
+        jumpVelocity: 11,
+        airControl: 0.42,
+        maxFallSpeed: 18,
+        groundProbeDistance: 0.18,
+      },
     });
     expect(parsed.player.aim).toEqual({ mode: 'facing' });
+  });
+
+  it('validates platform movement config', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      player: {
+        ...ruleset.player,
+        movement: {
+          ...ruleset.player.movement,
+          mode: 'platform',
+          platform: {
+            gravity: 32,
+            jumpVelocity: 13,
+            airControl: 0.5,
+            maxFallSpeed: 22,
+            groundProbeDistance: 0.12,
+          },
+        },
+      },
+    });
+
+    expect(parsed.player.movement.mode).toBe('platform');
+    expect(parsed.player.movement.platform).toEqual({
+      gravity: 32,
+      jumpVelocity: 13,
+      airControl: 0.5,
+      maxFallSpeed: 22,
+      groundProbeDistance: 0.12,
+    });
   });
 
   it('rejects invalid player movement and aim config', () => {
@@ -63,6 +100,23 @@ describe('rulesValidation', () => {
         },
       }),
     ).toThrow(/player\.aim\.mode/);
+
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        player: {
+          ...ruleset.player,
+          movement: {
+            ...ruleset.player.movement,
+            mode: 'platform',
+            platform: {
+              ...ruleset.player.movement.platform,
+              airControl: 1.4,
+            },
+          },
+        },
+      }),
+    ).toThrow(/player\.movement\.platform\.airControl/);
   });
 
   it('rejects a missing slotted ability', () => {

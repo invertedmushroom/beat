@@ -172,6 +172,7 @@ test('mobile charged skill can be aimed by drag hold', async ({ page }) => {
 
 test('tank movement mode turns body and fires along facing', async ({ page }) => {
   await page.goto('/');
+  await openAdvancedJson(page);
   const patchedRules = await page.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       obstacles: unknown[];
@@ -202,7 +203,7 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
     return `${JSON.stringify(rules, null, 2)}\n`;
   });
   await page.locator('#rules-json').fill(patchedRules);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Solo' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 
@@ -229,11 +230,13 @@ test('tank movement mode turns body and fires along facing', async ({ page }) =>
 
 test('rules inspector validates mechanics examples and updates hash', async ({ page }) => {
   await page.goto('/');
+  await openWorkbench(page);
   await expect(page.locator('#rules-validation-line')).toContainText('valid');
   await expect(page.locator('#rules-inspector')).toContainText('Center Relic');
   await expect(page.locator('#rules-inspector')).toContainText('Shock Bonus');
   const beforeHash = await page.locator('#rules-hash-line').textContent();
 
+  await page.getByRole('tab', { name: 'Presets' }).click();
   await page.getByRole('button', { name: 'Bleed DOT' }).click();
   await expect(page.locator('#rules-validation-line')).toContainText('valid');
   await expect(page.locator('#rules-inspector')).toContainText('Bleeding');
@@ -241,13 +244,107 @@ test('rules inspector validates mechanics examples and updates hash', async ({ p
     .poll(async () => page.locator('#rules-hash-line').textContent())
     .not.toBe(beforeHash);
 
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Solo' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.resources.length ?? 0)).toBeGreaterThan(0);
 });
 
+test('workbench edits platform controls and local preferences persist', async ({ page }) => {
+  await page.goto('/');
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Player' }).click();
+  await page.locator('#workbench-movement-mode').selectOption('platform');
+  await page.locator('#workbench-platform-gravity').fill('34');
+  await page.getByRole('tab', { name: 'Preferences' }).click();
+  await page.locator('#pref-hud-scale').fill('1.2');
+  await page.locator('#pref-skill-position').selectOption('right');
+  await page.locator('#pref-trace-open').check();
+  await applyAndCloseWorkbench(page);
+
+  await page.reload();
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Preferences' }).click();
+  await expect(page.locator('#pref-hud-scale')).toHaveValue('1.2');
+  await expect(page.locator('#pref-skill-position')).toHaveValue('right');
+  await expect(page.locator('#pref-trace-open')).toBeChecked();
+  await page.getByRole('tab', { name: 'Player' }).click();
+  await page.locator('#workbench-movement-mode').selectOption('platform');
+  await applyAndCloseWorkbench(page);
+
+  await page.getByRole('button', { name: 'Solo' }).click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const player = window.__BEAT_SNAPSHOT__?.players[0];
+        return Boolean(player && player.y > 3 && Math.abs(player.vy) < 0.25);
+      }),
+    )
+    .toBeTruthy();
+  await page.keyboard.down('KeyW');
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players[0]?.vy ?? 0)).toBeLessThan(-2);
+  await page.keyboard.up('KeyW');
+});
+
+test('workbench keyboard tabs edit structured fields and starts play', async ({ page }) => {
+  await page.goto('/');
+  await openWorkbench(page);
+
+  await page.getByRole('tab', { name: 'Player' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('tab', { name: 'Abilities' })).toHaveAttribute('aria-selected', 'true');
+
+  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.locator('#workbench-rule-name').fill('Workbench Smoke');
+  await page.getByRole('tab', { name: 'Abilities' }).click();
+  await page.locator('#workbench-ability-select').selectOption('pulse-bolt');
+  await page.locator('#workbench-ability-damage').fill('13');
+  await page.getByRole('tab', { name: 'NPCs' }).click();
+  await page.locator('#workbench-npc-select').selectOption('spark-chaser');
+  await page.locator('#workbench-npc-speed').fill('0.9');
+
+  await applyAndCloseWorkbench(page);
+  await page.getByRole('button', { name: 'Lab' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await expect(page.locator('#status-line')).toContainText('lab');
+});
+
+test('advanced JSON wrapper and invalid edits preserve last accepted rules', async ({ page }) => {
+  await page.goto('/');
+  await openAdvancedJson(page);
+  const baseJson = await page.locator('#rules-json').inputValue();
+  const baseRules = JSON.parse(baseJson) as Record<string, unknown>;
+  await page.locator('#rules-json').fill(
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        rules: {
+          ...baseRules,
+          name: 'Wrapped Workbench',
+        },
+        editor: {
+          selectedTab: 'npcs',
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByRole('tab', { name: 'NPCs' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#rules-inspector')).toContainText('Wrapped Workbench');
+
+  await page.getByRole('tab', { name: 'Advanced JSON' }).click();
+  await page.locator('#rules-json').fill('{"id":');
+  await expect(page.locator('#rules-validation-line')).toContainText('invalid');
+  await expect(page.locator('#workbench-diagnostics')).toContainText('$');
+
+  await page.getByRole('tab', { name: 'Match' }).click();
+  await expect(page.locator('#workbench-rule-name')).toHaveValue('Wrapped Workbench');
+});
+
 test('relic push objective scores and ends a match', async ({ page }) => {
   await page.goto('/');
+  await openAdvancedJson(page);
   const patchedRules = await page.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       obstacles: unknown[];
@@ -273,7 +370,7 @@ test('relic push objective scores and ends a match', async ({ page }) => {
     return `${JSON.stringify(rules, null, 2)}\n`;
   });
   await page.locator('#rules-json').fill(patchedRules);
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Solo' }).click();
 
   await expect
@@ -351,10 +448,12 @@ test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', as
 
 test('lab physics preset materializes bodies and tethers actors', async ({ page }) => {
   await page.goto('/');
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Presets' }).click();
   await page.getByRole('button', { name: 'Physics' }).click();
   await expect(page.locator('#rules-inspector')).toContainText('Anchor Orb');
   await expect(page.locator('#rules-inspector')).toContainText('phase walls');
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(page);
   await page.getByRole('button', { name: 'Lab' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
 
@@ -388,8 +487,7 @@ test('lab physics preset materializes bodies and tethers actors', async ({ page 
 test('mobile touch can fire a physics ability', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Physics' }).click();
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await usePreset(page, 'Physics');
   await page.getByRole('button', { name: 'Lab' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
 
@@ -415,8 +513,7 @@ test('host and client both see physics bodies and tethers', async ({ context, pa
   await host.goto('/');
   await host.locator('#display-name').fill('Host');
   await host.locator('#room-name').fill(roomName);
-  await host.getByRole('button', { name: 'Physics' }).click();
-  await host.getByRole('button', { name: 'Apply' }).click();
+  await usePreset(host, 'Physics');
   await host.getByRole('button', { name: 'Host' }).click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 
@@ -425,6 +522,9 @@ test('host and client both see physics bodies and tethers', async ({ context, pa
   await client.locator('#display-name').fill('Client');
   const roomRow = client.locator('.room-row').filter({ hasText: roomName });
   await expect(roomRow).toBeVisible();
+  await expect(roomRow).toContainText('rules');
+  await expect(roomRow).toContainText('map');
+  await expect(roomRow).toContainText('content');
   await roomRow.click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
@@ -443,11 +543,48 @@ test('host and client both see physics bodies and tethers', async ({ context, pa
     .toBeTruthy();
 });
 
+test('host and client sync platform movement', async ({ context, page: host }) => {
+  const roomName = `Platform Sync ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await usePreset(host, 'Platform');
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.y ?? 0))
+    .toBeGreaterThan(3);
+
+  await host.bringToFront();
+  await expect
+    .poll(async () =>
+      host.evaluate(() => {
+        const player = window.__BEAT_SNAPSHOT__?.players.find((candidate) => candidate.displayName === 'Host');
+        return Boolean(player && player.y > 3 && Math.abs(player.vy) < 0.25);
+      }),
+    )
+    .toBeTruthy();
+  await host.keyboard.down('KeyW');
+  await expect
+    .poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Host')?.vy ?? 0))
+    .toBeLessThan(-1);
+  await host.keyboard.up('KeyW');
+});
+
 test('mechanics status combo is visible in multiplayer combat', async ({ context, page: host }) => {
   const roomName = `Mechanics Lab ${Date.now()}`;
   await host.goto('/');
   await host.locator('#display-name').fill('Host');
   await host.locator('#room-name').fill(roomName);
+  await openAdvancedJson(host);
   const patchedRules = await host.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       obstacles: unknown[];
@@ -470,7 +607,7 @@ test('mechanics status combo is visible in multiplayer combat', async ({ context
     return `${JSON.stringify(rules, null, 2)}\n`;
   });
   await host.locator('#rules-json').fill(patchedRules);
-  await host.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(host);
   await host.getByRole('button', { name: 'Host' }).click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 
@@ -498,6 +635,7 @@ test('host and client both see configured session NPCs without changing room pla
   await host.goto('/');
   await host.locator('#display-name').fill('Host');
   await host.locator('#room-name').fill(roomName);
+  await openAdvancedJson(host);
   const patchedRules = await host.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       npcs: {
@@ -508,7 +646,7 @@ test('host and client both see configured session NPCs without changing room pla
     return `${JSON.stringify(rules, null, 2)}\n`;
   });
   await host.locator('#rules-json').fill(patchedRules);
-  await host.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(host);
   await host.getByRole('button', { name: 'Host' }).click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await expect
@@ -533,6 +671,7 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
   await host.goto('/');
   await host.locator('#display-name').fill('Host');
   await host.locator('#room-name').fill(roomName);
+  await openAdvancedJson(host);
   const patchedRules = await host.locator('#rules-json').evaluate((node) => {
     const rules = JSON.parse((node as HTMLTextAreaElement).value) as {
       obstacles: unknown[];
@@ -567,7 +706,7 @@ test('authored effects are visible in multiplayer combat', async ({ context, pag
     return `${JSON.stringify(rules, null, 2)}\n`;
   });
   await host.locator('#rules-json').fill(patchedRules);
-  await host.getByRole('button', { name: 'Apply' }).click();
+  await applyAndCloseWorkbench(host);
   await host.getByRole('button', { name: 'Host' }).click();
   await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
 
@@ -681,6 +820,30 @@ async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
   }
   const x = side === 'right' ? canvas.x + canvas.width - 24 : canvas.x + 24;
   await page.mouse.move(x, canvas.y + canvas.height / 2);
+}
+
+async function openWorkbench(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Workbench' }).click();
+  await expect(page.locator('#workbench-view')).toBeVisible();
+}
+
+async function openAdvancedJson(page: Page): Promise<void> {
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Advanced JSON' }).click();
+  await expect(page.locator('#rules-json')).toBeVisible();
+}
+
+async function applyAndCloseWorkbench(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByRole('button', { name: 'Menu' }).click();
+  await expect(page.locator('#menu-view')).toBeVisible();
+}
+
+async function usePreset(page: Page, name: string): Promise<void> {
+  await openWorkbench(page);
+  await page.getByRole('tab', { name: 'Presets' }).click();
+  await page.getByRole('button', { name }).click();
+  await applyAndCloseWorkbench(page);
 }
 
 async function pressGameKey(page: Page, code: string): Promise<void> {
