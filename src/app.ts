@@ -1,12 +1,10 @@
 import { createDefaultRuleset } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
 import { hashRuleset } from './engine/rulesHash';
-import { parseRulesetJson, stringifyRuleset, validateRuleset } from './engine/rulesValidation';
+import { validateRuleset } from './engine/rulesValidation';
 import type {
   AiTraceSnapshot,
   EngineSnapshot,
-  MechanicAction,
-  MechanicCondition,
   MechanicTraceSnapshot,
   NpcArchetype,
   NpcSpawn,
@@ -20,6 +18,25 @@ import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
 import type { RoomInfo } from './rooms/directory';
 import { createRoomDirectory } from './rooms/directoryFactory';
+import { defaultUiPreferences, loadUiPreferences, saveUiPreferences, type UiPreferences } from './ui/preferences';
+import {
+  applyWorkbenchFieldEdit,
+  diagnosticsFromError,
+  workbenchEditFromControl,
+  workbenchFieldPath,
+  type WorkbenchDiagnostic,
+} from './ui/workbench/fields';
+import { escapeHtml, formatMeters, aiTraceLabel, mechanicsChipHtml, mechanicsFlowHtml, rulesInspectorHtml, traceLabel } from './ui/workbench/inspector';
+import { parseWorkbenchDocumentJson, stringifyRulesDocument } from './ui/workbench/jsonSync';
+import {
+  createWorkbenchState,
+  ensureWorkbenchSelections,
+  isWorkbenchTab,
+  updateWorkbenchDraft,
+  type WorkbenchState,
+  type WorkbenchTab,
+} from './ui/workbench/state';
+import { workbenchHtml } from './ui/workbench/view';
 import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 
@@ -42,6 +59,8 @@ export class BeatApp {
   private hostButton!: HTMLButtonElement;
   private soloButton!: HTMLButtonElement;
   private labButton!: HTMLButtonElement;
+  private workbenchButton!: HTMLButtonElement;
+  private workbenchBackButton!: HTMLButtonElement;
   private leaveButton!: HTMLButtonElement;
   private roomList!: HTMLDivElement;
   private statusLine!: HTMLDivElement;
@@ -62,10 +81,14 @@ export class BeatApp {
   private labClearTraceButton!: HTMLButtonElement;
   private labPauseButton!: HTMLButtonElement;
   private menuView!: HTMLElement;
+  private workbenchView!: HTMLElement;
+  private workbenchTabsRoot!: HTMLElement;
+  private workbenchPanelsRoot!: HTMLElement;
   private arenaView!: HTMLElement;
   private rulesJsonInput!: HTMLTextAreaElement;
   private rulesValidationLine!: HTMLDivElement;
   private rulesInspector!: HTMLDivElement;
+  private workbenchDiagnosticsRoot!: HTMLDivElement;
   private resetRulesButton!: HTMLButtonElement;
   private applyRulesButton!: HTMLButtonElement;
   private copyRulesButton!: HTMLButtonElement;
@@ -89,6 +112,9 @@ export class BeatApp {
   private editableRuleset: Ruleset = createDefaultRuleset();
   private editableRulesetHash = '';
   private rulesInspectorRefreshId = 0;
+  private uiPreferences: UiPreferences = defaultUiPreferences();
+  private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
+  private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
   private labActorIds = new Set<string>();
   private labSpawnIndex = 0;
   private labPaused = false;
@@ -97,8 +123,10 @@ export class BeatApp {
     this.root = container;
     this.root.innerHTML = shellHtml();
     this.bindDom();
+    this.uiPreferences = loadUiPreferences();
     this.renderer = new CanvasRenderer(this.canvas);
     this.input = new InputController(this.canvas, this.touchControls());
+    this.applyUiPreferences();
   }
 
   start(): void {
@@ -109,6 +137,8 @@ export class BeatApp {
     this.hostButton.addEventListener('click', () => void this.hostRoom());
     this.soloButton.addEventListener('click', () => void this.startSolo(false));
     this.labButton.addEventListener('click', () => void this.startSolo(true));
+    this.workbenchButton.addEventListener('click', () => this.showWorkbench());
+    this.workbenchBackButton.addEventListener('click', () => this.showMenu());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
     this.fullscreenButton.addEventListener('click', () => void this.toggleFullscreen());
     this.labSpawnButton.addEventListener('click', () => this.spawnSelectedLabActor());
@@ -120,12 +150,18 @@ export class BeatApp {
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
     this.rulesJsonInput.addEventListener('input', () => void this.refreshRulesInspector());
+    this.workbenchTabsRoot.addEventListener('click', (event) => this.handleWorkbenchTabClick(event));
+    this.workbenchTabsRoot.addEventListener('keydown', (event) => this.handleWorkbenchTabKeydown(event));
+    this.workbenchDiagnosticsRoot.addEventListener('click', (event) => this.handleWorkbenchDiagnosticClick(event));
+    this.workbenchView.addEventListener('input', (event) => void this.handleWorkbenchInput(event));
+    this.workbenchView.addEventListener('change', (event) => void this.handleWorkbenchInput(event));
     for (const button of this.rulesExampleButtons) {
       button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
     }
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     window.addEventListener('beforeunload', this.beforeUnloadHandler);
-    this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
+    this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
+    this.syncWorkbenchControls();
     void this.refreshRulesInspector();
     this.syncFullscreenButton();
     this.showMenu();
@@ -147,12 +183,17 @@ export class BeatApp {
 
   private bindDom(): void {
     this.menuView = requireNode<HTMLElement>('#menu-view');
+    this.workbenchView = requireNode<HTMLElement>('#workbench-view');
+    this.workbenchTabsRoot = requireNode<HTMLElement>('#workbench-tabs');
+    this.workbenchPanelsRoot = requireNode<HTMLElement>('#workbench-panels');
     this.arenaView = requireNode<HTMLElement>('#arena-view');
     this.displayNameInput = requireNode<HTMLInputElement>('#display-name');
     this.roomNameInput = requireNode<HTMLInputElement>('#room-name');
     this.hostButton = requireNode<HTMLButtonElement>('#host-room');
     this.soloButton = requireNode<HTMLButtonElement>('#solo-room');
     this.labButton = requireNode<HTMLButtonElement>('#lab-room');
+    this.workbenchButton = requireNode<HTMLButtonElement>('#open-workbench');
+    this.workbenchBackButton = requireNode<HTMLButtonElement>('#workbench-back-menu');
     this.leaveButton = requireNode<HTMLButtonElement>('#leave-room');
     this.roomList = requireNode<HTMLDivElement>('#room-list');
     this.statusLine = requireNode<HTMLDivElement>('#status-line');
@@ -175,6 +216,7 @@ export class BeatApp {
     this.rulesJsonInput = requireNode<HTMLTextAreaElement>('#rules-json');
     this.rulesValidationLine = requireNode<HTMLDivElement>('#rules-validation-line');
     this.rulesInspector = requireNode<HTMLDivElement>('#rules-inspector');
+    this.workbenchDiagnosticsRoot = requireNode<HTMLDivElement>('#workbench-diagnostics');
     this.fullscreenButton = requireNode<HTMLButtonElement>('#fullscreen-toggle');
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
@@ -224,6 +266,7 @@ export class BeatApp {
       hostPeerId: this.peerId,
       name: this.roomNameInput.value.trim() || `${this.displayName()}'s room`,
       rulesetId: this.ruleset.id,
+      rulesetName: this.ruleset.name,
       rulesetHash,
       contentHash: this.ruleset.contentHash,
       mapBundleId: this.ruleset.mapBundleId,
@@ -418,9 +461,11 @@ export class BeatApp {
       row.className = 'room-row';
       row.type = 'button';
       row.disabled = !joinable;
+      const rulesLabel = room.rulesetName ? `${room.rulesetName} (${room.rulesetId})` : room.rulesetId;
       row.innerHTML = `
         <span class="room-row__name">${escapeHtml(room.name)}</span>
-        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers}${joinable ? '' : ' · full'} · ${shortHash(room.rulesetHash)}</span>
+        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers}${joinable ? '' : ' · full'} · rules ${escapeHtml(rulesLabel)}</span>
+        <span class="room-row__meta room-row__meta--sub">map ${escapeHtml(room.mapBundleId)} · content ${shortHash(room.contentHash)} · rules ${shortHash(room.rulesetHash)}</span>
       `;
       if (joinable) {
         row.addEventListener('click', () => void this.joinRoom(room));
@@ -478,10 +523,304 @@ export class BeatApp {
   }
 
   private currentRuleset(): Ruleset {
-    this.editableRuleset = parseRulesetJson(this.rulesJsonInput.value);
-    this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
+    const parsed = parseWorkbenchDocumentJson(this.rulesJsonInput.value);
+    this.editableRuleset = parsed.ruleset;
+    this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
+    if (parsed.editor) {
+      this.workbenchState = createWorkbenchState(this.editableRuleset, parsed.editor);
+    } else {
+      updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
+    }
     void this.refreshRulesInspector();
     return this.editableRuleset;
+  }
+
+  private handleWorkbenchTabClick(event: Event): void {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-workbench-tab]');
+    if (!button) {
+      return;
+    }
+    if (button.dataset.workbenchTab && isWorkbenchTab(button.dataset.workbenchTab)) {
+      this.selectWorkbenchTab(button.dataset.workbenchTab);
+    }
+  }
+
+  private selectWorkbenchTab(tab: WorkbenchTab): void {
+    this.workbenchState.selectedTab = tab;
+    this.syncWorkbenchControls();
+  }
+
+  private handleWorkbenchTabKeydown(event: KeyboardEvent): void {
+    const tabs = Array.from(this.workbenchTabsRoot.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]'));
+    const current = tabs.findIndex((tab) => tab === document.activeElement);
+    if (current < 0) {
+      return;
+    }
+    let nextIndex: number;
+    if (event.key === 'ArrowRight') {
+      nextIndex = (current + 1) % tabs.length;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = (current - 1 + tabs.length) % tabs.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = tabs.length - 1;
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      const tab = tabs[current]?.dataset.workbenchTab;
+      if (tab && isWorkbenchTab(tab)) {
+        event.preventDefault();
+        this.selectWorkbenchTab(tab);
+      }
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const tab = tabs[nextIndex];
+    const tabId = tab?.dataset.workbenchTab;
+    if (tab && tabId && isWorkbenchTab(tabId)) {
+      tab.focus();
+      this.selectWorkbenchTab(tabId);
+    }
+  }
+
+  private handleWorkbenchDiagnosticClick(event: Event): void {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-diagnostic-path]');
+    const path = button?.dataset.diagnosticPath;
+    if (!path) {
+      return;
+    }
+    const control = this.findWorkbenchControlForPath(path);
+    if (control) {
+      const panel = control.closest<HTMLElement>('[data-workbench-panel]');
+      const tab = panel?.dataset.workbenchPanel;
+      if (tab && isWorkbenchTab(tab)) {
+        this.selectWorkbenchTab(tab);
+      }
+      requestAnimationFrame(() => control.focus());
+    }
+  }
+
+  private async handleWorkbenchInput(event: Event): Promise<void> {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    if (target.id === 'rules-json') {
+      return;
+    }
+    if (target.dataset.prefField) {
+      this.updatePreferenceFromControl(target);
+      return;
+    }
+    if (target.dataset.abilitySelect === 'true') {
+      this.workbenchState.selectedAbilityId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
+    if (target.dataset.triggerSelect === 'true') {
+      this.workbenchState.selectedTriggerId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
+    if (target.dataset.npcSelect === 'true') {
+      this.workbenchState.selectedNpcId = target.value;
+      this.syncWorkbenchControls();
+      return;
+    }
+
+    const next = structuredClone(this.editableRuleset) as Ruleset;
+    const edit = workbenchEditFromControl(target);
+    if (!edit) {
+      return;
+    }
+    if (!applyWorkbenchFieldEdit(next, this.workbenchState, edit)) {
+      return;
+    }
+    await this.commitWorkbenchRules(next, workbenchFieldPath(edit, this.workbenchState));
+  }
+
+  private updatePreferenceFromControl(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): void {
+    const field = target.dataset.prefField as keyof UiPreferences | undefined;
+    if (!field) {
+      return;
+    }
+    const next = { ...this.uiPreferences };
+    if (field === 'traceDefaultOpen' && target instanceof HTMLInputElement) {
+      next.traceDefaultOpen = target.checked;
+    } else if (field === 'skillBarPosition' || field === 'touchHandedness' || field === 'hudDensity') {
+      next[field] = target.value as never;
+    } else {
+      const value = readControlNumber(target);
+      if (value === undefined) {
+        return;
+      }
+      next[field] = value as never;
+    }
+    this.uiPreferences = next;
+    saveUiPreferences(this.uiPreferences);
+    this.applyUiPreferences();
+    this.syncWorkbenchControls();
+  }
+
+  private async commitWorkbenchRules(nextRuleset: Ruleset, path?: string): Promise<void> {
+    try {
+      this.editableRuleset = validateRuleset(nextRuleset);
+      updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
+      this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
+      this.workbenchDiagnostics = [];
+      await this.refreshRulesInspector();
+      this.syncWorkbenchControls();
+    } catch (error) {
+      this.workbenchDiagnostics = diagnosticsFromError(error).map((diagnostic) => ({
+        ...diagnostic,
+        path: diagnostic.path === '$' ? path ?? diagnostic.path : diagnostic.path,
+      }));
+      this.renderWorkbenchDiagnostics();
+      this.log(`workbench rejected: ${readError(error)}`);
+      this.syncWorkbenchControls();
+    }
+  }
+
+  private syncWorkbenchControls(): void {
+    if (!this.workbenchView) {
+      return;
+    }
+    const ruleset = this.editableRuleset;
+    ensureWorkbenchSelections(this.workbenchState, ruleset);
+
+    for (const button of this.workbenchTabsRoot.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
+      const active = button.dataset.workbenchTab === this.workbenchState.selectedTab;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+    }
+    for (const panel of this.workbenchPanelsRoot.querySelectorAll<HTMLElement>('[data-workbench-panel]')) {
+      panel.hidden = panel.dataset.workbenchPanel !== this.workbenchState.selectedTab;
+    }
+
+    setControlValue(this.workbenchView, '#workbench-rule-name', ruleset.name);
+    setControlValue(this.workbenchView, '#workbench-duration', String(Math.round(ruleset.match.durationTicks / ruleset.tickRate)));
+    setControlValue(this.workbenchView, '#workbench-score-limit', String(ruleset.match.scoreLimit));
+    setControlChecked(this.workbenchView, '#workbench-friendly-fire', ruleset.match.friendlyFire);
+    setControlValue(this.workbenchView, '#workbench-objective-radius', String(ruleset.objectives[0]?.scoreZones[0]?.radius ?? 1));
+    setControlValue(this.workbenchView, '#workbench-objective-points', String(ruleset.objectives[0]?.scoreZones[0]?.points ?? 1));
+
+    setControlValue(this.workbenchView, '#workbench-movement-mode', ruleset.player.movement.mode);
+    setControlValue(this.workbenchView, '#workbench-aim-mode', ruleset.player.aim.mode);
+    setControlValue(this.workbenchView, '#workbench-player-speed', String(ruleset.player.speed));
+    setControlValue(this.workbenchView, '#workbench-player-damping', String(ruleset.player.damping));
+    setControlValue(this.workbenchView, '#workbench-player-hp', String(ruleset.player.maxHp));
+    setControlValue(this.workbenchView, '#workbench-tank-turn', String(ruleset.player.movement.turnSpeedDegrees));
+    setControlValue(this.workbenchView, '#workbench-tank-reverse', String(ruleset.player.movement.reverseMultiplier));
+    setControlValue(this.workbenchView, '#workbench-platform-gravity', String(ruleset.player.movement.platform.gravity));
+    setControlValue(this.workbenchView, '#workbench-platform-jump', String(ruleset.player.movement.platform.jumpVelocity));
+    setControlValue(this.workbenchView, '#workbench-platform-air', String(ruleset.player.movement.platform.airControl));
+    setControlValue(this.workbenchView, '#workbench-platform-fall', String(ruleset.player.movement.platform.maxFallSpeed));
+    setControlValue(this.workbenchView, '#workbench-platform-probe', String(ruleset.player.movement.platform.groundProbeDistance));
+
+    const abilityOptions = ruleset.abilities.map((ability) => ({ value: ability.id, label: ability.name }));
+    setSelectOptions(this.workbenchView, '#workbench-ability-select', abilityOptions, this.workbenchState.selectedAbilityId);
+    for (const select of this.workbenchView.querySelectorAll<HTMLSelectElement>('[data-loadout-slot]')) {
+      const slot = Number(select.dataset.loadoutSlot);
+      replaceOptions(select, abilityOptions, ruleset.loadout.abilityIds[slot] ?? '');
+    }
+    const ability = ruleset.abilities.find((candidate) => candidate.id === this.workbenchState.selectedAbilityId);
+    if (ability) {
+      setControlValue(this.workbenchView, '#workbench-ability-damage', String(ability.damage));
+      setControlValue(this.workbenchView, '#workbench-ability-cooldown', String(ability.cooldownTicks));
+      setControlValue(this.workbenchView, '#workbench-ability-range', String(ability.range));
+      setControlValue(this.workbenchView, '#workbench-ability-radius', String(ability.radius));
+      setControlValue(this.workbenchView, '#workbench-ability-targeting', ability.targeting);
+      setControlValue(this.workbenchView, '#workbench-ability-color', ability.color);
+    }
+
+    const triggerOptions = ruleset.mechanics.triggers.map((trigger) => ({ value: trigger.id, label: trigger.name ?? trigger.id }));
+    setSelectOptions(this.workbenchView, '#workbench-trigger-select', triggerOptions, this.workbenchState.selectedTriggerId);
+    const trigger = ruleset.mechanics.triggers.find((candidate) => candidate.id === this.workbenchState.selectedTriggerId);
+    if (trigger) {
+      setControlValue(this.workbenchView, '#workbench-trigger-name', trigger.name ?? trigger.id);
+      setControlValue(this.workbenchView, '#workbench-trigger-event', trigger.event);
+      const action = trigger.actions.find((candidate) => 'amount' in candidate);
+      setControlValue(this.workbenchView, '#workbench-trigger-amount', action && 'amount' in action ? String(action.amount) : '');
+    }
+    const mechanicsFlow = this.workbenchView.querySelector<HTMLElement>('#workbench-mechanics-flow');
+    if (mechanicsFlow) {
+      mechanicsFlow.innerHTML = mechanicsFlowHtml(ruleset);
+    }
+
+    const npcOptions = ruleset.npcs.archetypes.map((npc) => ({ value: npc.id, label: npc.name }));
+    setSelectOptions(this.workbenchView, '#workbench-npc-select', npcOptions, this.workbenchState.selectedNpcId);
+    const npc = ruleset.npcs.archetypes.find((candidate) => candidate.id === this.workbenchState.selectedNpcId);
+    if (npc) {
+      setControlValue(this.workbenchView, '#workbench-npc-behavior', npc.behavior.mode);
+      setControlValue(this.workbenchView, '#workbench-npc-aggro', String(npc.behavior.aggroRange));
+      setControlValue(this.workbenchView, '#workbench-npc-speed', String(npc.speedMultiplier));
+      setControlChecked(this.workbenchView, '#workbench-npc-session', ruleset.npcs.sessionSpawns.some((spawn) => spawn.archetypeId === npc.id));
+    }
+
+    const anchorBody = ruleset.abilities
+      .find((candidate) => candidate.id === 'anchor-orb')
+      ?.effects?.find((effect) => effect.kind === 'spawnBody');
+    if (anchorBody?.kind === 'spawnBody') {
+      setControlValue(this.workbenchView, '#workbench-anchor-mass', String(anchorBody.body.mass));
+      setControlValue(this.workbenchView, '#workbench-anchor-lifetime', String(anchorBody.body.lifetimeTicks));
+    }
+
+    setControlValue(this.workbenchView, '#pref-hud-scale', String(this.uiPreferences.hudScale));
+    setControlValue(this.workbenchView, '#pref-skill-position', this.uiPreferences.skillBarPosition);
+    setControlValue(this.workbenchView, '#pref-touch-handedness', this.uiPreferences.touchHandedness);
+    setControlValue(this.workbenchView, '#pref-touch-scale', String(this.uiPreferences.touchScale));
+    setControlValue(this.workbenchView, '#pref-touch-opacity', String(this.uiPreferences.touchOpacity));
+    setControlChecked(this.workbenchView, '#pref-trace-open', this.uiPreferences.traceDefaultOpen);
+    setControlValue(this.workbenchView, '#pref-hud-density', this.uiPreferences.hudDensity);
+    this.renderWorkbenchDiagnostics();
+  }
+
+  private renderWorkbenchDiagnostics(): void {
+    if (!this.workbenchDiagnosticsRoot) {
+      return;
+    }
+    if (this.workbenchDiagnostics.length === 0) {
+      this.workbenchDiagnosticsRoot.innerHTML = '<div class="workbench-diagnostics__ok">No validation issues</div>';
+      return;
+    }
+    this.workbenchDiagnosticsRoot.innerHTML = this.workbenchDiagnostics
+      .map(
+        (diagnostic) => `
+          <button class="workbench-diagnostic workbench-diagnostic--${diagnostic.severity}" type="button" data-diagnostic-path="${escapeHtml(diagnostic.path)}">
+            <strong>${escapeHtml(diagnostic.path)}</strong>
+            <span>${escapeHtml(diagnostic.message)}</span>
+          </button>
+        `,
+      )
+      .join('');
+  }
+
+  private findWorkbenchControlForPath(path: string): HTMLElement | undefined {
+    const controls = Array.from(this.workbenchView.querySelectorAll<HTMLElement>('[data-workbench-path]'));
+    return (
+      controls.find((control) => control.dataset.workbenchPath === path) ??
+      controls.find((control) => path.startsWith(control.dataset.workbenchPath ?? '')) ??
+      controls.find((control) => (control.dataset.workbenchPath ?? '').startsWith(path))
+    );
+  }
+
+  private applyUiPreferences(): void {
+    const shell = this.root.querySelector<HTMLElement>('.app-shell');
+    if (!shell) {
+      return;
+    }
+    shell.style.setProperty('--hud-scale', String(this.uiPreferences.hudScale));
+    shell.style.setProperty('--touch-scale', String(this.uiPreferences.touchScale));
+    shell.style.setProperty('--touch-opacity', String(this.uiPreferences.touchOpacity));
+    shell.dataset.skillBarPosition = this.uiPreferences.skillBarPosition;
+    shell.dataset.touchHandedness = this.uiPreferences.touchHandedness;
+    shell.dataset.hudDensity = this.uiPreferences.hudDensity;
+    const log = this.root.querySelector<HTMLDetailsElement>('#arena-log');
+    if (log) {
+      log.open = this.uiPreferences.traceDefaultOpen;
+    }
   }
 
   private spawnNpcSpawns(spawns: NpcSpawn[], scope: 'lab' | 'session'): void {
@@ -634,24 +973,33 @@ export class BeatApp {
 
   private async resetRules(): Promise<void> {
     this.editableRuleset = createDefaultRuleset();
-    this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
+    updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
+    this.workbenchDiagnostics = [];
+    this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
     await this.refreshRulesHash();
+    this.syncWorkbenchControls();
     this.log('rules reset to default preset');
   }
 
   private async applyRulesJson(): Promise<void> {
     try {
-      this.editableRuleset = validateRuleset(parseRulesetJson(this.rulesJsonInput.value));
-      this.rulesJsonInput.value = stringifyRuleset(this.editableRuleset);
+      const parsed = parseWorkbenchDocumentJson(this.rulesJsonInput.value);
+      this.editableRuleset = parsed.ruleset;
+      this.workbenchState = createWorkbenchState(this.editableRuleset, parsed.editor);
+      this.workbenchDiagnostics = [];
+      this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
       await this.refreshRulesHash();
+      this.syncWorkbenchControls();
       this.log(`rules applied: ${this.editableRuleset.name}`);
     } catch (error) {
+      this.workbenchDiagnostics = diagnosticsFromError(error);
+      this.renderWorkbenchDiagnostics();
       this.log(`rules rejected: ${readError(error)}`);
     }
   }
 
   private async copyRulesJson(): Promise<void> {
-    const json = stringifyRuleset(parseRulesetJson(this.rulesJsonInput.value));
+    const json = stringifyRulesDocument(parseWorkbenchDocumentJson(this.rulesJsonInput.value).ruleset);
     this.rulesJsonInput.value = json;
     await navigator.clipboard?.writeText(json).catch(() => undefined);
     this.log('rules JSON ready to export');
@@ -664,16 +1012,21 @@ export class BeatApp {
   private async refreshRulesInspector(): Promise<void> {
     const refreshId = ++this.rulesInspectorRefreshId;
     try {
-      const ruleset = parseRulesetJson(this.rulesJsonInput.value);
+      const { ruleset } = parseWorkbenchDocumentJson(this.rulesJsonInput.value);
       const hash = await hashRuleset(ruleset);
       if (refreshId !== this.rulesInspectorRefreshId) {
         return;
       }
+      this.editableRuleset = ruleset;
+      updateWorkbenchDraft(this.workbenchState, ruleset);
       this.editableRulesetHash = hash;
       this.rulesHashLine.textContent = `${ruleset.name} · ${shortHash(hash)}`;
       this.rulesValidationLine.textContent = `valid · ${ruleset.abilities.length} abilities · ${ruleset.objectives.length} objectives · ${ruleset.mechanics.statuses.length} statuses · ${ruleset.mechanics.triggers.length} triggers · ${ruleset.npcs.archetypes.length} NPCs`;
       this.rulesValidationLine.classList.remove('is-error');
       this.rulesInspector.innerHTML = rulesInspectorHtml(ruleset);
+      this.workbenchDiagnostics = [];
+      this.renderWorkbenchDiagnostics();
+      this.syncWorkbenchControls();
       this.syncLabControls();
     } catch (error) {
       if (refreshId !== this.rulesInspectorRefreshId) {
@@ -682,30 +1035,50 @@ export class BeatApp {
       this.rulesValidationLine.textContent = `invalid · ${readError(error)}`;
       this.rulesValidationLine.classList.add('is-error');
       this.rulesInspector.innerHTML = '<div class="inspector-empty">Invalid JSON</div>';
+      this.workbenchDiagnostics = diagnosticsFromError(error);
+      this.renderWorkbenchDiagnostics();
     }
   }
 
   private async insertRulesExample(example: string): Promise<void> {
     try {
-      const ruleset = parseRulesetJson(this.rulesJsonInput.value);
+      const ruleset = parseWorkbenchDocumentJson(this.rulesJsonInput.value).ruleset;
       const nextRuleset = applyRulesExample(ruleset, example);
-      this.rulesJsonInput.value = stringifyRuleset(validateRuleset(nextRuleset));
+      this.editableRuleset = validateRuleset(nextRuleset);
+      updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
+      this.workbenchDiagnostics = [];
+      this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
       await this.refreshRulesInspector();
+      this.syncWorkbenchControls();
       this.log(`rules example applied: ${example}`);
     } catch (error) {
+      this.workbenchDiagnostics = diagnosticsFromError(error);
+      this.renderWorkbenchDiagnostics();
       this.log(`rules example rejected: ${readError(error)}`);
     }
   }
 
   private showMenu(): void {
     this.menuView.hidden = false;
+    this.workbenchView.hidden = true;
     this.arenaView.hidden = true;
     this.syncLabControls();
+  }
+
+  private showWorkbench(): void {
+    blurActiveElement();
+    this.menuView.hidden = true;
+    this.workbenchView.hidden = false;
+    this.arenaView.hidden = true;
+    this.setRulesLocked(false);
+    this.syncWorkbenchControls();
+    void this.refreshRulesInspector();
   }
 
   private showArena(): void {
     blurActiveElement();
     this.menuView.hidden = true;
+    this.workbenchView.hidden = true;
     this.arenaView.hidden = false;
     this.syncLabControls();
     this.syncFullscreenButton();
@@ -759,6 +1132,13 @@ export class BeatApp {
     this.copyRulesButton.disabled = locked;
     for (const button of this.rulesExampleButtons) {
       button.disabled = locked;
+    }
+    for (const control of this.workbenchView.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
+      'input, select, textarea, button',
+    )) {
+      if (control.id !== 'workbench-back-menu') {
+        control.disabled = locked;
+      }
     }
   }
 
@@ -892,6 +1272,7 @@ function shellHtml(): string {
               <button id="host-room" class="button button--primary" type="button">Host</button>
               <button id="solo-room" class="button" type="button">Solo</button>
               <button id="lab-room" class="button" type="button">Lab</button>
+              <button id="open-workbench" class="button" type="button">Workbench</button>
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
             <section class="room-section">
@@ -899,33 +1280,10 @@ function shellHtml(): string {
               <div id="room-list" class="room-list"></div>
             </section>
           </section>
-          <section class="menu-section menu-section--rules">
-            <h2>Rules JSON</h2>
-            <div class="rules-workbench">
-              <div class="rules-editor">
-                <div id="rules-hash-line" class="rules-hash">rules hash</div>
-                <div id="rules-validation-line" class="rules-validation">validating</div>
-                <textarea id="rules-json" class="rules-json" spellcheck="false"></textarea>
-                <div class="button-grid button-grid--rules">
-                  <button id="apply-rules" class="button button--primary" type="button">Apply</button>
-                  <button id="copy-rules" class="button" type="button">Copy</button>
-                  <button id="reset-rules" class="button button--danger" type="button">Reset</button>
-                </div>
-              </div>
-              <aside class="rules-panel">
-                <div class="rules-examples">
-                  <button class="button rules-example" type="button" data-example="combo-preset">Combo Preset</button>
-                  <button class="button rules-example" type="button" data-example="bleed-dot">Bleed DOT</button>
-                  <button class="button rules-example" type="button" data-example="execute">Execute</button>
-                  <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
-                </div>
-                <div id="rules-inspector" class="rules-inspector"></div>
-              </aside>
-            </div>
-          </section>
         </div>
       </section>
 
+      ${workbenchHtml()}
       <section id="arena-view" class="arena-view" hidden>
         <canvas id="arena" class="arena" aria-label="Beat arena"></canvas>
         <div class="hud">
@@ -991,7 +1349,7 @@ function shellHtml(): string {
             <div id="touch-fire-knob" class="touch-knob"></div>
           </div>
         </div>
-        <details class="arena-log">
+        <details id="arena-log" class="arena-log">
           <summary>Trace / Log</summary>
           <div class="arena-log__title">Mechanics</div>
           <div id="trace-log" class="trace-log"></div>
@@ -1015,277 +1373,49 @@ function readError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    switch (char) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      default:
-        return '&#039;';
-    }
-  });
-}
-
 function blurActiveElement(): void {
   if (document.activeElement instanceof HTMLElement) {
     document.activeElement.blur();
   }
 }
 
-function rulesInspectorHtml(ruleset: Ruleset): string {
-  return [
-    inspectorGroup(
-      'Match',
-      [
-        inspectorRow(
-          ruleset.name,
-          `${Math.ceil(ruleset.match.durationTicks / ruleset.tickRate)}s · score ${ruleset.match.scoreLimit}`,
-          `teams ${ruleset.match.teams.map((team) => team.name).join(', ')} · friendly fire ${ruleset.match.friendlyFire ? 'on' : 'off'}`,
-          '#f5f3ed',
-        ),
-      ],
-    ),
-    inspectorGroup(
-      'Objectives',
-      ruleset.objectives.map((objective) =>
-        inspectorRow(
-          objective.name,
-          `${objective.kind} · ${objective.scoreZones.length} zones`,
-          objective.scoreZones.map((zone) => `${zone.team} +${zone.points} at ${zone.x}, ${zone.y}`).join(' · '),
-          objective.body.color,
-        ),
-      ),
-    ),
-    inspectorGroup(
-      'Abilities',
-      ruleset.abilities.map((ability) =>
-        inspectorRow(
-          ability.name,
-          abilityMeta(ability),
-          abilityDetail(ability),
-          ability.color,
-        ),
-      ),
-    ),
-    inspectorGroup(
-      'Statuses',
-      ruleset.mechanics.statuses.map((status) =>
-        inspectorRow(
-          status.name,
-          [`${status.durationTicks} ticks`, ...(status.tags ?? [])].join(' · '),
-          [
-            status.movementMultiplier === undefined ? undefined : `move x${status.movementMultiplier}`,
-            status.damageDealtMultiplier === undefined ? undefined : `deal x${status.damageDealtMultiplier}`,
-            status.damageTakenMultiplier === undefined ? undefined : `taken x${status.damageTakenMultiplier}`,
-            status.periodic ? `periodic ${status.periodic.everyTicks}` : undefined,
-          ]
-            .filter(Boolean)
-            .join(' · ') || 'marker',
-          status.color,
-        ),
-      ),
-    ),
-    inspectorGroup(
-      'Resources',
-      ruleset.mechanics.resources.map((resource) =>
-        inspectorRow(resource.name, `${resource.start}/${resource.max}`, `regen ${resource.regenPerTick}`, resource.color),
-      ),
-    ),
-    inspectorGroup(
-      'Triggers',
-      ruleset.mechanics.triggers.map((trigger) =>
-        inspectorRow(
-          trigger.name ?? trigger.id,
-          trigger.event,
-          triggerDetail(trigger),
-          '#ffe66d',
-        ),
-      ),
-    ),
-    inspectorGroup(
-      'NPCs',
-      ruleset.npcs.archetypes.map((archetype) =>
-        inspectorRow(
-          archetype.name,
-          `${archetype.id} · ${archetype.behavior.mode} · team ${archetype.team}`,
-          `loadout ${archetype.loadout.abilityIds.join(', ') || 'none'} · cast ${archetype.casting.slots.map((slot) => slot + 1).join(', ') || 'none'} · x${archetype.hpMultiplier} hp`,
-          `hsl(${archetype.hue} 76% 58%)`,
-        ),
-      ),
-    ),
-    inspectorGroup(
-      'NPC Spawns',
-      [
-        ...ruleset.npcs.labSpawns.map((spawn) =>
-          inspectorRow(spawn.id, `lab · ${spawn.archetypeId}`, `${spawn.x}, ${spawn.y}${spawn.team ? ` · team ${spawn.team}` : ''}`, '#2fd17c'),
-        ),
-        ...ruleset.npcs.sessionSpawns.map((spawn) =>
-          inspectorRow(spawn.id, `session · ${spawn.archetypeId}`, `${spawn.x}, ${spawn.y}${spawn.team ? ` · team ${spawn.team}` : ''}`, '#ff6b4a'),
-        ),
-      ],
-    ),
-  ].join('');
+function readControlNumber(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): number | undefined {
+  const value = Number(target.value);
+  return Number.isFinite(value) ? value : undefined;
 }
 
-function inspectorGroup(title: string, rows: string[]): string {
-  const body = rows.length > 0 ? rows.join('') : '<div class="inspector-empty">None</div>';
-  return `<section class="inspector-group"><h3>${escapeHtml(title)}</h3>${body}</section>`;
+function setControlValue(root: ParentNode, selector: string, value: string): void {
+  const control = root.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(selector);
+  if (control && control.value !== value) {
+    control.value = value;
+  }
 }
 
-function inspectorRow(title: string, meta: string, detail: string, color: string): string {
-  return `
-    <div class="inspector-row">
-      <span class="inspector-swatch" style="--swatch:${escapeHtml(color)}"></span>
-      <span class="inspector-row__main">
-        <strong>${escapeHtml(title)}</strong>
-        <small>${escapeHtml(meta)}</small>
-        <small>${escapeHtml(detail)}</small>
-      </span>
-    </div>
-  `;
+function setControlChecked(root: ParentNode, selector: string, checked: boolean): void {
+  const control = root.querySelector<HTMLInputElement>(selector);
+  if (control) {
+    control.checked = checked;
+  }
 }
 
-function abilityMeta(ability: Ruleset['abilities'][number]): string {
-  return [
-    ability.shape,
-    ability.targeting,
-    ability.shape === 'projectile' && ability.worldCollision === 'phase' ? 'phase walls' : undefined,
-    ...(ability.tags ?? []),
-  ]
-    .filter(Boolean)
-    .join(' · ');
+function setSelectOptions(root: ParentNode, selector: string, options: Array<{ value: string; label: string }>, selected: string): void {
+  const select = root.querySelector<HTMLSelectElement>(selector);
+  if (select) {
+    replaceOptions(select, options, selected);
+  }
 }
 
-function abilityDetail(ability: Ruleset['abilities'][number]): string {
-  const physicsEffects = (ability.effects ?? []).map(physicsEffectLabel).filter(Boolean);
-  return [
-    `${ability.damage} dmg`,
-    `${ability.cooldownTicks} cd`,
-    `${(ability.effects ?? []).length} effects`,
-    physicsEffects.length > 0 ? physicsEffects.join(', ') : undefined,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function physicsEffectLabel(effect: NonNullable<Ruleset['abilities'][number]['effects']>[number]): string | undefined {
-  if (effect.kind === 'spawnBody') {
-    return `body r${effect.body.radius}`;
-  }
-  if (effect.kind === 'snare') {
-    return `snare ${effect.radius}`;
-  }
-  if (effect.kind === 'dragBody') {
-    return `drag ${effect.leashLength}`;
-  }
-  return undefined;
-}
-
-function triggerDetail(trigger: Ruleset['mechanics']['triggers'][number]): string {
-  const conditions = trigger.conditions?.map(conditionLabel).join(' + ') ?? 'always';
-  const actions = trigger.actions.map(actionLabel).join(' + ');
-  return `${conditions} -> ${actions}`;
-}
-
-function conditionLabel(condition: MechanicCondition): string {
-  if (condition.kind === 'hasStatus' || condition.kind === 'missingStatus') {
-    return `${condition.target} ${condition.kind} ${condition.statusId}`;
-  }
-  if (condition.kind === 'hpBelow') {
-    return `${condition.target} hp < ${Math.round(condition.ratio * 100)}%`;
-  }
-  if (condition.kind === 'resourceAtLeast') {
-    return `${condition.target} ${condition.resourceId} >= ${condition.amount}`;
-  }
-  if (condition.kind === 'slotUsed') {
-    return `slot ${condition.slot + 1}`;
-  }
-  if (condition.kind === 'objectiveId') {
-    return `objective ${condition.objectiveId}`;
-  }
-  if (condition.kind === 'scoringTeam') {
-    return `team ${condition.teamId}`;
-  }
-  return `tag ${condition.tag}`;
-}
-
-function actionLabel(action: MechanicAction): string {
-  if (action.kind === 'applyStatus' || action.kind === 'removeStatus') {
-    return `${action.kind} ${action.statusId}`;
-  }
-  if (action.kind === 'modifyResource') {
-    return `${action.resourceId} ${action.amount > 0 ? '+' : ''}${action.amount}`;
-  }
-  if (action.kind === 'dealDamage' || action.kind === 'heal') {
-    return `${action.kind} ${action.amount}`;
-  }
-  if (action.kind === 'knockback') {
-    return `knockback ${action.force}`;
-  }
-  if (action.kind === 'slow') {
-    return `slow x${action.multiplier}`;
-  }
-  return `flash ${action.radius}`;
-}
-
-function mechanicsChipHtml(label: string, value: string, color: string): string {
-  return `<span class="mechanic-chip" style="--chip-color:${escapeHtml(color)}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(value)}</small></span>`;
-}
-
-function traceLabel(trace: MechanicTraceSnapshot): string {
-  const source = trace.sourceName ?? shortTraceId(trace.sourceId) ?? 'system';
-  const target = trace.targetName ?? shortTraceId(trace.targetId);
-  const ability = trace.abilityName ?? trace.abilityId;
-  if (trace.kind === 'physics') {
-    return `${trace.tick} physics ${trace.physicsKind ?? 'event'} ${ability ? `via ${ability}` : ''}${target ? ` ${source}->${target}` : ` ${source}`}`.trim();
-  }
-  if (trace.kind === 'event') {
-    const objective = trace.objectiveName ?? trace.objectiveId;
-    const scored = trace.scoringTeamId ? ` team ${trace.scoringTeamId}` : '';
-    return `${trace.tick} ${trace.event ?? 'event'} ${objective ? objective : ability ? `via ${ability}` : ''}${scored} ${target ? `${source}->${target}` : source}`.trim();
-  }
-  if (trace.kind === 'trigger') {
-    return `${trace.tick} trigger ${trace.triggerName ?? trace.triggerId ?? 'unknown'} fired`;
-  }
-  if (trace.kind === 'condition-failed') {
-    return `${trace.tick} skip ${trace.triggerName ?? trace.triggerId ?? 'trigger'}: ${trace.conditionKind ?? 'condition'}`;
-  }
-  if (trace.kind === 'action') {
-    return `${trace.tick} action ${trace.actionKind ?? 'action'}${trace.statusId ? ` ${trace.statusId}` : ''}${trace.resourceId ? ` ${trace.resourceId}` : ''}${trace.amount === undefined ? '' : ` ${Math.round(trace.amount)}`}`;
-  }
-  return `${trace.tick} mechanics guard blocked queued events`;
-}
-
-function aiTraceLabel(trace: AiTraceSnapshot): string {
-  const actor = trace.actorName ?? shortTraceId(trace.actorId) ?? 'npc';
-  const target = trace.targetName ?? shortTraceId(trace.targetId);
-  if (trace.kind === 'target') {
-    return `${trace.tick} ai ${actor} ${trace.result === 'acquired' ? `target ${target ?? 'enemy'}` : trace.reason ?? 'no target'}`;
-  }
-  if (trace.kind === 'move') {
-    return `${trace.tick} ai ${actor} ${trace.behavior ?? 'move'}${target ? ` toward ${target}` : ''}`;
-  }
-  if (trace.kind === 'cast') {
-    return `${trace.tick} ai ${actor} cast ${trace.abilityId ?? `slot ${trace.slot ?? 0}`}${target ? ` at ${target}` : ''}`;
-  }
-  return `${trace.tick} ai ${actor} blocked ${trace.abilityId ?? `slot ${trace.slot ?? 0}`}: ${trace.reason ?? 'blocked'}`;
-}
-
-function shortTraceId(value: string | undefined): string | undefined {
-  return value ? value.slice(-8) : undefined;
-}
-
-function formatMeters(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) {
-    return '--';
-  }
-  return `${value.toFixed(2)}m`;
+function replaceOptions(select: HTMLSelectElement, options: Array<{ value: string; label: string }>, selected: string): void {
+  const previous = select.value;
+  select.replaceChildren(
+    ...options.map((option) => {
+      const element = document.createElement('option');
+      element.value = option.value;
+      element.textContent = option.label;
+      return element;
+    }),
+  );
+  select.value = options.some((option) => option.value === selected) ? selected : previous;
 }
 
 function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConfig {
@@ -1307,6 +1437,29 @@ function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
   if (example === 'physics-preset') {
     const preset = createDefaultRuleset();
     preset.loadout.abilityIds = ['anchor-orb', 'wrecking-weight', 'seeker-spark', 'ion-lance'];
+    return preset;
+  }
+  if (example === 'platform-preset') {
+    const preset = createDefaultRuleset();
+    preset.id = 'beat-platform-lab';
+    preset.name = 'Beat Platform Lab';
+    preset.player.damping = 0.35;
+    preset.player.speed = 7.2;
+    preset.player.movement.mode = 'platform';
+    preset.player.movement.platform = {
+      gravity: 30,
+      jumpVelocity: 12,
+      airControl: 0.48,
+      maxFallSpeed: 20,
+      groundProbeDistance: 0.1,
+    };
+    preset.obstacles = [
+      { id: 'floor-step-left', x: -8, y: 6.2, halfWidth: 5.2, halfHeight: 0.55 },
+      { id: 'floor-step-right', x: 8, y: 6.2, halfWidth: 5.2, halfHeight: 0.55 },
+      { id: 'mid-platform', x: 0, y: 1.7, halfWidth: 4.2, halfHeight: 0.42 },
+      { id: 'high-platform', x: -8, y: -2.7, halfWidth: 3.4, halfHeight: 0.42 },
+    ];
+    preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
     return preset;
   }
   const next = structuredClone(ruleset) as Ruleset;

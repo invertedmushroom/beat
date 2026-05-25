@@ -5,6 +5,7 @@ export type RoomInfo = {
   hostPeerId: string;
   name: string;
   rulesetId: string;
+  rulesetName?: string;
   rulesetHash: string;
   contentHash: string;
   mapBundleId: string;
