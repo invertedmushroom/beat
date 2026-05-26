@@ -240,6 +240,10 @@ const rapierReady = initializeRapier();
 let world: RAPIER.World | undefined;
 let ruleset: Ruleset | undefined;
 let tickHandle: number | undefined;
+let stepIntervalMs = 0;
+let tickAccumulator = 0;
+let lastTickTime = 0;
+const MAX_CATCHUP_STEPS = 5;
 let tick = 0;
 let spawnIndex = 0;
 let projectileIndex = 0;
@@ -265,6 +269,7 @@ let mechanicTraces: MechanicTraceSnapshot[] = [];
 let aiTraces: AiTraceSnapshot[] = [];
 let processingMechanics = false;
 let paused = false;
+let pausedSnapshotSent = false;
 
 const AIM_ASSIST_CONE_DEGREES = 70;
 const MAX_MECHANIC_EVENTS_PER_TICK = 48;
@@ -325,6 +330,7 @@ function handleCommand(command: EngineCommand): void {
       return;
     case 'set-paused':
       paused = command.paused;
+      pausedSnapshotSent = false;
       return;
     case 'reset-objectives':
       resetObjectives(true);
@@ -346,6 +352,7 @@ function initialize(nextRuleset: Ruleset): void {
     x: 0,
     y: nextRuleset.player.movement.mode === 'platform' ? nextRuleset.player.movement.platform.gravity : 0,
   });
+  world.integrationParameters.dt = 1 / nextRuleset.tickRate;
   tick = 0;
   spawnIndex = 0;
   projectileIndex = 0;
@@ -378,9 +385,33 @@ function initialize(nextRuleset: Ruleset): void {
   }
   resetObjectives(false);
 
-  const intervalMs = 1000 / nextRuleset.tickRate;
-  tickHandle = setInterval(step, intervalMs) as unknown as number;
+  stepIntervalMs = 1000 / nextRuleset.tickRate;
+  tickAccumulator = 0;
+  lastTickTime = performance.now();
+  tickHandle = setTimeout(runTickLoop, stepIntervalMs) as unknown as number;
   port.postMessage({ type: 'ready', ruleset: nextRuleset });
+}
+
+function runTickLoop(): void {
+  if (!ruleset || !world) {
+    return;
+  }
+  const now = performance.now();
+  const elapsed = now - lastTickTime;
+  lastTickTime = now;
+  tickAccumulator += elapsed;
+  let stepsRun = 0;
+  while (tickAccumulator >= stepIntervalMs && stepsRun < MAX_CATCHUP_STEPS) {
+    step();
+    tickAccumulator -= stepIntervalMs;
+    stepsRun += 1;
+  }
+  if (stepsRun >= MAX_CATCHUP_STEPS) {
+    // Discard backlog after a long stall to prevent spiral-of-death.
+    tickAccumulator = 0;
+  }
+  const delay = Math.max(0, stepIntervalMs - tickAccumulator);
+  tickHandle = setTimeout(runTickLoop, delay) as unknown as number;
 }
 
 function addArenaWalls(activeRuleset: Ruleset): void {
@@ -474,7 +505,10 @@ function step(): void {
   }
 
   if (paused) {
-    port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
+    if (!pausedSnapshotSent) {
+      port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
+      pausedSnapshotSent = true;
+    }
     return;
   }
 
@@ -711,18 +745,21 @@ function findNpcTarget(actor: RuntimePlayer): RuntimePlayer | undefined {
     return undefined;
   }
   const origin = actor.body.translation();
-  let best: { player: RuntimePlayer; distance: number } | undefined;
+  const aggroRangeSq = aggroRange * aggroRange;
+  let best: { player: RuntimePlayer; distanceSq: number } | undefined;
   for (const candidate of players.values()) {
     if (candidate.spawn.playerId === actor.spawn.playerId || !candidate.alive || sameTeam(actor, candidate)) {
       continue;
     }
     const pos = candidate.body.translation();
-    const distance = Math.hypot(pos.x - origin.x, pos.y - origin.y);
-    if (distance > aggroRange) {
+    const dx = pos.x - origin.x;
+    const dy = pos.y - origin.y;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq > aggroRangeSq) {
       continue;
     }
-    if (!best || distance < best.distance || (distance === best.distance && candidate.spawn.playerId < best.player.spawn.playerId)) {
-      best = { player: candidate, distance };
+    if (!best || distanceSq < best.distanceSq || (distanceSq === best.distanceSq && candidate.spawn.playerId < best.player.spawn.playerId)) {
+      best = { player: candidate, distanceSq };
     }
   }
   return best?.player;
@@ -761,8 +798,7 @@ function npcWanderMove(player: RuntimePlayer): Vec2 | undefined {
   const anchor = player.spawn.spawnPoint ?? spawnPointForIndex(player.spawnSlot);
   const homeDx = anchor.x - pos.x;
   const homeDy = anchor.y - pos.y;
-  const homeDistance = Math.hypot(homeDx, homeDy);
-  if (homeDistance > radius) {
+  if (homeDx * homeDx + homeDy * homeDy > radius * radius) {
     return normalized(homeDx, homeDy);
   }
   const phase = (tick + npc.wanderSeed) / 32;
@@ -893,6 +929,15 @@ function stepProjectiles(): void {
   if (!ruleset) {
     return;
   }
+  // Projectile/melee hit detection is deliberately manual (nested loop over
+  // players) rather than going through Rapier sensors + EventQueue:
+  //   * gameplay is non-physical (statuses, triggers, damage curves) so
+  //     collider events would still need a parallel system
+  //   * N is small (a handful of projectiles, <= a few dozen players) so the
+  //     O(N*M) loop is trivial
+  //   * deterministic across browsers without depending on Rapier's broadphase
+  //     iteration order
+  // If projectile counts ever explode, revisit and migrate to sensors.
   const next: RuntimeProjectile[] = [];
   for (const projectile of projectiles) {
     const from = { x: projectile.x, y: projectile.y };
@@ -949,6 +994,9 @@ function stepMelees(): void {
     const owner = players.get(melee.ownerId);
     if (active && owner?.alive) {
       const ownerPos = owner.body.translation();
+      const minDot = Math.cos((melee.ability.arcDegrees * Math.PI) / 360);
+      const reach = melee.ability.range + (ruleset?.player.radius ?? 0.5);
+      const reachSq = reach * reach;
       for (const target of players.values()) {
         if (target.spawn.playerId === melee.ownerId || !target.alive || melee.hitPlayers.has(target.spawn.playerId) || sameTeam(owner, target)) {
           continue;
@@ -956,13 +1004,12 @@ function stepMelees(): void {
         const targetPos = target.body.translation();
         const dx = targetPos.x - ownerPos.x;
         const dy = targetPos.y - ownerPos.y;
-        const distance = Math.hypot(dx, dy);
-        const reach = melee.ability.range + (ruleset?.player.radius ?? 0.5);
-        if (distance > reach) {
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq > reachSq) {
           continue;
         }
+        const distance = Math.sqrt(distanceSq);
         const dot = distance > 0 ? (dx / distance) * melee.dx + (dy / distance) * melee.dy : 1;
-        const minDot = Math.cos((melee.ability.arcDegrees * Math.PI) / 360);
         if (dot >= minDot) {
           melee.hitPlayers.add(target.spawn.playerId);
           const direction = normalized(dx, dy) ?? { x: melee.dx, y: melee.dy };
@@ -1252,7 +1299,10 @@ function resetObjectives(resetScores: boolean): void {
 
 function createObjectiveBody(definition: ObjectiveDefinition): RuntimePhysicsBody | undefined {
   if (definition.kind === 'relicPush') {
-    return createPhysicsBody(definition.body, definition.spawn, { x: 0, y: 0 }, undefined, undefined, false);
+    // Relic can come to rest between scoring events; allow it to sleep to save
+    // solver work. Projectiles and short-lived effect bodies still keep
+    // setCanSleep(false) so they never stall mid-flight.
+    return createPhysicsBody(definition.body, definition.spawn, { x: 0, y: 0 }, undefined, undefined, false, true);
   }
   return undefined;
 }
@@ -1264,6 +1314,7 @@ function createPhysicsBody(
   ownerId: string | undefined,
   sourceAbilityId: string | undefined,
   expires = true,
+  canSleep = false,
 ): RuntimePhysicsBody | undefined {
   if (!world || !ruleset) {
     return undefined;
@@ -1276,7 +1327,7 @@ function createPhysicsBody(
       .setLinearDamping(spec.linearDamping)
       .setAngularDamping(spec.linearDamping)
       .setCcdEnabled(true)
-      .setCanSleep(false),
+      .setCanSleep(canSleep),
   );
   world.createCollider(
     RAPIER.ColliderDesc.ball(spec.radius)
@@ -1450,8 +1501,10 @@ function stepRelicPushObjective(objective: RuntimeObjective): void {
   }
   const pos = body.body.translation();
   const zone = objective.definition.scoreZones.find((candidate) => {
-    const distance = Math.hypot(pos.x - candidate.x, pos.y - candidate.y);
-    return distance <= candidate.radius + body.radius * 0.55;
+    const dx = pos.x - candidate.x;
+    const dy = pos.y - candidate.y;
+    const reach = candidate.radius + body.radius * 0.55;
+    return dx * dx + dy * dy <= reach * reach;
   });
   if (zone?.id !== objective.activeZoneId) {
     objective.activeZoneId = zone?.id;
@@ -1584,7 +1637,11 @@ function stepKingZoneObjective(objective: RuntimeObjective): void {
   for (const player of players.values()) {
     if (!player.alive || player.spawn.role === 'dummy') continue;
     const pos = player.body.translation();
-    const inside = definition.zones.some((zone) => Math.hypot(pos.x - zone.x, pos.y - zone.y) <= zone.radius);
+    const inside = definition.zones.some((zone) => {
+      const dx = pos.x - zone.x;
+      const dy = pos.y - zone.y;
+      return dx * dx + dy * dy <= zone.radius * zone.radius;
+    });
     if (inside) {
       tally.set(player.team, (tally.get(player.team) ?? 0) + 1);
     }
@@ -1674,15 +1731,17 @@ function leadingTeamId(): string | undefined {
 }
 
 function closestAlivePlayerTo(point: Vec2, preferredTeam?: string): RuntimePlayer | undefined {
-  let best: { player: RuntimePlayer; distance: number } | undefined;
+  let best: { player: RuntimePlayer; distanceSq: number } | undefined;
   for (const player of players.values()) {
     if (!player.alive || (preferredTeam && player.team !== preferredTeam)) {
       continue;
     }
     const pos = player.body.translation();
-    const distance = Math.hypot(pos.x - point.x, pos.y - point.y);
-    if (!best || distance < best.distance || (distance === best.distance && player.spawn.playerId < best.player.spawn.playerId)) {
-      best = { player, distance };
+    const dx = pos.x - point.x;
+    const dy = pos.y - point.y;
+    const distanceSq = dx * dx + dy * dy;
+    if (!best || distanceSq < best.distanceSq || (distanceSq === best.distanceSq && player.spawn.playerId < best.player.spawn.playerId)) {
+      best = { player, distanceSq };
     }
   }
   return best?.player;
@@ -2317,7 +2376,14 @@ function addEffect(kind: EffectSnapshot['kind'], x: number, y: number, radius: n
 }
 
 function pruneEffects(): void {
-  effects = effects.filter((effect) => tick - effect.createdTick < effect.lifetimeTicks);
+  let w = 0;
+  for (let i = 0; i < effects.length; i += 1) {
+    const effect = effects[i];
+    if (tick - effect.createdTick < effect.lifetimeTicks) {
+      effects[w++] = effect;
+    }
+  }
+  effects.length = w;
 }
 
 function addCombatText(x: number, y: number, kind: CombatTextSnapshot['kind'], amount: number, color: string): void {
@@ -2334,7 +2400,14 @@ function addCombatText(x: number, y: number, kind: CombatTextSnapshot['kind'], a
 }
 
 function pruneCombatTexts(): void {
-  combatTexts = combatTexts.filter((text) => tick - text.createdTick < text.lifetimeTicks);
+  let w = 0;
+  for (let i = 0; i < combatTexts.length; i += 1) {
+    const text = combatTexts[i];
+    if (tick - text.createdTick < text.lifetimeTicks) {
+      combatTexts[w++] = text;
+    }
+  }
+  combatTexts.length = w;
 }
 
 function clearExpiredStatuses(player: RuntimePlayer): void {
@@ -2795,7 +2868,7 @@ function toCombatTextSnapshot(text: RuntimeCombatText): CombatTextSnapshot {
 
 function stop(): void {
   if (tickHandle !== undefined) {
-    clearInterval(tickHandle);
+    clearTimeout(tickHandle);
     tickHandle = undefined;
   }
   world?.free();
