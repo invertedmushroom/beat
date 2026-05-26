@@ -316,10 +316,10 @@ function handleCommand(command: EngineCommand): void {
       return;
     case 'add-player':
       addPlayer(command.player);
-      return;
+      break;
     case 'remove-player':
       removePlayer(command.playerId);
-      return;
+      break;
     case 'input':
       {
         const player = players.get(command.playerId);
@@ -331,17 +331,22 @@ function handleCommand(command: EngineCommand): void {
     case 'set-paused':
       paused = command.paused;
       pausedSnapshotSent = false;
-      return;
+      break;
     case 'reset-objectives':
       resetObjectives(true);
-      return;
+      break;
     case 'clear-trace':
       mechanicTraces = [];
       aiTraces = [];
-      return;
+      break;
     case 'stop':
       stop();
       return;
+  }
+
+  if (paused) {
+    port.postMessage({ type: 'snapshot', snapshot: readSnapshot() });
+    pausedSnapshotSent = true;
   }
 }
 
