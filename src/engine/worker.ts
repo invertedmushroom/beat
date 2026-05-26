@@ -110,6 +110,10 @@ type RuntimeObjective = {
   activeZoneId?: string;
   lastScoreTick: number;
   lastScoredTeamId?: string;
+  /** KingZone: team currently holding control (between scoring ticks). */
+  controllingTeamId?: string;
+  /** KingZone: fractional progress towards next point (0..1) for HUD. */
+  contestProgress?: number;
 };
 
 type RuntimeMelee = {
@@ -1042,6 +1046,7 @@ function damagePlayer(player: RuntimePlayer, damage: number, context: DamageCont
     amount: finalDamage,
     direction: context.direction,
   });
+  creditDeathmatchKill(context.source, player);
 }
 
 function respawnPlayer(player: RuntimePlayer): void {
@@ -1240,7 +1245,7 @@ function resetObjectives(resetScores: boolean): void {
     objectives.set(definition.id, {
       definition,
       bodyId: body?.bodyId,
-      lastScoreTick: -definition.scoreCooldownTicks,
+      lastScoreTick: definition.kind === 'relicPush' ? -definition.scoreCooldownTicks : tick,
     });
   }
 }
@@ -1425,6 +1430,8 @@ function stepObjectives(): void {
   for (const objective of objectives.values()) {
     if (objective.definition.kind === 'relicPush') {
       stepRelicPushObjective(objective);
+    } else if (objective.definition.kind === 'kingZone') {
+      stepKingZoneObjective(objective);
     }
   }
 }
@@ -1513,6 +1520,131 @@ function scoreObjective(objective: RuntimeObjective, zoneId: string): void {
   }
   if (nextScore >= ruleset.match.scoreLimit) {
     finishMatch(zone.team);
+  }
+}
+
+/**
+ * Applies points to the killer's team for any active deathmatch objective.
+ * Handles self-kills and friendly-fire as configurable penalties. Called
+ * after `'onKill'` is emitted so mechanic listeners still see kills even
+ * when no deathmatch objective is active.
+ */
+function creditDeathmatchKill(killer: RuntimePlayer | undefined, victim: RuntimePlayer): void {
+  if (!ruleset || matchFinished) {
+    return;
+  }
+  for (const objective of objectives.values()) {
+    const definition = objective.definition;
+    if (definition.kind !== 'deathmatch') continue;
+    if (!killer) continue;
+    const killerTeam = killer.team;
+    const isSelfKill = killer.spawn.playerId === victim.spawn.playerId;
+    const isFriendlyFire = !isSelfKill && killer.team === victim.team;
+    let delta = definition.pointsPerKill;
+    if (isSelfKill) {
+      delta = -(definition.selfKillPenalty ?? 0);
+    } else if (isFriendlyFire) {
+      delta = -(definition.friendlyFirePenalty ?? 0);
+    }
+    if (delta === 0) continue;
+    const current = matchScores.get(killerTeam) ?? 0;
+    const nextScore = Math.max(0, current + delta);
+    matchScores.set(killerTeam, nextScore);
+    objective.lastScoreTick = tick;
+    objective.lastScoredTeamId = killerTeam;
+    emitMechanicEvent({
+      event: 'onScore',
+      sourceId: killer.spawn.playerId,
+      targetId: victim.spawn.playerId,
+      objectiveId: definition.id,
+      scoringTeamId: killerTeam,
+      amount: delta,
+    });
+    if (delta > 0 && nextScore >= ruleset.match.scoreLimit) {
+      finishMatch(killerTeam);
+      return;
+    }
+  }
+}
+
+/**
+ * Tick a KingZone objective: count alive players inside any of its zones per
+ * team, decide the controlling team via `contestRule`, and award
+ * `pointsPerSecond` once a second of control accrues. Snapshot updates the
+ * `controllingTeamId` and `contestProgress` so the HUD can tint the zone.
+ */
+function stepKingZoneObjective(objective: RuntimeObjective): void {
+  if (!ruleset || objective.definition.kind !== 'kingZone' || matchFinished) {
+    objective.contestProgress = 0;
+    return;
+  }
+  const definition = objective.definition;
+  const tickRate = Math.max(1, ruleset.tickRate ?? 30);
+  const tally = new Map<string, number>();
+  for (const player of players.values()) {
+    if (!player.alive || player.spawn.role === 'dummy') continue;
+    const body = physicsBodies.get(player.spawn.playerId);
+    const pos = body?.body.translation() ?? { x: 0, y: 0 };
+    const inside = definition.zones.some((zone) => Math.hypot(pos.x - zone.x, pos.y - zone.y) <= zone.radius);
+    if (inside) {
+      tally.set(player.team, (tally.get(player.team) ?? 0) + 1);
+    }
+  }
+  let controller: string | undefined;
+  if (tally.size === 1) {
+    controller = tally.keys().next().value;
+  } else if (tally.size > 1) {
+    if (definition.contestRule === 'majority') {
+      let best: { teamId: string; count: number } | undefined;
+      let tied = false;
+      for (const [teamId, count] of tally) {
+        if (!best || count > best.count) {
+          best = { teamId, count };
+          tied = false;
+        } else if (count === best.count) {
+          tied = true;
+        }
+      }
+      controller = tied ? undefined : best?.teamId;
+    } else if (definition.contestRule === 'firstIn') {
+      controller = objective.controllingTeamId && tally.has(objective.controllingTeamId)
+        ? objective.controllingTeamId
+        : undefined;
+    } else {
+      controller = undefined;
+    }
+  } else if (definition.contestRule === 'firstIn') {
+    controller = objective.controllingTeamId;
+  }
+  objective.controllingTeamId = controller;
+  if (!controller || definition.pointsPerSecond <= 0) {
+    objective.contestProgress = 0;
+    return;
+  }
+  const ticksPerPoint = Math.max(1, Math.round(tickRate / definition.pointsPerSecond));
+  const ticksHeld = tick - objective.lastScoreTick;
+  objective.contestProgress = Math.min(1, ticksHeld / ticksPerPoint);
+  if (ticksHeld < ticksPerPoint) {
+    return;
+  }
+  const nextScore = (matchScores.get(controller) ?? 0) + 1;
+  matchScores.set(controller, nextScore);
+  objective.lastScoreTick = tick;
+  objective.lastScoredTeamId = controller;
+  objective.contestProgress = 0;
+  const zone = definition.zones[0];
+  if (zone) {
+    addEffect('trigger', zone.x, zone.y, zone.radius * 0.6, teamColor(controller, zone.color), 20);
+    addCombatText(zone.x, zone.y - zone.radius * 0.55, 'resource', 1, teamColor(controller, zone.color));
+  }
+  emitMechanicEvent({
+    event: 'onScore',
+    objectiveId: definition.id,
+    scoringTeamId: controller,
+    amount: 1,
+  });
+  if (nextScore >= ruleset.match.scoreLimit) {
+    finishMatch(controller);
   }
 }
 
@@ -2526,6 +2658,53 @@ function toMatchSnapshot(activeRuleset: Ruleset): EngineSnapshot['match'] {
 
 function toObjectiveSnapshot(objective: RuntimeObjective): ObjectiveSnapshot {
   const definition = objective.definition;
+  if (definition.kind === 'deathmatch') {
+    return {
+      objectiveId: definition.id,
+      name: definition.name,
+      kind: definition.kind,
+      bodyId: undefined,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      radius: 0,
+      color: '#000000',
+      activeZoneId: undefined,
+      lastScoredTeamId: objective.lastScoredTeamId,
+      scoreCooldownTicks: 0,
+      zones: [],
+    };
+  }
+  if (definition.kind === 'kingZone') {
+    const centerZone = definition.zones[0];
+    return {
+      objectiveId: definition.id,
+      name: definition.name,
+      kind: definition.kind,
+      bodyId: undefined,
+      x: centerZone?.x ?? 0,
+      y: centerZone?.y ?? 0,
+      vx: 0,
+      vy: 0,
+      radius: centerZone?.radius ?? 0,
+      color: teamColor(objective.controllingTeamId ?? '', centerZone?.color) || '#f5f3ed',
+      activeZoneId: undefined,
+      lastScoredTeamId: objective.lastScoredTeamId,
+      scoreCooldownTicks: 0,
+      zones: definition.zones.map((zone) => ({
+        zoneId: zone.id,
+        team: objective.controllingTeamId ?? '',
+        x: zone.x,
+        y: zone.y,
+        radius: zone.radius,
+        points: definition.pointsPerSecond,
+        color: teamColor(objective.controllingTeamId ?? '', zone.color) || '#f5f3ed',
+      })),
+      controllingTeamId: objective.controllingTeamId,
+      contestProgress: objective.contestProgress ?? 0,
+    };
+  }
   const body = objective.bodyId ? physicsBodies.get(objective.bodyId) : undefined;
   const pos = body?.body.translation() ?? definition.spawn;
   const vel = body?.body.linvel() ?? { x: 0, y: 0 };

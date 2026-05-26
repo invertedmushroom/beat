@@ -30,6 +30,7 @@ export class InputController {
   private firePressed = false;
   private aimOrigin?: Vec2;
   private clickToCastEnabled = true;
+  private mouseAimEnabled = true;
   private queuedCastSlots: number[] = [];
   private queuedSlotPresses: number[] = [];
   private queuedSlotReleases: number[] = [];
@@ -92,6 +93,20 @@ export class InputController {
    */
   setClickToCastEnabled(enabled: boolean): void {
     this.clickToCastEnabled = enabled;
+  }
+
+  /**
+   * Controls whether canvas mouse pointer events update the aim direction.
+   * `tap-fire` disables this so the player's aim sticks to the last tapped
+   * direction instead of snapping back to wherever the cursor is. Disabling
+   * clears any latched mouse aim so the next emit falls back to the explicit /
+   * movement-derived aim.
+   */
+  setMouseAimEnabled(enabled: boolean): void {
+    this.mouseAimEnabled = enabled;
+    if (!enabled) {
+      this.mouseAim = undefined;
+    }
   }
 
   reset(emitNeutral = true): void {
@@ -226,6 +241,9 @@ export class InputController {
     if (event.pointerType !== 'mouse') {
       return;
     }
+    if (!this.mouseAimEnabled) {
+      return;
+    }
     this.updateMouseAim(event);
   };
 
@@ -234,7 +252,9 @@ export class InputController {
       return;
     }
     event.preventDefault();
-    this.updateMouseAim(event);
+    if (this.mouseAimEnabled) {
+      this.updateMouseAim(event);
+    }
     if (this.clickToCastEnabled) {
       this.queueSlotPress(0);
       this.queueCast(0);
@@ -246,7 +266,9 @@ export class InputController {
     if (event.pointerType !== 'mouse' || event.button !== 0) {
       return;
     }
-    this.updateMouseAim(event);
+    if (this.mouseAimEnabled) {
+      this.updateMouseAim(event);
+    }
     if (this.clickToCastEnabled) {
       this.queueSlotRelease(0);
     }

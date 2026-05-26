@@ -371,7 +371,47 @@ function validateObjective(value: unknown, match: MatchConfig): ObjectiveDefinit
       resetOnScore: objective.resetOnScore === undefined ? true : readBoolean(objective.resetOnScore, 'objective.resetOnScore'),
     };
   }
-  throw new Error('objective.kind must be relicPush');
+  if (kind === 'deathmatch') {
+    return {
+      id: readId(objective.id, 'objective.id'),
+      name: clampString(readString(objective.name, 'objective.name'), 1, 36, 'objective.name'),
+      kind,
+      pointsPerKill: readInt(objective.pointsPerKill, 'objective.pointsPerKill', 0, 1_000),
+      selfKillPenalty: readOptionalInt(objective.selfKillPenalty, 'objective.selfKillPenalty', 0, 1_000),
+      friendlyFirePenalty: readOptionalInt(objective.friendlyFirePenalty, 'objective.friendlyFirePenalty', 0, 1_000),
+    };
+  }
+  if (kind === 'kingZone') {
+    const zones = readArray(objective.zones, 'objective.zones').map((zone) => validateKingZoneArea(zone));
+    assertUniqueIds(zones, 'objective.zones');
+    if (zones.length === 0) {
+      throw new Error('objective.zones must contain at least one zone');
+    }
+    const contestRule = readString(objective.contestRule, 'objective.contestRule');
+    if (contestRule !== 'soloOnly' && contestRule !== 'majority' && contestRule !== 'firstIn') {
+      throw new Error('objective.contestRule must be soloOnly, majority, or firstIn');
+    }
+    return {
+      id: readId(objective.id, 'objective.id'),
+      name: clampString(readString(objective.name, 'objective.name'), 1, 36, 'objective.name'),
+      kind,
+      zones,
+      pointsPerSecond: readInt(objective.pointsPerSecond, 'objective.pointsPerSecond', 0, 1_000),
+      contestRule,
+    };
+  }
+  throw new Error('objective.kind must be relicPush, deathmatch, or kingZone');
+}
+
+function validateKingZoneArea(value: unknown): { id: string; x: number; y: number; radius: number; color?: string } {
+  const zone = assertRecord(value, 'objective.kingZone.zone');
+  return {
+    id: readId(zone.id, 'objective.kingZone.zone.id'),
+    x: readNumber(zone.x, 'objective.kingZone.zone.x', -200, 200),
+    y: readNumber(zone.y, 'objective.kingZone.zone.y', -200, 200),
+    radius: readNumber(zone.radius, 'objective.kingZone.zone.radius', 0.2, 30),
+    ...(zone.color === undefined ? {} : { color: readColor(zone.color, 'objective.kingZone.zone.color') }),
+  };
 }
 
 function validateObjectiveScoreZone(value: unknown, match: MatchConfig): ObjectiveScoreZone {

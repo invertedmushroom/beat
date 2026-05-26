@@ -115,6 +115,7 @@ export type UiPreferencesV2 = {
   hudScale: number;
   hudDensity: HudDensity;
   traceDefaultOpen: boolean;
+  shownHints: Partial<Record<UiProfileId, boolean>>;
 };
 
 const VALID_PROFILE_IDS: readonly UiProfileId[] = [...BUILTIN_PROFILE_IDS, 'custom'];
@@ -128,6 +129,7 @@ export function defaultUiPreferencesV2(): UiPreferencesV2 {
     hudScale: 1,
     hudDensity: 'detailed',
     traceDefaultOpen: false,
+    shownHints: {},
   };
 }
 
@@ -171,6 +173,7 @@ export function parseUiPreferencesV2(value: unknown): UiPreferencesV2 {
     hudDensity: readEnum(value.hudDensity, ['detailed', 'compact'], defaults.hudDensity),
     traceDefaultOpen:
       typeof value.traceDefaultOpen === 'boolean' ? value.traceDefaultOpen : defaults.traceDefaultOpen,
+    shownHints: parseShownHints(value.shownHints),
   };
 }
 
@@ -231,6 +234,15 @@ function parseProfileByBucket(value: unknown): Partial<Record<CapabilityBucket, 
     if (typeof raw === 'string' && VALID_PROFILE_IDS.includes(raw as UiProfileId)) {
       out[bucket] = raw as UiProfileId;
     }
+  }
+  return out;
+}
+
+function parseShownHints(value: unknown): Partial<Record<UiProfileId, boolean>> {
+  if (!isRecord(value)) return {};
+  const out: Partial<Record<UiProfileId, boolean>> = {};
+  for (const id of VALID_PROFILE_IDS) {
+    if (value[id] === true) out[id] = true;
   }
   return out;
 }

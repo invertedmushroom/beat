@@ -1,4 +1,4 @@
-import { createDefaultRuleset } from './engine/defaultRules';
+import { createDefaultRuleset, defaultObjectiveForKind } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
 import { hashRuleset } from './engine/rulesHash';
 import { validateRuleset } from './engine/rulesValidation';
@@ -127,6 +127,7 @@ export class BeatApp {
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
   private controlProfileSelect!: HTMLSelectElement;
+  private arenaHintEl!: HTMLDivElement;
   private fullscreenButtons: HTMLButtonElement[] = [];
   private engine?: EngineClient;
   private hostSession?: HostSession;
@@ -153,6 +154,7 @@ export class BeatApp {
   private pendingTapFire?: { worldX: number; worldY: number };
   private penHoverWorld?: { x: number; y: number };
   private unsubscribePointerWorld?: () => void;
+  private arenaHintTimer?: number;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
   private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
   private labActorIds = new Set<string>();
@@ -299,6 +301,7 @@ export class BeatApp {
     }
     this.canvas = requireNode<HTMLCanvasElement>('#arena');
     this.controlProfileSelect = requireNode<HTMLSelectElement>('#control-profile-select');
+    this.arenaHintEl = requireNode<HTMLDivElement>('#arena-hint');
   }
 
   private async hostRoom(): Promise<void> {
@@ -550,6 +553,7 @@ export class BeatApp {
     this.pendingTapFire = undefined;
     this.penHoverWorld = undefined;
     this.renderer.setAimGhost(undefined);
+    this.hideArenaHint();
     this.unsubscribeSnapshot?.();
     this.unsubscribeSnapshot = undefined;
     this.hostSession?.destroy();
@@ -803,6 +807,19 @@ export class BeatApp {
     if (target.dataset.objectiveSelect === 'true') {
       this.workbenchState.selectedObjectiveId = target.value;
       this.syncWorkbenchControls();
+      return;
+    }
+    if (target.dataset.objectiveKind === 'true') {
+      const nextKind = target.value as 'relicPush' | 'deathmatch' | 'kingZone';
+      const current = this.editableRuleset.objectives[0];
+      if (!current || current.kind === nextKind) {
+        return;
+      }
+      const next = structuredClone(this.editableRuleset) as Ruleset;
+      next.objectives = [defaultObjectiveForKind(nextKind, current.id, next)];
+      this.workbenchState.selectedObjectiveId = next.objectives[0].id;
+      this.workbenchState.selectedScoreZoneId = '';
+      await this.commitWorkbenchRules(next, 'objectives');
       return;
     }
     if (target.dataset.scoreZoneSelect === 'true') {
@@ -1091,12 +1108,63 @@ export class BeatApp {
       });
     } else if (profileId === 'tap-fire') {
       this.input.setClickToCastEnabled(false);
+      this.input.setMouseAimEnabled(false);
       this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
         this.pendingTapFire = { worldX: intent.worldX, worldY: intent.worldY };
       });
     } else {
       this.input.setClickToCastEnabled(true);
     }
+    if (profileId !== 'tap-fire') {
+      this.input.setMouseAimEnabled(true);
+    }
+    this.maybeShowProfileHint(profileId);
+  }
+
+  /**
+   * Shows a transient HUD hint the first time a user activates a tap-driven
+   * profile. The "shown" flag is persisted in v2 prefs so it never re-appears
+   * after the user has seen it once.
+   */
+  private maybeShowProfileHint(profileId: UiProfileId): void {
+    const hintText = profileId === 'tap-fire'
+      ? 'Tap to fire'
+      : profileId === 'tap-move'
+        ? 'Tap to move'
+        : undefined;
+    if (!hintText) {
+      this.hideArenaHint();
+      return;
+    }
+    if (this.uiPreferencesV2.shownHints[profileId]) {
+      return;
+    }
+    this.showArenaHint(hintText);
+    this.uiPreferencesV2 = {
+      ...this.uiPreferencesV2,
+      shownHints: { ...this.uiPreferencesV2.shownHints, [profileId]: true },
+    };
+    saveUiPreferencesV2(this.uiPreferencesV2);
+  }
+
+  private showArenaHint(text: string): void {
+    if (this.arenaHintTimer !== undefined) {
+      window.clearTimeout(this.arenaHintTimer);
+      this.arenaHintTimer = undefined;
+    }
+    this.arenaHintEl.textContent = text;
+    this.arenaHintEl.hidden = false;
+    this.arenaHintEl.dataset.visible = 'true';
+    this.arenaHintTimer = window.setTimeout(() => this.hideArenaHint(), 3000);
+  }
+
+  private hideArenaHint(): void {
+    if (this.arenaHintTimer !== undefined) {
+      window.clearTimeout(this.arenaHintTimer);
+      this.arenaHintTimer = undefined;
+    }
+    this.arenaHintEl.hidden = true;
+    delete this.arenaHintEl.dataset.visible;
   }
 
   /**
@@ -1661,6 +1729,7 @@ function shellHtml(): string {
           <div id="network-line">net idle</div>
           <div id="local-mechanics" class="local-mechanics"></div>
         </div>
+        <div id="arena-hint" class="arena-hint" data-arena-hint hidden></div>
         <div class="arena-actions">
           <label class="control-profile-picker">
             <span class="control-profile-picker__label">Controls</span>

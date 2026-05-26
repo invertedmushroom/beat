@@ -248,7 +248,7 @@ export type MatchTeam = {
   color: string;
 };
 
-export type ObjectiveDefinition = RelicPushObjective;
+export type ObjectiveDefinition = RelicPushObjective | DeathmatchObjective | KingZoneObjective;
 
 export type RelicPushObjective = {
   id: string;
@@ -262,6 +262,44 @@ export type RelicPushObjective = {
   scoreZones: ObjectiveScoreZone[];
   scoreCooldownTicks: number;
   resetOnScore: boolean;
+};
+
+/**
+ * Pure scoring objective: each kill credits the killer's team. No physics
+ * body, no scoring zones — used for free-for-all deathmatch and Duel presets.
+ */
+export type DeathmatchObjective = {
+  id: string;
+  name: string;
+  kind: 'deathmatch';
+  pointsPerKill: number;
+  /** Optional points subtracted when a player kills themselves (env damage, self-cast). */
+  selfKillPenalty?: number;
+  /** Optional points subtracted when killer and victim share a team. */
+  friendlyFirePenalty?: number;
+};
+
+/** Static control zones that accrue points-per-second to the controlling team. */
+export type KingZoneObjective = {
+  id: string;
+  name: string;
+  kind: 'kingZone';
+  zones: KingZoneArea[];
+  pointsPerSecond: number;
+  /**
+   * - `soloOnly`: only one team must be inside (no enemies).
+   * - `majority`: team with most players inside controls.
+   * - `firstIn`: first team to enter holds until empty.
+   */
+  contestRule: 'soloOnly' | 'majority' | 'firstIn';
+};
+
+export type KingZoneArea = {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+  color?: string;
 };
 
 export type ObjectiveScoreZone = {
@@ -611,6 +649,10 @@ export type ObjectiveSnapshot = {
   lastScoredTeamId?: string;
   scoreCooldownTicks: number;
   zones: ObjectiveZoneSnapshot[];
+  /** KingZone: id of team currently controlling the zone, if any. */
+  controllingTeamId?: string;
+  /** KingZone: progress towards taking control [0..1] for the leading team. */
+  contestProgress?: number;
 };
 
 export type ObjectiveZoneSnapshot = {

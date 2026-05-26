@@ -1,4 +1,4 @@
-import type { Ruleset } from '../../../engine/protocol';
+import type { RelicPushObjective, Ruleset } from '../../../engine/protocol';
 import { escapeHtml } from '../inspector';
 import type { WorkbenchState } from '../state';
 import {
@@ -15,26 +15,68 @@ import {
 } from './controls';
 
 export function matchGameTypeLabel(ruleset: Ruleset): string {
-  if (ruleset.objectives.length === 0) {
+  return inferGameTypeLabel(ruleset);
+}
+
+/**
+ * Pure label inferring the marketing-friendly game type from a Ruleset.
+ * Recognises Relic Push (one relicPush objective with one zone per team),
+ * Deathmatch, Duel (deathmatch with exactly two teams of one player), and
+ * King Zone (one kingZone objective). Everything else is "Custom".
+ */
+export function inferGameTypeLabel(ruleset: Ruleset): string {
+  const objectives = ruleset.objectives;
+  if (objectives.length === 0) {
     return 'No objective scoring';
   }
-  if (ruleset.objectives.some((objective) => objective.kind !== 'relicPush')) {
-    return 'Custom objective rules';
+  if (objectives.length === 1) {
+    const objective = objectives[0];
+    if (objective.kind === 'deathmatch') {
+      const teams = ruleset.match.teams;
+      const duel = teams.length === 2 && ruleset.maxPlayers <= 2;
+      return duel ? 'Duel' : 'Deathmatch';
+    }
+    if (objective.kind === 'kingZone') {
+      return 'King Zone';
+    }
+    if (objective.kind === 'relicPush') {
+      const teamIds = new Set(ruleset.match.teams.map((team) => team.id));
+      const zoneTeams = objective.scoreZones.map((zone) => zone.team);
+      const hasOneZonePerTeam =
+        zoneTeams.length === teamIds.size &&
+        zoneTeams.every((team) => teamIds.has(team)) &&
+        new Set(zoneTeams).size === zoneTeams.length;
+      return hasOneZonePerTeam ? 'Relic Push' : 'Custom Relic Push';
+    }
   }
-  if (ruleset.objectives.length !== 1) {
+  if (objectives.every((objective) => objective.kind === 'relicPush')) {
     return 'Custom Relic Push';
   }
-  const objective = ruleset.objectives[0];
-  const teamIds = new Set(ruleset.match.teams.map((team) => team.id));
-  const zoneTeams = objective?.scoreZones.map((zone) => zone.team) ?? [];
-  const hasOneZonePerTeam = zoneTeams.length === teamIds.size && zoneTeams.every((team) => teamIds.has(team)) && new Set(zoneTeams).size === zoneTeams.length;
-  return hasOneZonePerTeam ? 'Relic Push' : 'Custom Relic Push';
+  return 'Custom';
 }
 
 export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): string {
   const team = selectedTeam(ruleset, state.selectedTeamId);
   const objective = selectedObjective(ruleset, state.selectedObjectiveId);
+  const rawObjective = ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId) ?? ruleset.objectives[0];
   const zone = objective ? selectedScoreZone(objective, state.selectedScoreZoneId) : undefined;
+  const showKindPicker = ruleset.objectives.length === 1 && !!rawObjective;
+  const kindPicker = showKindPicker
+    ? `
+          <label class="field"><span>Objective kind</span><select id="workbench-objective-kind" data-objective-kind="true">${optionsHtml(
+            objectiveKindOptions(),
+            rawObjective.kind,
+          )}</select></label>
+        `
+    : '';
+  const nonRelicSummary =
+    rawObjective && rawObjective.kind !== 'relicPush'
+      ? `<div class="workbench-chain__empty">${escapeHtml(
+          rawObjective.kind === 'deathmatch'
+            ? `Deathmatch — +${rawObjective.pointsPerKill} per kill. Edit advanced fields via JSON.`
+            : `King Zone — +${rawObjective.pointsPerSecond}/s (${rawObjective.contestRule}). Edit advanced fields via JSON.`,
+        )}</div>`
+      : '';
   return [
     sectionShell(
       'Game Type',
@@ -66,6 +108,7 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
               objectiveOptions(ruleset),
               objective.id,
             )}</select></label>
+            ${kindPicker}
             ${objectiveFieldsHtml(objective)}
           </div>
           <div class="workbench-chain__group">
@@ -89,9 +132,24 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
             </div>
           </div>
         `
-        : '<div class="workbench-chain__empty">No objective scoring</div>',
+        : rawObjective
+          ? `
+          <div class="workbench-grid workbench-grid--chain">
+            ${kindPicker}
+            ${nonRelicSummary}
+          </div>
+        `
+          : '<div class="workbench-chain__empty">No objective scoring</div>',
     ),
   ].join('');
+}
+
+function objectiveKindOptions() {
+  return [
+    { value: 'relicPush', label: 'Relic Push' },
+    { value: 'deathmatch', label: 'Deathmatch' },
+    { value: 'kingZone', label: 'King Zone' },
+  ];
 }
 
 function teamFieldsHtml(team: Ruleset['match']['teams'][number]): string {
@@ -102,7 +160,7 @@ function teamFieldsHtml(team: Ruleset['match']['teams'][number]): string {
   ]);
 }
 
-function objectiveFieldsHtml(objective: Ruleset['objectives'][number]): string {
+function objectiveFieldsHtml(objective: RelicPushObjective): string {
   const path = (fieldId: string) => `objectives[${objective.id}].${fieldId}`;
   return fieldsHtml([
     textField('objective', 0, 'name', 'Objective name', objective.name, path('name')),
@@ -118,8 +176,8 @@ function objectiveFieldsHtml(objective: Ruleset['objectives'][number]): string {
 
 function scoreZoneFieldsHtml(
   ruleset: Ruleset,
-  objective: Ruleset['objectives'][number],
-  zone: Ruleset['objectives'][number]['scoreZones'][number],
+  objective: RelicPushObjective,
+  zone: RelicPushObjective['scoreZones'][number],
 ): string {
   const path = (fieldId: string) => `objectives[${objective.id}].scoreZones[${zone.id}].${fieldId}`;
   const team = ruleset.match.teams.find((candidate) => candidate.id === zone.team);
@@ -141,19 +199,23 @@ function selectedTeam(ruleset: Ruleset, teamId: string): Ruleset['match']['teams
   return ruleset.match.teams.find((candidate) => candidate.id === teamId) ?? ruleset.match.teams[0];
 }
 
-function selectedObjective(ruleset: Ruleset, objectiveId: string): Ruleset['objectives'][number] | undefined {
-  return ruleset.objectives.find((candidate) => candidate.id === objectiveId) ?? ruleset.objectives[0];
+function selectedObjective(ruleset: Ruleset, objectiveId: string): RelicPushObjective | undefined {
+  const match = ruleset.objectives.find((candidate) => candidate.id === objectiveId) ?? ruleset.objectives[0];
+  return match && match.kind === 'relicPush' ? match : undefined;
 }
 
 function selectedScoreZone(
-  objective: Ruleset['objectives'][number],
+  objective: RelicPushObjective,
   scoreZoneId: string,
-): Ruleset['objectives'][number]['scoreZones'][number] | undefined {
+): RelicPushObjective['scoreZones'][number] | undefined {
   return objective.scoreZones.find((candidate) => candidate.id === scoreZoneId) ?? objective.scoreZones[0];
 }
 
 function matchGameTypeDetail(ruleset: Ruleset): string {
   const objectiveCount = ruleset.objectives.length;
-  const zoneCount = ruleset.objectives.reduce((total, objective) => total + objective.scoreZones.length, 0);
+  const zoneCount = ruleset.objectives.reduce(
+    (total, objective) => total + (objective.kind === 'relicPush' ? objective.scoreZones.length : 0),
+    0,
+  );
   return `${objectiveCount} objectives · ${zoneCount} zones · score ${ruleset.match.scoreLimit}`;
 }

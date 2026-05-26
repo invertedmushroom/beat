@@ -1,4 +1,4 @@
-import type { AbilityEffect, MechanicAction, MechanicCondition, PhysicsBodySpec, Ruleset } from '../../../engine/protocol';
+import type { AbilityEffect, MechanicAction, MechanicCondition, PhysicsBodySpec, RelicPushObjective, Ruleset } from '../../../engine/protocol';
 import { escapeHtml } from '../inspector';
 
 export type Option = { value: string; label: string };
@@ -211,7 +211,7 @@ export function objectiveOptions(ruleset: Ruleset): Option[] {
   return ruleset.objectives.map((objective) => ({ value: objective.id, label: objective.name }));
 }
 
-export function scoreZoneOptions(objective: Ruleset['objectives'][number]): Option[] {
+export function scoreZoneOptions(objective: RelicPushObjective): Option[] {
   return objective.scoreZones.map((zone) => ({ value: zone.id, label: `${zone.id} (${zone.team})` }));
 }
 

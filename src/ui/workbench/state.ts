@@ -99,9 +99,10 @@ export function ensureWorkbenchSelections(state: WorkbenchState, ruleset: Rulese
     ? state.selectedObjectiveId
     : (ruleset.objectives[0]?.id ?? '');
   const objective = ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId);
-  state.selectedScoreZoneId = objective?.scoreZones.some((zone) => zone.id === state.selectedScoreZoneId)
+  const relicScoreZones = objective?.kind === 'relicPush' ? objective.scoreZones : [];
+  state.selectedScoreZoneId = relicScoreZones.some((zone) => zone.id === state.selectedScoreZoneId)
     ? state.selectedScoreZoneId
-    : (objective?.scoreZones[0]?.id ?? '');
+    : (relicScoreZones[0]?.id ?? '');
   state.selectedTeamId = ruleset.match.teams.some((team) => team.id === state.selectedTeamId)
     ? state.selectedTeamId
     : (ruleset.match.teams[0]?.id ?? '');

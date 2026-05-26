@@ -48,14 +48,30 @@ export function rulesInspectorHtml(ruleset: Ruleset): string {
     ),
     inspectorGroup(
       'Objectives',
-      ruleset.objectives.map((objective) =>
-        inspectorRow(
+      ruleset.objectives.map((objective) => {
+        if (objective.kind === 'relicPush') {
+          return inspectorRow(
+            objective.name,
+            `${objective.kind} · ${objective.scoreZones.length} zones`,
+            objective.scoreZones.map((zone) => `${zone.team} +${zone.points} at ${zone.x}, ${zone.y}`).join(' · '),
+            objective.body.color,
+          );
+        }
+        if (objective.kind === 'deathmatch') {
+          return inspectorRow(
+            objective.name,
+            objective.kind,
+            `+${objective.pointsPerKill} per kill`,
+            '#f5f3ed',
+          );
+        }
+        return inspectorRow(
           objective.name,
-          `${objective.kind} · ${objective.scoreZones.length} zones`,
-          objective.scoreZones.map((zone) => `${zone.team} +${zone.points} at ${zone.x}, ${zone.y}`).join(' · '),
-          objective.body.color,
-        ),
-      ),
+          `${objective.kind} · ${objective.zones.length} zones`,
+          `+${objective.pointsPerSecond}/s · ${objective.contestRule}`,
+          '#f5f3ed',
+        );
+      }),
     ),
     inspectorGroup(
       'Abilities',

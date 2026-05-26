@@ -1,5 +1,70 @@
-import type { Ruleset } from './protocol';
+import type { DeathmatchObjective, KingZoneObjective, ObjectiveDefinition, RelicPushObjective, Ruleset } from './protocol';
 import { validateRuleset } from './rulesValidation';
+
+export function defaultDeathmatchObjective(id = 'kills'): DeathmatchObjective {
+  return {
+    id,
+    name: 'Kills',
+    kind: 'deathmatch',
+    pointsPerKill: 1,
+    selfKillPenalty: 1,
+    friendlyFirePenalty: 0,
+  };
+}
+
+export function defaultKingZoneObjective(id = 'throne'): KingZoneObjective {
+  return {
+    id,
+    name: 'Throne',
+    kind: 'kingZone',
+    pointsPerSecond: 1,
+    contestRule: 'soloOnly',
+    zones: [{ id: 'throne-center', x: 0, y: 0, radius: 6 }],
+  };
+}
+
+export function defaultRelicPushObjective(id = 'center-relic', teamIds: readonly string[] = ['players', 'hostile']): RelicPushObjective {
+  const colors = ['#2fd17c', '#ff6b4a', '#62d2ff', '#c79bff'];
+  const goals = teamIds.length > 0 ? teamIds : ['players', 'hostile'];
+  return {
+    id,
+    name: 'Center Relic',
+    kind: 'relicPush',
+    spawn: { x: 0, y: 0 },
+    body: {
+      shape: 'ball',
+      radius: 0.72,
+      mass: 12,
+      friction: 0.78,
+      restitution: 0.18,
+      linearDamping: 1.15,
+      lifetimeTicks: 3_600,
+      color: '#f5f3ed',
+    },
+    scoreZones: goals.map((team, i) => ({
+      id: `${team}-goal`,
+      team,
+      x: i === 0 ? 15 : -15,
+      y: 0,
+      radius: 2.45,
+      points: 1,
+      color: colors[i % colors.length],
+    })),
+    scoreCooldownTicks: 36,
+    resetOnScore: true,
+  };
+}
+
+export function defaultObjectiveForKind(
+  kind: ObjectiveDefinition['kind'],
+  id: string,
+  ruleset: Ruleset,
+): ObjectiveDefinition {
+  if (kind === 'deathmatch') return defaultDeathmatchObjective(id);
+  if (kind === 'kingZone') return defaultKingZoneObjective(id);
+  const teamIds = ruleset.match.teams.map((team) => team.id);
+  return defaultRelicPushObjective(id, teamIds);
+}
 
 export function createDefaultRuleset(): Ruleset {
   return validateRuleset({

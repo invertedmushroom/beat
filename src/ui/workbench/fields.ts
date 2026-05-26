@@ -1,4 +1,4 @@
-import type { AbilityEffect, MechanicAction, MechanicCondition, PhysicsBodySpec, Ruleset } from '../../engine/protocol';
+import type { AbilityEffect, MechanicAction, MechanicCondition, PhysicsBodySpec, RelicPushObjective, Ruleset } from '../../engine/protocol';
 import type { WorkbenchState } from './state';
 import { workbenchField as lookupWorkbenchField } from './fields/registry';
 import type { WorkbenchCommand, WorkbenchDiagnostic, WorkbenchFieldEdit } from './fieldTypes';
@@ -845,18 +845,20 @@ function selectedTeam(ruleset: Ruleset, state: WorkbenchState): Ruleset['match']
   return ruleset.match.teams.find((candidate) => candidate.id === state.selectedTeamId) ?? ruleset.match.teams[0];
 }
 
-function selectedObjective(ruleset: Ruleset, state: WorkbenchState): Ruleset['objectives'][number] | undefined {
-  return ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId) ?? ruleset.objectives[0];
+function selectedObjective(ruleset: Ruleset, state: WorkbenchState): RelicPushObjective | undefined {
+  const match = ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId)
+    ?? ruleset.objectives[0];
+  return match && match.kind === 'relicPush' ? match : undefined;
 }
 
 function selectedScoreZone(
-  objective: Ruleset['objectives'][number],
+  objective: RelicPushObjective,
   state: WorkbenchState,
-): Ruleset['objectives'][number]['scoreZones'][number] | undefined {
+): RelicPushObjective['scoreZones'][number] | undefined {
   return objective.scoreZones.find((candidate) => candidate.id === state.selectedScoreZoneId) ?? objective.scoreZones[0];
 }
 
-function defaultScoreZone(ruleset: Ruleset, objective: Ruleset['objectives'][number]): Ruleset['objectives'][number]['scoreZones'][number] {
+function defaultScoreZone(ruleset: Ruleset, objective: RelicPushObjective): RelicPushObjective['scoreZones'][number] {
   const usedTeams = new Set(objective.scoreZones.map((zone) => zone.team));
   const team = ruleset.match.teams.find((candidate) => !usedTeams.has(candidate.id)) ?? ruleset.match.teams[0];
   return {
@@ -870,7 +872,7 @@ function defaultScoreZone(ruleset: Ruleset, objective: Ruleset['objectives'][num
   };
 }
 
-function uniqueScoreZoneId(objective: Ruleset['objectives'][number], baseId: string): string {
+function uniqueScoreZoneId(objective: RelicPushObjective, baseId: string): string {
   const base = baseId.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'zone';
   const ids = new Set(objective.scoreZones.map((zone) => zone.id));
   if (!ids.has(base)) {

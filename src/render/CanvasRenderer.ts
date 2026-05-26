@@ -436,6 +436,44 @@ export class CanvasRenderer {
 
   private drawObjectives(camera: CameraState): void {
     for (const objective of this.snapshot?.objectives ?? []) {
+      if (objective.kind === 'deathmatch') {
+        continue;
+      }
+      if (objective.kind === 'kingZone') {
+        for (const zone of objective.zones) {
+          const { x, y } = worldToViewport(camera, zone.x, zone.y);
+          const controlled = !!objective.controllingTeamId;
+          this.ctx.save();
+          this.ctx.globalAlpha = controlled ? 0.22 : 0.1;
+          this.ctx.fillStyle = zone.color;
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, zone.radius * camera.scale, 0, Math.PI * 2);
+          this.ctx.fill();
+          this.ctx.globalAlpha = controlled ? 0.85 : 0.48;
+          this.ctx.strokeStyle = zone.color;
+          this.ctx.lineWidth = controlled ? 3 : 2;
+          this.ctx.setLineDash(controlled ? [] : [9, 6]);
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, zone.radius * camera.scale, 0, Math.PI * 2);
+          this.ctx.stroke();
+          this.ctx.setLineDash([]);
+          if (controlled && (objective.contestProgress ?? 0) > 0) {
+            this.ctx.globalAlpha = 0.95;
+            this.ctx.lineWidth = 4;
+            this.ctx.beginPath();
+            this.ctx.arc(
+              x,
+              y,
+              zone.radius * camera.scale + 4,
+              -Math.PI / 2,
+              -Math.PI / 2 + Math.PI * 2 * (objective.contestProgress ?? 0),
+            );
+            this.ctx.stroke();
+          }
+          this.ctx.restore();
+        }
+        continue;
+      }
       for (const zone of objective.zones) {
         const { x, y } = worldToViewport(camera, zone.x, zone.y);
         const active = objective.activeZoneId === zone.zoneId;
