@@ -99,7 +99,7 @@ const BUILTIN_PROFILES: Readonly<Record<Exclude<UiProfileId, 'custom'>, UiProfil
     id: 'tank-touch',
     movementWidget: 'leftStick',
     aimWidget: 'facingOnly',
-    showFirePad: false,
+    showFirePad: true,
     showMovePad: true,
     showJumpButton: false,
     skillBarLayout: 'cluster-right',

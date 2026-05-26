@@ -1,4 +1,5 @@
 import type { PlayerInput } from '../engine/protocol';
+import type { UiProfileId } from './profiles';
 
 type InputListener = (input: PlayerInput) => void;
 
@@ -35,6 +36,7 @@ export class InputController {
   private queuedSlotPresses: number[] = [];
   private queuedSlotReleases: number[] = [];
   private interval?: number;
+  private activeProfileId: UiProfileId = 'desktop-kbm';
 
   constructor(
     private readonly target: HTMLCanvasElement,
@@ -110,6 +112,10 @@ export class InputController {
     }
   }
 
+  setControlProfile(profileId: UiProfileId): void {
+    this.activeProfileId = profileId;
+  }
+
   setLastExplicitAim(aim: Vec2): void {
     this.lastExplicitAim = aim;
     this.hasExplicitAim = true;
@@ -182,25 +188,37 @@ export class InputController {
   private emit(): void {
     const keyboardX = Number(this.keys.has('KeyD') || this.keys.has('ArrowRight')) - Number(this.keys.has('KeyA') || this.keys.has('ArrowLeft'));
     const keyboardY = Number(this.keys.has('KeyS') || this.keys.has('ArrowDown')) - Number(this.keys.has('KeyW') || this.keys.has('ArrowUp'));
-    const move = normalized({
-      x: keyboardX + this.touchMove.x,
-      y: keyboardY + this.touchMove.y,
-    });
-    const touchAiming = this.firePressed || this.skillPointerId !== undefined;
+
+    let moveX: number;
+    let moveY: number;
+
+    if (this.activeProfileId === 'tank-touch') {
+      moveX = keyboardX + this.touchAim.x;
+      moveY = keyboardY + this.touchMove.y;
+    } else {
+      const move = normalized({
+        x: keyboardX + this.touchMove.x,
+        y: keyboardY + this.touchMove.y,
+      });
+      moveX = move.x;
+      moveY = move.y;
+    }
+
+    const touchAiming = (this.firePressed && this.activeProfileId !== 'tank-touch') || this.skillPointerId !== undefined;
     const explicitAim = touchAiming && magnitude(this.touchAim) > 0.01 ? normalized(this.touchAim) : this.mouseAim;
     if (explicitAim && magnitude(explicitAim) > 0.01) {
       this.lastExplicitAim = explicitAim;
       this.hasExplicitAim = true;
     }
-    const fallbackAim = this.hasExplicitAim ? this.lastExplicitAim : magnitude(move) > 0.01 ? move : { x: 1, y: 0 };
+    const fallbackAim = this.hasExplicitAim ? this.lastExplicitAim : magnitude({ x: moveX, y: moveY }) > 0.01 ? normalized({ x: moveX, y: moveY }) : { x: 1, y: 0 };
     const aim = explicitAim ?? fallbackAim;
     const castSlots = this.drainCastSlots();
     const slotPresses = this.drainSlotPresses();
     const slotReleases = this.drainSlotReleases();
     const input: PlayerInput = {
       sequence: ++this.sequence,
-      moveX: move.x,
-      moveY: move.y,
+      moveX,
+      moveY,
       aimDx: aim.x,
       aimDy: aim.y,
       castSlots,
@@ -341,7 +359,9 @@ export class InputController {
     this.firePressed = true;
     this.controls?.firePad.setPointerCapture(event.pointerId);
     this.updateFire(event);
-    this.queueSlotPress(0);
+    if (this.activeProfileId !== 'tank-touch') {
+      this.queueSlotPress(0);
+    }
   };
 
   private readonly onFirePointerMove = (event: PointerEvent): void => {
@@ -355,9 +375,11 @@ export class InputController {
       return;
     }
     this.updateFire(event);
-    this.rememberTouchAim();
-    this.queueCast(0);
-    this.queueSlotRelease(0);
+    if (this.activeProfileId !== 'tank-touch') {
+      this.rememberTouchAim();
+      this.queueCast(0);
+      this.queueSlotRelease(0);
+    }
     this.clearFirePointer();
   };
 
@@ -431,7 +453,11 @@ export class InputController {
 
   private updateFire(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.firePad);
-    this.touchAim = magnitude(stick.value) > 0.01 ? stick.value : this.lastExplicitAim;
+    if (this.activeProfileId === 'tank-touch') {
+      this.touchAim = stick.value;
+    } else {
+      this.touchAim = magnitude(stick.value) > 0.01 ? stick.value : this.lastExplicitAim;
+    }
     this.controls?.fireKnob.style.setProperty('--knob-x', `${stick.offset.x}px`);
     this.controls?.fireKnob.style.setProperty('--knob-y', `${stick.offset.y}px`);
   }

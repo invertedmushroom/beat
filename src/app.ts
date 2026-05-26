@@ -548,16 +548,8 @@ export class BeatApp {
       while (diff < -Math.PI) diff += 2 * Math.PI;
       while (diff > Math.PI) diff -= 2 * Math.PI;
 
-      let moveX = 0;
-      let moveY = 0;
-      if (Math.abs(diff) > 0.1) {
-        moveX = Math.sign(diff);
-      }
-      if (Math.abs(diff) > Math.PI / 3) {
-        moveY = 0; // rotate in place first
-      } else {
-        moveY = -1; // forward throttle
-      }
+      const moveX = Math.abs(diff) > 0.1 ? Math.sign(diff) : 0;
+      const moveY = Math.abs(diff) > Math.PI / 3 ? 0 : -1;
       return { ...input, moveX, moveY };
     }
 
@@ -1147,6 +1139,7 @@ export class BeatApp {
    * - Any other profile: unsubscribe, clear pending intents, restore click-to-cast.
    */
   private applyControlProfile(profileId: UiProfileId): void {
+    this.input.setControlProfile(profileId);
     const usesPointerWorld = profileId === 'tap-move' || profileId === 'tap-fire';
     const alreadyApplied =
       this.activeControlProfile === profileId &&
