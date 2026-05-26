@@ -1952,6 +1952,7 @@ function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
         { id: 'hostile-goal', team: 'hostile', x: -12, y: 8.0, radius: 2.45, points: 1, color: '#ff6b4a' },
       ];
     }
+<<<<<<< HEAD
     preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
     return preset;
   }
@@ -1986,6 +1987,8 @@ function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
         { id: 'hostile-goal', team: 'hostile', x: -11, y: 8.2, radius: 2.45, points: 1, color: '#ff6b4a' },
       ];
     }
+=======
+>>>>>>> 54741f4 (presets)
     preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
     return preset;
   }
