@@ -47,6 +47,8 @@ The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or 
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 
+The workbench currently exposes Physics, Platform, Deathmatch, Duel, and King Zone presets.
+
 ## Documentation
 
 - `docs/architecture.md` — implementation overview and component map.

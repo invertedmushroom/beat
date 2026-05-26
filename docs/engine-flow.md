@@ -114,10 +114,11 @@ The worker creates objective bodies from objective definitions, tracks active ob
 
 - `resetObjectives()` rebuilds objective state and can reset scores when requested.
 - `stepObjectives()` runs objective-specific logic each tick.
-- `onObjectiveEnter`, `onObjectiveTick`, and `onScore` events are emitted as objective state changes.
-- scoring logic honors `objective.scoreCooldownTicks` and `resetOnScore`.
+- `relicPush` emits `onObjectiveEnter` when the relic enters a score zone, `onObjectiveTick` while it remains in a live scoring zone, and `onScore` when the score is applied.
+- `deathmatch` and `kingZone` emit `onScore` when their scoring logic awards or subtracts points.
+- `relicPush` scoring honors `objective.scoreCooldownTicks` and `resetOnScore`.
 
-This feature is currently implemented for `relicPush` objectives.
+This feature is currently implemented for `relicPush`, `deathmatch`, and `kingZone` objectives.
 
 - `initialResources()` creates a resource map from `ruleset.mechanics.resources`.
 - `regenerateResources()` applies `regenPerTick` each tick.

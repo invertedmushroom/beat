@@ -41,16 +41,37 @@ Each team in `match.teams[]` includes:
 ### Objectives
 
 `objectives` is a required top-level array that defines level objectives.
-Each objective is currently a `relicPush` type.
+Each objective can be one of the following kinds:
+
+- `relicPush`
+- `deathmatch`
+- `kingZone`
+
+Common fields:
 
 - `id`: objective identifier.
 - `name`: objective name.
-- `kind`: currently `relicPush`.
+- `kind`: objective type.
+
+`relicPush` fields:
+
 - `spawn`: objective spawn point with `x` and `y`.
 - `body`: physics body spec for the objective object.
 - `scoreZones`: list of team scoring zones.
 - `scoreCooldownTicks`: cooldown after a score.
 - `resetOnScore`: whether the objective resets to spawn after scoring.
+
+`deathmatch` fields:
+
+- `pointsPerKill`: points awarded for each kill.
+- `selfKillPenalty`: optional points deducted for self-kills.
+- `friendlyFirePenalty`: optional points deducted for same-team kills.
+
+`kingZone` fields:
+
+- `zones`: control zone definitions.
+- `pointsPerSecond`: points awarded per second to the controlling team.
+- `contestRule`: how control is determined, one of `soloOnly`, `majority`, or `firstIn`.
 
 ### Score zones
 

@@ -17,6 +17,10 @@ The Menu
 | `Bleed DOT` | Rules examples | Adds a bleeding status and makes `arc-slash` apply it | Useful for trigger/status testing. |
 | `Execute` | Rules examples | Adds a low-HP execute trigger | Useful for conditional trigger testing. |
 | `Physics` | Rules examples | Keeps the default ruleset but swaps the player loadout to the physics abilities | Sets the loadout to `anchor-orb`, `wrecking-weight`, `seeker-spark`, `ion-lance`. |
+| `Platform` | Rules examples | Switches to platform movement and adds a basic ledge map | Useful for jump-and-move testing. |
+| `Deathmatch` | Rules examples | Switches to kill scoring instead of relic push | Useful for free-for-all combat testing. |
+| `Duel` | Rules examples | Switches to two-player deathmatch with a lower score limit | Useful for small-team competitive testing. |
+| `King Zone` | Rules examples | Switches to zone control scoring with per-second points | Useful for contested-area gameplay testing. |
 
 ## What A Hosted Room Advertises
 
@@ -331,12 +335,18 @@ Each team in `match.teams[]` includes:
 | --- | --- | --- |
 | `id` | Objective identifier | 1-96 chars, ID format |
 | `name` | Objective name | 1-36 chars |
-| `kind` | Objective type | `relicPush` |
-| `spawn` | Objective spawn point | `x` and `y` numbers |
-| `body` | Objective physics body | Physics body spec |
-| `scoreZones` | Team scoring zones | See below |
-| `scoreCooldownTicks` | Score cooldown | Integer `1..36000` |
-| `resetOnScore` | Reset objective after score | Boolean |
+| `kind` | Objective type | `relicPush`, `deathmatch`, `kingZone` |
+| `spawn` | Objective spawn point | `x` and `y` numbers | (relicPush only) |
+| `body` | Objective physics body | Physics body spec | (relicPush only) |
+| `scoreZones` | Team scoring zones | See below | (relicPush only) |
+| `zones` | Zone control areas | See below | (kingZone only) |
+| `pointsPerKill` | Points awarded per kill | Integer `0..1000` | (deathmatch only) |
+| `selfKillPenalty` | Self-kill penalty | Integer `0..1000` | (deathmatch only) |
+| `friendlyFirePenalty` | Friendly-fire penalty | Integer `0..1000` | (deathmatch only) |
+| `pointsPerSecond` | Zone scoring rate | Integer `0..1000` | (kingZone only) |
+| `contestRule` | Zone control rule | `soloOnly`, `majority`, `firstIn` | (kingZone only) |
+| `scoreCooldownTicks` | Score cooldown | Integer `0..1200` | (relicPush only) |
+| `resetOnScore` | Reset objective after score | Boolean | (relicPush only) |
 
 #### `scoreZones[]`
 
@@ -346,8 +356,18 @@ Each team in `match.teams[]` includes:
 | `team` | Team that scores in this zone | Must match a team ID |
 | `x` | Zone center X | Number `-200..200` |
 | `y` | Zone center Y | Number `-200..200` |
-| `radius` | Zone radius | Number `0.1..100` |
-| `points` | Score value | Number `1..1000` |
+| `radius` | Zone radius | Number `0.2..30` |
+| `points` | Score value | Integer `1..100` |
+| `color` | Optional zone color | `#rrggbb` |
+
+#### `zones[]`
+
+| Field | Purpose | Accepted values |
+| --- | --- | --- |
+| `id` | Zone identifier | 1-96 chars, ID format |
+| `x` | Zone center X | Number `-200..200` |
+| `y` | Zone center Y | Number `-200..200` |
+| `radius` | Zone radius | Number `0.2..30` |
 | `color` | Optional zone color | `#rrggbb` |
 
 ## `mechanics.triggers[]`
@@ -355,12 +375,8 @@ Each team in `match.teams[]` includes:
 | Field | Purpose | Accepted values |
 | --- | --- | --- |
 | `id` | Trigger identifier | 1-96 chars, ID format |
-
-| Field | Purpose | Accepted values |
-| --- | --- | --- |
-| `id` | Trigger identifier | 1-96 chars, ID format |
 | `name` | Optional friendly name | 1-48 chars |
-| `event` | Trigger hook | `onCast`, `onHit`, `onDamageTaken`, `onStatusApplied`, `onStatusExpired`, `onKill`, `onLowHp` |
+| `event` | Trigger hook | `onCast`, `onHit`, `onDamageTaken`, `onStatusApplied`, `onStatusExpired`, `onKill`, `onLowHp`, `onObjectiveEnter`, `onObjectiveTick`, `onScore` |
 | `conditions` | Optional gating conditions | Zero or more supported condition blocks |
 | `actions` | Trigger results | At least one supported action block |
 
