@@ -473,7 +473,8 @@ describe('rulesValidation', () => {
     });
 
     expect(parsed.match.scoreLimit).toBe(5);
-    expect(parsed.objectives.find((objective) => objective.id === 'side-relic')?.scoreZones[0]?.team).toBe('specters');
+    const sideRelic = parsed.objectives.find((objective) => objective.id === 'side-relic');
+    expect(sideRelic?.kind === 'relicPush' ? sideRelic.scoreZones[0]?.team : undefined).toBe('specters');
   });
 
   it('rejects invalid match objective references', () => {
@@ -482,7 +483,7 @@ describe('rulesValidation', () => {
       validateRuleset({
         ...ruleset,
         objectives: ruleset.objectives.map((objective, index) =>
-          index === 0
+          index === 0 && objective.kind === 'relicPush'
             ? {
                 ...objective,
                 scoreZones: objective.scoreZones.map((zone, zoneIndex) => (zoneIndex === 0 ? { ...zone, team: 'missing-team' } : zone)),
@@ -610,5 +611,116 @@ describe('rulesValidation', () => {
         },
       }),
     ).toThrow(/unknown status/);
+  });
+
+  it('accepts deathmatch objectives with kill scoring', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      objectives: [
+        {
+          id: 'center-relic',
+          name: 'Kills',
+          kind: 'deathmatch',
+          pointsPerKill: 1,
+          selfKillPenalty: 1,
+          friendlyFirePenalty: 0,
+        },
+      ],
+    });
+    const dm = parsed.objectives[0];
+    expect(dm?.kind).toBe('deathmatch');
+    expect(dm?.kind === 'deathmatch' ? dm.pointsPerKill : 0).toBe(1);
+  });
+
+  it('rejects deathmatch objectives with invalid pointsPerKill', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        objectives: [
+          {
+            id: 'center-relic',
+            name: 'Kills',
+            kind: 'deathmatch',
+            pointsPerKill: -1,
+          },
+        ],
+      }),
+    ).toThrow(/pointsPerKill/);
+  });
+
+  it('rejects unknown objective kinds with a helpful message', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        objectives: [
+          {
+            id: 'center-relic',
+            name: 'Wat',
+            kind: 'survival',
+          },
+        ],
+      }),
+    ).toThrow(/relicPush, deathmatch, or kingZone/);
+  });
+
+  it('accepts kingZone objectives with a valid zone and contest rule', () => {
+    const ruleset = createDefaultRuleset();
+    const result = validateRuleset({
+      ...ruleset,
+      objectives: [
+        {
+          id: 'center-relic',
+          name: 'Throne',
+          kind: 'kingZone',
+          pointsPerSecond: 1,
+          contestRule: 'soloOnly',
+          zones: [{ id: 'throne', x: 0, y: 0, radius: 6 }],
+        },
+      ],
+    });
+    const kz = result.objectives[0];
+    expect(kz?.kind).toBe('kingZone');
+    expect(kz?.kind === 'kingZone' ? kz.zones.length : 0).toBe(1);
+  });
+
+  it('rejects kingZone objectives with no zones', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        objectives: [
+          {
+            id: 'center-relic',
+            name: 'Throne',
+            kind: 'kingZone',
+            pointsPerSecond: 1,
+            contestRule: 'soloOnly',
+            zones: [],
+          },
+        ],
+      }),
+    ).toThrow(/objective\.zones/);
+  });
+
+  it('rejects kingZone objectives with an unknown contest rule', () => {
+    const ruleset = createDefaultRuleset();
+    expect(() =>
+      validateRuleset({
+        ...ruleset,
+        objectives: [
+          {
+            id: 'center-relic',
+            name: 'Throne',
+            kind: 'kingZone',
+            pointsPerSecond: 1,
+            contestRule: 'roulette',
+            zones: [{ id: 'throne', x: 0, y: 0, radius: 6 }],
+          },
+        ],
+      }),
+    ).toThrow(/contestRule/);
   });
 });

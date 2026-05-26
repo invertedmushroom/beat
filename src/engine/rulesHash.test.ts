@@ -78,7 +78,7 @@ describe('rulesetFingerprint', () => {
     const b = {
       ...a,
       objectives: a.objectives.map((objective) =>
-        objective.id === 'center-relic'
+        objective.id === 'center-relic' && objective.kind === 'relicPush'
           ? {
               ...objective,
               scoreZones: objective.scoreZones.map((zone) => (zone.id === 'players-goal' ? { ...zone, radius: zone.radius + 0.25 } : zone)),

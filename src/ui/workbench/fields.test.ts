@@ -65,7 +65,8 @@ describe('workbench field registry', () => {
     const parsed = validateRuleset(ruleset);
     expect(parsed.match.teams[0]).toMatchObject({ name: 'Green Team', color: '#33cc88' });
     expect(parsed.objectives[0]).toMatchObject({ spawn: { x: 1.5 }, body: { mass: 14 }, scoreCooldownTicks: 12, resetOnScore: false });
-    expect(parsed.objectives[0]?.scoreZones[0]).toMatchObject({ radius: 3.1, points: 2 });
+    const parsedRelic = parsed.objectives[0];
+    expect(parsedRelic?.kind === 'relicPush' ? parsedRelic.scoreZones[0] : undefined).toMatchObject({ radius: 3.1, points: 2 });
   });
 
   it('adds, duplicates, and removes score zones without invalidating relic objectives', () => {
@@ -76,12 +77,15 @@ describe('workbench field registry', () => {
     });
 
     expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'add' })).toBe(true);
-    expect(ruleset.objectives[0]?.scoreZones).toHaveLength(3);
+    const objA = ruleset.objectives[0];
+    expect(objA?.kind === 'relicPush' ? objA.scoreZones.length : 0).toBe(3);
     expect(state.selectedScoreZoneId).toBeTruthy();
     expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'duplicate' })).toBe(true);
-    expect(ruleset.objectives[0]?.scoreZones).toHaveLength(4);
+    const objB = ruleset.objectives[0];
+    expect(objB?.kind === 'relicPush' ? objB.scoreZones.length : 0).toBe(4);
     expect(applyWorkbenchCommand(ruleset, state, { kind: 'scoreZone', command: 'remove' })).toBe(true);
-    expect(validateRuleset(ruleset).objectives[0]?.scoreZones.length).toBe(3);
+    const validatedObj = validateRuleset(ruleset).objectives[0];
+    expect(validatedObj?.kind === 'relicPush' ? validatedObj.scoreZones.length : 0).toBe(3);
   });
 
   it('applies selected ability, loadout, npc, and ability effect edits', () => {

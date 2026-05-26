@@ -1093,6 +1093,36 @@ h2 {
   background: rgba(255, 230, 109, 0.28);
 }
 
+/* Tap-driven profiles drive fire/move from canvas taps; the on-screen
+   fire pad is irrelevant and would visually compete with the tap target. */
+.app-shell[data-control-profile='tap-fire'] .touch-pad--fire,
+.app-shell[data-control-profile='tap-move'] .touch-pad--fire {
+  display: none;
+}
+
+.arena-hint {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: rgba(15, 20, 32, 0.78);
+  color: #ffe66d;
+  border: 1px solid rgba(255, 230, 109, 0.55);
+  border-radius: 999px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  z-index: 5;
+}
+
+.arena-hint[data-visible='true'] {
+  opacity: 1;
+}
+
 @media (pointer: coarse), (max-width: 760px) {
   .touch-controls {
     display: block;
