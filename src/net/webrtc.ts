@@ -299,13 +299,14 @@ export class HostSession {
     }
     if (!peer.playerId) {
       peer.playerId = createId('player');
+      const team = this.chooseTeamForNewPeer();
       this.currentPlayerCount += 1;
       this.options.engine.addPlayer({
         playerId: peer.playerId,
         displayName: normalizedDisplayName,
         hue: hueFromString(peer.playerId),
         local: false,
-        team: this.options.ruleset.match.teams[0]?.id ?? 'players',
+        team,
       });
       this.publishRoomState('room heartbeat failed');
     }
@@ -344,6 +345,15 @@ export class HostSession {
     for (const candidate of pending) {
       await peer.connection.addIceCandidate(candidate).catch((error: unknown) => this.log(`host queued ice failed: ${readError(error)}`));
     }
+  }
+
+  private chooseTeamForNewPeer(): string {
+    const teams = this.options.ruleset.match.teams;
+    if (teams.length === 0) {
+      return 'players';
+    }
+    const index = this.currentPlayerCount % teams.length;
+    return teams[index].id;
   }
 
   private queuePendingIce(signal: RoomSignal): void {

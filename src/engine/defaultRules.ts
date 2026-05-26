@@ -18,7 +18,7 @@ export function defaultKingZoneObjective(id = 'throne'): KingZoneObjective {
     name: 'Throne',
     kind: 'kingZone',
     pointsPerSecond: 1,
-    contestRule: 'soloOnly',
+    contestRule: 'majority',
     zones: [{ id: 'throne-center', x: 0, y: 0, radius: 6 }],
   };
 }

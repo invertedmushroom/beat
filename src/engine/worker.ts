@@ -1583,8 +1583,7 @@ function stepKingZoneObjective(objective: RuntimeObjective): void {
   const tally = new Map<string, number>();
   for (const player of players.values()) {
     if (!player.alive || player.spawn.role === 'dummy') continue;
-    const body = physicsBodies.get(player.spawn.playerId);
-    const pos = body?.body.translation() ?? { x: 0, y: 0 };
+    const pos = player.body.translation();
     const inside = definition.zones.some((zone) => Math.hypot(pos.x - zone.x, pos.y - zone.y) <= zone.radius);
     if (inside) {
       tally.set(player.team, (tally.get(player.team) ?? 0) + 1);
@@ -1614,7 +1613,7 @@ function stepKingZoneObjective(objective: RuntimeObjective): void {
       controller = undefined;
     }
   } else if (definition.contestRule === 'firstIn') {
-    controller = objective.controllingTeamId;
+    controller = undefined;
   }
   objective.controllingTeamId = controller;
   if (!controller || definition.pointsPerSecond <= 0) {

@@ -1714,6 +1714,16 @@ function shellHtml(): string {
               <div id="room-summary" class="room-summary"></div>
               <div id="room-list" class="room-list"></div>
             </section>
+            <section class="menu-section menu-section--rules">
+              <h2>Quick presets</h2>
+              <div class="rules-examples rules-examples--wide">
+                <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
+                <button class="button rules-example" type="button" data-example="platform-preset">Platform</button>
+                <button class="button rules-example" type="button" data-example="deathmatch-preset">Deathmatch</button>
+                <button class="button rules-example" type="button" data-example="duel-preset">Duel</button>
+                <button class="button rules-example" type="button" data-example="king-zone-preset">King Zone</button>
+              </div>
+            </section>
           </section>
         </div>
       </section>
