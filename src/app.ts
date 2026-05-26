@@ -1120,6 +1120,51 @@ export class BeatApp {
     this.applyUiPreferences();
   }
 
+  /**
+   * Pen-hover aim-ghost: track the hovered world point while a pen pointer is
+   * moving across the canvas without any button pressed, and push it to the
+   * renderer so it can draw a faint reticle there. Touch never reports hover;
+   * mouse already has a real cursor; pen is the only pointer type that gains
+   * a usable preview from this.
+   */
+  private readonly onCanvasPointerMove = (event: PointerEvent): void => {
+    if (event.pointerType !== 'pen') {
+      return;
+    }
+    if (event.buttons !== 0) {
+      this.clearPenHover();
+      return;
+    }
+    const world = this.renderer.clientToWorld(event.clientX, event.clientY);
+    if (!world) {
+      return;
+    }
+    this.penHoverWorld = { x: world.x, y: world.y };
+    this.renderer.setAimGhost(this.penHoverWorld);
+  };
+
+  private readonly onCanvasPointerLeave = (event: PointerEvent): void => {
+    if (event.pointerType !== 'pen') {
+      return;
+    }
+    this.clearPenHover();
+  };
+
+  private readonly onCanvasPointerDownForHover = (event: PointerEvent): void => {
+    if (event.pointerType !== 'pen') {
+      return;
+    }
+    this.clearPenHover();
+  };
+
+  private clearPenHover(): void {
+    if (!this.penHoverWorld) {
+      return;
+    }
+    this.penHoverWorld = undefined;
+    this.renderer.setAimGhost(undefined);
+  }
+
   private spawnNpcSpawns(spawns: NpcSpawn[], scope: 'lab' | 'session'): void {
     for (const spawn of spawns) {
       const archetype = this.ruleset?.npcs.archetypes.find((candidate) => candidate.id === spawn.archetypeId);

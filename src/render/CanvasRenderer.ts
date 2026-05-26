@@ -18,6 +18,7 @@ export class CanvasRenderer {
   private emptyMessage = 'No room active';
   private snapshotProvider?: () => EngineSnapshot | undefined;
   private cameraZoom = 1;
+  private aimGhost?: Vec2;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const context = canvas.getContext('2d');
@@ -46,6 +47,14 @@ export class CanvasRenderer {
 
   setSnapshotProvider(provider: (() => EngineSnapshot | undefined) | undefined): void {
     this.snapshotProvider = provider;
+  }
+
+  /**
+   * Sets a transient world-space aim preview marker (e.g. pen hover).
+   * Pass `undefined` to clear. Rendered on top of the snapshot but below HUD.
+   */
+  setAimGhost(point: Vec2 | undefined): void {
+    this.aimGhost = point ? { x: point.x, y: point.y } : undefined;
   }
 
   resizeNow(): void {
@@ -254,6 +263,34 @@ export class CanvasRenderer {
           : `${text.kind === 'heal' ? '+' : '-'}${Math.round(text.amount)}`;
       this.ctx.strokeText(label, x, y - progress * 18);
       this.ctx.fillText(label, x, y - progress * 18);
+      this.ctx.restore();
+    }
+
+    if (this.aimGhost) {
+      const local = this.snapshot?.players.find((p) => p.playerId === this.localPlayerId);
+      const target = worldToViewport(camera, this.aimGhost.x, this.aimGhost.y);
+      this.ctx.save();
+      this.ctx.globalAlpha = 0.65;
+      this.ctx.strokeStyle = '#ffe66d';
+      this.ctx.lineWidth = 1.5;
+      this.ctx.setLineDash([4, 3]);
+      if (local?.alive) {
+        const origin = worldToViewport(camera, local.x, local.y);
+        this.ctx.beginPath();
+        this.ctx.moveTo(origin.x, origin.y);
+        this.ctx.lineTo(target.x, target.y);
+        this.ctx.stroke();
+      }
+      this.ctx.setLineDash([]);
+      this.ctx.beginPath();
+      this.ctx.arc(target.x, target.y, 7, 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.beginPath();
+      this.ctx.moveTo(target.x - 10, target.y);
+      this.ctx.lineTo(target.x + 10, target.y);
+      this.ctx.moveTo(target.x, target.y - 10);
+      this.ctx.lineTo(target.x, target.y + 10);
+      this.ctx.stroke();
       this.ctx.restore();
     }
 
