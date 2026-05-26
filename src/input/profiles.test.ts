@@ -72,8 +72,8 @@ describe('adaptProfileToRules', () => {
     expect(adaptProfileToRules('tap-fire', { movement: 'twinStick', aim: 'facing' })).toBe('tank-touch');
   });
 
-  it('forces tap-fire to platform-touch under platform rules', () => {
-    expect(adaptProfileToRules('tap-fire', { movement: 'platform', aim: 'free' })).toBe('platform-touch');
+  it('preserves tap-fire under platform rules', () => {
+    expect(adaptProfileToRules('tap-fire', { movement: 'platform', aim: 'free' })).toBe('tap-fire');
   });
 
   it('passes tap-fire through when rules already match', () => {

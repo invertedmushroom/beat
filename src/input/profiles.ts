@@ -175,10 +175,10 @@ export function adaptProfileToRules(
   rules: { movement: PlayerMovementMode; aim: PlayerAimMode },
 ): UiProfileId {
   if (profile === 'custom') return profile;
-  if (rules.movement === 'platform' && profile !== 'platform-touch' && profile !== 'desktop-kbm') {
+  if (rules.movement === 'platform' && profile !== 'platform-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
     return 'platform-touch';
   }
-  if (rules.movement === 'tank' && profile !== 'tank-touch' && profile !== 'desktop-kbm') {
+  if (rules.movement === 'tank' && profile !== 'tank-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
     return 'tank-touch';
   }
   if (rules.aim === 'facing' && (profile === 'mmo-touch' || profile === 'tap-fire')) {

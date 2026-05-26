@@ -154,6 +154,10 @@ export class BeatApp {
   private pendingTapFire?: { worldX: number; worldY: number };
   private penHoverWorld?: { x: number; y: number };
   private unsubscribePointerWorld?: () => void;
+  private activeTouchId?: number;
+  private touchHoldTimer?: number;
+  private isHoldingTouch = false;
+  private consecutiveStuckTicks = 0;
   private arenaHintTimer?: number;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
   private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
@@ -497,20 +501,66 @@ export class BeatApp {
    */
   private applyTapMoveOverride(input: PlayerInput): PlayerInput {
     if (this.activeControlProfile !== 'tap-move' || !this.tapMoveTarget) {
+      this.consecutiveStuckTicks = 0;
       return input;
     }
-    const player = this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    const renderSnapshot = window.__BEAT_RENDER_SNAPSHOT__;
+    const player = renderSnapshot?.players.find((p) => p.playerId === this.localPlayerId)
+                   ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
     if (!player) {
       return input;
     }
     const dx = this.tapMoveTarget.x - player.x;
     const dy = this.tapMoveTarget.y - player.y;
-    const dist = Math.hypot(dx, dy);
     const ARRIVAL_RADIUS = 0.4;
+
+    const rules = this.ruleset ?? this.editableRuleset;
+    if (rules?.player.movement.mode === 'platform' && Math.abs(dx) <= ARRIVAL_RADIUS && dy < -0.3) {
+      this.tapMoveTarget = undefined;
+      this.consecutiveStuckTicks = 0;
+      return { ...input, moveX: 0, moveY: -1 };
+    }
+
+    const dist = Math.hypot(dx, dy);
     if (dist <= ARRIVAL_RADIUS) {
       this.tapMoveTarget = undefined;
+      this.consecutiveStuckTicks = 0;
       return { ...input, moveX: 0, moveY: 0 };
     }
+    if (rules?.player.movement.mode === 'platform') {
+      const isStuckThisFrame = Math.abs(player.vx) < 0.15;
+      if (isStuckThisFrame && Math.abs(dx) > ARRIVAL_RADIUS) {
+        this.consecutiveStuckTicks += 1;
+      } else {
+        this.consecutiveStuckTicks = 0;
+      }
+
+      const isStuck = this.consecutiveStuckTicks > 8;
+      const isClose = Math.abs(dx) < 1.5;
+      const shouldJump = (dy < -0.8 && isClose) || isStuck;
+      const moveX = Math.abs(dx) > ARRIVAL_RADIUS ? Math.sign(dx) : 0;
+      const moveY = shouldJump ? -1 : 0;
+      return { ...input, moveX, moveY };
+    } else if (rules?.player.movement.mode === 'tank') {
+      const targetAngle = Math.atan2(dy, dx);
+      const currentAngle = Math.atan2(player.facingDy, player.facingDx);
+      let diff = targetAngle - currentAngle;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+
+      let moveX = 0;
+      let moveY = 0;
+      if (Math.abs(diff) > 0.1) {
+        moveX = Math.sign(diff);
+      }
+      if (Math.abs(diff) > Math.PI / 3) {
+        moveY = 0; // rotate in place first
+      } else {
+        moveY = -1; // forward throttle
+      }
+      return { ...input, moveX, moveY };
+    }
+
     return { ...input, moveX: dx / dist, moveY: dy / dist };
   }
 
@@ -528,7 +578,9 @@ export class BeatApp {
     }
     const tap = this.pendingTapFire;
     this.pendingTapFire = undefined;
-    const player = this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    const renderSnapshot = window.__BEAT_RENDER_SNAPSHOT__;
+    const player = renderSnapshot?.players.find((p) => p.playerId === this.localPlayerId)
+                   ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
     if (!player) {
       return input;
     }
@@ -537,6 +589,12 @@ export class BeatApp {
     const dist = Math.hypot(dx, dy);
     const aimDx = dist > 0.001 ? dx / dist : input.aimDx;
     const aimDy = dist > 0.001 ? dy / dist : input.aimDy;
+
+    // Set the aim in InputController so it persists!
+    if (dist > 0.001) {
+      this.input.setLastExplicitAim({ x: aimDx, y: aimDy });
+    }
+
     return {
       ...input,
       aimDx,
@@ -1103,15 +1161,122 @@ export class BeatApp {
     this.pendingTapFire = undefined;
     if (profileId === 'tap-move') {
       this.input.setClickToCastEnabled(false);
-      this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
+      const sub = this.pointerWorld.onIntent((intent) => {
         this.tapMoveTarget = { x: intent.worldX, y: intent.worldY };
       });
+      this.unsubscribePointerWorld = () => {
+        sub();
+      };
     } else if (profileId === 'tap-fire') {
       this.input.setClickToCastEnabled(false);
       this.input.setMouseAimEnabled(false);
-      this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
-        this.pendingTapFire = { worldX: intent.worldX, worldY: intent.worldY };
-      });
+
+      const onDown = (event: PointerEvent) => {
+        if (event.button !== 0 && event.button !== 2) {
+          return;
+        }
+        event.preventDefault();
+        try {
+          this.canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+
+        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
+        if (!world) return;
+
+        this.activeTouchId = event.pointerId;
+        this.isHoldingTouch = false;
+
+        this.touchHoldTimer = window.setTimeout(() => {
+          this.isHoldingTouch = true;
+          this.input.pressSlot(0);
+
+          const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
+                         ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+          if (player) {
+            const dx = world.x - player.x;
+            const dy = world.y - player.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 0.001) {
+              this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
+            }
+          }
+        }, 200);
+      };
+
+      const onMove = (event: PointerEvent) => {
+        if (event.pointerId !== this.activeTouchId) return;
+        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
+        if (!world) return;
+
+        if (this.isHoldingTouch) {
+          const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
+                         ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+          if (player) {
+            const dx = world.x - player.x;
+            const dy = world.y - player.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 0.001) {
+              this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
+            }
+          }
+        }
+      };
+
+      const onUp = (event: PointerEvent) => {
+        if (event.pointerId !== this.activeTouchId) return;
+        event.preventDefault();
+
+        try {
+          if (this.canvas.hasPointerCapture(event.pointerId)) {
+            this.canvas.releasePointerCapture(event.pointerId);
+          }
+        } catch {
+          // ignore
+        }
+
+        window.clearTimeout(this.touchHoldTimer);
+        this.touchHoldTimer = undefined;
+
+        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
+        if (world) {
+          if (this.isHoldingTouch) {
+            const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
+                           ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+            if (player) {
+              const dx = world.x - player.x;
+              const dy = world.y - player.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 0.001) {
+                this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
+              }
+            }
+            this.input.releaseSlot(0);
+          } else {
+            this.pendingTapFire = { worldX: world.x, worldY: world.y };
+          }
+        }
+
+        this.isHoldingTouch = false;
+        this.activeTouchId = undefined;
+      };
+
+      this.canvas.addEventListener('pointerdown', onDown);
+      this.canvas.addEventListener('pointermove', onMove);
+      this.canvas.addEventListener('pointerup', onUp);
+      this.canvas.addEventListener('pointercancel', onUp);
+
+      this.unsubscribePointerWorld = () => {
+        this.canvas.removeEventListener('pointerdown', onDown);
+        this.canvas.removeEventListener('pointermove', onMove);
+        this.canvas.removeEventListener('pointerup', onUp);
+        this.canvas.removeEventListener('pointercancel', onUp);
+        window.clearTimeout(this.touchHoldTimer);
+        this.touchHoldTimer = undefined;
+        this.isHoldingTouch = false;
+        this.activeTouchId = undefined;
+      };
     } else {
       this.input.setClickToCastEnabled(true);
     }

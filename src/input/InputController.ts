@@ -49,6 +49,7 @@ export class InputController {
     target.addEventListener('pointerdown', this.onPointerDown);
     target.addEventListener('pointerup', this.onPointerUp);
     target.addEventListener('pointercancel', this.onPointerUp);
+    target.addEventListener('contextmenu', this.onContextMenu);
     controls?.joystick.addEventListener('pointerdown', this.onJoystickPointerDown);
     controls?.joystick.addEventListener('pointermove', this.onJoystickPointerMove);
     controls?.joystick.addEventListener('pointerup', this.onJoystickPointerUp);
@@ -109,6 +110,19 @@ export class InputController {
     }
   }
 
+  setLastExplicitAim(aim: Vec2): void {
+    this.lastExplicitAim = aim;
+    this.hasExplicitAim = true;
+  }
+
+  pressSlot(slot: number): void {
+    this.queuedSlotPresses.push(slot);
+  }
+
+  releaseSlot(slot: number): void {
+    this.queuedSlotReleases.push(slot);
+  }
+
   reset(emitNeutral = true): void {
     this.keys.clear();
     this.mouseAim = undefined;
@@ -147,6 +161,7 @@ export class InputController {
     this.target.removeEventListener('pointerdown', this.onPointerDown);
     this.target.removeEventListener('pointerup', this.onPointerUp);
     this.target.removeEventListener('pointercancel', this.onPointerUp);
+    this.target.removeEventListener('contextmenu', this.onContextMenu);
     this.controls?.joystick.removeEventListener('pointerdown', this.onJoystickPointerDown);
     this.controls?.joystick.removeEventListener('pointermove', this.onJoystickPointerMove);
     this.controls?.joystick.removeEventListener('pointerup', this.onJoystickPointerUp);
@@ -247,30 +262,55 @@ export class InputController {
     this.updateMouseAim(event);
   };
 
+  private readonly onContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+  };
+
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (event.pointerType !== 'mouse' || event.button !== 0) {
+    if (event.pointerType !== 'mouse') {
       return;
     }
-    event.preventDefault();
-    if (this.mouseAimEnabled) {
-      this.updateMouseAim(event);
+    if (event.button === 0) {
+      event.preventDefault();
+      if (this.mouseAimEnabled) {
+        this.updateMouseAim(event);
+      }
+      if (this.clickToCastEnabled) {
+        this.queueSlotPress(0);
+        this.queueCast(0);
+      }
+      this.target.setPointerCapture(event.pointerId);
+    } else if (event.button === 2) {
+      event.preventDefault();
+      if (this.mouseAimEnabled) {
+        this.updateMouseAim(event);
+      }
+      if (this.clickToCastEnabled) {
+        this.queueSlotPress(1);
+        this.queueCast(1);
+      }
+      this.target.setPointerCapture(event.pointerId);
     }
-    if (this.clickToCastEnabled) {
-      this.queueSlotPress(0);
-      this.queueCast(0);
-    }
-    this.target.setPointerCapture(event.pointerId);
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
-    if (event.pointerType !== 'mouse' || event.button !== 0) {
+    if (event.pointerType !== 'mouse') {
       return;
     }
-    if (this.mouseAimEnabled) {
-      this.updateMouseAim(event);
-    }
-    if (this.clickToCastEnabled) {
-      this.queueSlotRelease(0);
+    if (event.button === 0) {
+      if (this.mouseAimEnabled) {
+        this.updateMouseAim(event);
+      }
+      if (this.clickToCastEnabled) {
+        this.queueSlotRelease(0);
+      }
+    } else if (event.button === 2) {
+      if (this.mouseAimEnabled) {
+        this.updateMouseAim(event);
+      }
+      if (this.clickToCastEnabled) {
+        this.queueSlotRelease(1);
+      }
     }
   };
 
