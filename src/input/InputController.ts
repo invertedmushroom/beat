@@ -116,6 +116,10 @@ export class InputController {
     this.activeProfileId = profileId;
   }
 
+  getTouchMove(): Vec2 {
+    return { ...this.touchMove };
+  }
+
   setLastExplicitAim(aim: Vec2): void {
     this.lastExplicitAim = aim;
     this.hasExplicitAim = true;

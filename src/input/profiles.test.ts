@@ -15,6 +15,7 @@ describe('profile presets', () => {
     expect(BUILTIN_PROFILE_IDS).toContain('tap-move');
     expect(BUILTIN_PROFILE_IDS).toContain('tap-fire');
     expect(BUILTIN_PROFILE_IDS).toContain('tank-touch');
+    expect(BUILTIN_PROFILE_IDS).toContain('tank-single');
     expect(BUILTIN_PROFILE_IDS).toContain('platform-touch');
   });
 
@@ -92,5 +93,9 @@ describe('adaptProfileToRules', () => {
   it('passes through when profile already matches rules', () => {
     expect(adaptProfileToRules('platform-touch', { movement: 'platform', aim: 'free' })).toBe('platform-touch');
     expect(adaptProfileToRules('tap-move', { movement: 'twinStick', aim: 'free' })).toBe('tap-move');
+  });
+
+  it('preserves tank-single under tank rules', () => {
+    expect(adaptProfileToRules('tank-single', { movement: 'tank', aim: 'facing' })).toBe('tank-single');
   });
 });

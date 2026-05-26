@@ -482,7 +482,8 @@ export class BeatApp {
     if (!this.localPlayerId) {
       return;
     }
-    const afterMove = this.applyTapMoveOverride(input);
+    const afterSingle = this.applySingleStickTankOverride(input);
+    const afterMove = this.applyTapMoveOverride(afterSingle);
     const adjusted = this.applyTapFireOverride(afterMove);
     if (this.mode === 'host' || this.mode === 'solo' || this.mode === 'lab') {
       this.engine?.submitInput(this.localPlayerId, adjusted);
@@ -491,6 +492,59 @@ export class BeatApp {
     if (this.mode === 'client') {
       this.clientSession?.submitInput(adjusted);
     }
+  }
+
+  /**
+   * When the `tank-single` profile is active and the stick is dragged outside
+   * the deadzone, compute single-stick auto-steering and throttle based on the
+   * stick's angle relative to the player's facing direction.
+   */
+  private applySingleStickTankOverride(input: PlayerInput): PlayerInput {
+    if (this.activeControlProfile !== 'tank-single') {
+      return input;
+    }
+    const renderSnapshot = window.__BEAT_RENDER_SNAPSHOT__;
+    const player = renderSnapshot?.players.find((p) => p.playerId === this.localPlayerId)
+                   ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    if (!player) {
+      return input;
+    }
+
+    const stick = this.input.getTouchMove();
+    const stickDist = Math.hypot(stick.x, stick.y);
+    if (stickDist < 0.05) {
+      return input;
+    }
+
+    const tankAngle = Math.atan2(player.facingDy, player.facingDx);
+    const stickAngle = Math.atan2(stick.y, stick.x);
+
+    let diff = stickAngle - tankAngle;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+
+    let moveX = 0;
+    let moveY: number;
+
+    if (Math.abs(diff) <= Math.PI / 2) {
+      // Forward half: steering rotates towards stick, throttle drives forward (negative Y)
+      if (Math.abs(diff) > 0.05) {
+        moveX = Math.sign(diff);
+      }
+      moveY = -stickDist;
+    } else {
+      // Reverse half: steering rotates rear towards stick, throttle drives backward (positive Y)
+      let rearDiff = diff - Math.PI;
+      while (rearDiff < -Math.PI) rearDiff += 2 * Math.PI;
+      while (rearDiff > Math.PI) rearDiff -= 2 * Math.PI;
+
+      if (Math.abs(rearDiff) > 0.05) {
+        moveX = Math.sign(rearDiff);
+      }
+      moveY = stickDist;
+    }
+
+    return { ...input, moveX, moveY };
   }
 
   /**
@@ -1824,6 +1878,7 @@ const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string
   { value: 'tap-move', label: 'Tap to move' },
   { value: 'tap-fire', label: 'Tap to fire' },
   { value: 'tank-touch', label: 'Tank touch' },
+  { value: 'tank-single', label: 'Touch: single tank stick' },
   { value: 'platform-touch', label: 'Platform touch' },
   { value: 'custom', label: 'Custom' },
 ];

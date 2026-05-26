@@ -19,6 +19,7 @@ export type UiProfileId =
   | 'tap-move'
   | 'tap-fire'
   | 'tank-touch'
+  | 'tank-single'
   | 'platform-touch'
   | 'custom';
 
@@ -108,6 +109,19 @@ const BUILTIN_PROFILES: Readonly<Record<Exclude<UiProfileId, 'custom'>, UiProfil
     handedness: 'right',
     hints: 'auto',
   },
+  'tank-single': {
+    id: 'tank-single',
+    movementWidget: 'leftStick',
+    aimWidget: 'facingOnly',
+    showFirePad: false,
+    showMovePad: true,
+    showJumpButton: false,
+    skillBarLayout: 'cluster-right',
+    widgetScale: 1,
+    widgetOpacity: 0.88,
+    handedness: 'right',
+    hints: 'auto',
+  },
   'platform-touch': {
     id: 'platform-touch',
     movementWidget: 'leftRightButtons',
@@ -129,6 +143,7 @@ export const BUILTIN_PROFILE_IDS: readonly Exclude<UiProfileId, 'custom'>[] = Ob
   'tap-move',
   'tap-fire',
   'tank-touch',
+  'tank-single',
   'platform-touch',
 ]);
 
@@ -178,7 +193,7 @@ export function adaptProfileToRules(
   if (rules.movement === 'platform' && profile !== 'platform-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
     return 'platform-touch';
   }
-  if (rules.movement === 'tank' && profile !== 'tank-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
+  if (rules.movement === 'tank' && profile !== 'tank-touch' && profile !== 'tank-single' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
     return 'tank-touch';
   }
   if (rules.aim === 'facing' && (profile === 'mmo-touch' || profile === 'tap-fire')) {
