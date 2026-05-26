@@ -13,6 +13,7 @@ describe('profile presets', () => {
     expect(BUILTIN_PROFILE_IDS).toContain('desktop-kbm');
     expect(BUILTIN_PROFILE_IDS).toContain('mmo-touch');
     expect(BUILTIN_PROFILE_IDS).toContain('tap-move');
+    expect(BUILTIN_PROFILE_IDS).toContain('tap-fire');
     expect(BUILTIN_PROFILE_IDS).toContain('tank-touch');
     expect(BUILTIN_PROFILE_IDS).toContain('platform-touch');
   });
@@ -65,6 +66,18 @@ describe('adaptProfileToRules', () => {
 
   it('switches mmo-touch to tank-touch when aim mode is facing', () => {
     expect(adaptProfileToRules('mmo-touch', { movement: 'twinStick', aim: 'facing' })).toBe('tank-touch');
+  });
+
+  it('switches tap-fire to tank-touch when aim mode is facing', () => {
+    expect(adaptProfileToRules('tap-fire', { movement: 'twinStick', aim: 'facing' })).toBe('tank-touch');
+  });
+
+  it('forces tap-fire to platform-touch under platform rules', () => {
+    expect(adaptProfileToRules('tap-fire', { movement: 'platform', aim: 'free' })).toBe('platform-touch');
+  });
+
+  it('passes tap-fire through when rules already match', () => {
+    expect(adaptProfileToRules('tap-fire', { movement: 'twinStick', aim: 'free' })).toBe('tap-fire');
   });
 
   it('preserves desktop-kbm regardless of rules', () => {

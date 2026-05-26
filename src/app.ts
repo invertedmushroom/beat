@@ -150,6 +150,8 @@ export class BeatApp {
   private readonly capabilities: InputCapabilities = detectCapabilities();
   private activeControlProfile: UiProfileId = 'desktop-kbm';
   private tapMoveTarget?: { x: number; y: number };
+  private pendingTapFire?: { worldX: number; worldY: number };
+  private penHoverWorld?: { x: number; y: number };
   private unsubscribePointerWorld?: () => void;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
   private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
@@ -173,6 +175,9 @@ export class BeatApp {
       clientToWorld: (clientX, clientY) => this.renderer.clientToWorld(clientX, clientY),
       pickActorAtClient: (clientX, clientY) => this.renderer.pickActorAtClient(clientX, clientY),
     });
+    this.canvas.addEventListener('pointermove', this.onCanvasPointerMove);
+    this.canvas.addEventListener('pointerleave', this.onCanvasPointerLeave);
+    this.canvas.addEventListener('pointerdown', this.onCanvasPointerDownForHover);
     this.applyUiPreferences();
   }
 
@@ -237,6 +242,9 @@ export class BeatApp {
     window.removeEventListener('focus', this.handleWindowFocus);
     window.removeEventListener('beforeunload', this.beforeUnloadHandler);
     this.pointerWorld.destroy();
+    this.canvas.removeEventListener('pointermove', this.onCanvasPointerMove);
+    this.canvas.removeEventListener('pointerleave', this.onCanvasPointerLeave);
+    this.canvas.removeEventListener('pointerdown', this.onCanvasPointerDownForHover);
     this.input.destroy();
     this.renderer.destroy();
     this.directory.destroy();
@@ -467,7 +475,8 @@ export class BeatApp {
     if (!this.localPlayerId) {
       return;
     }
-    const adjusted = this.applyTapMoveOverride(input);
+    const afterMove = this.applyTapMoveOverride(input);
+    const adjusted = this.applyTapFireOverride(afterMove);
     if (this.mode === 'host' || this.mode === 'solo' || this.mode === 'lab') {
       this.engine?.submitInput(this.localPlayerId, adjusted);
       return;
@@ -502,9 +511,45 @@ export class BeatApp {
     return { ...input, moveX: dx / dist, moveY: dy / dist };
   }
 
+  /**
+   * When the `tap-fire` profile is active and a tap has been queued since the
+   * last input frame, override the aim vector toward the tap point and queue
+   * a one-shot slot-0 cast (press+cast+release). Movement is untouched and
+   * still flows from the on-screen stick / keys. Pen and mouse hover already
+   * update `aimDx/aimDy` via {@link InputController.updateMouseAim}, so this
+   * only fires when the user explicitly taps.
+   */
+  private applyTapFireOverride(input: PlayerInput): PlayerInput {
+    if (this.activeControlProfile !== 'tap-fire' || !this.pendingTapFire) {
+      return input;
+    }
+    const tap = this.pendingTapFire;
+    this.pendingTapFire = undefined;
+    const player = this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    if (!player) {
+      return input;
+    }
+    const dx = tap.worldX - player.x;
+    const dy = tap.worldY - player.y;
+    const dist = Math.hypot(dx, dy);
+    const aimDx = dist > 0.001 ? dx / dist : input.aimDx;
+    const aimDy = dist > 0.001 ? dy / dist : input.aimDy;
+    return {
+      ...input,
+      aimDx,
+      aimDy,
+      castSlots: [...input.castSlots, 0],
+      slotPresses: [...input.slotPresses, 0],
+      slotReleases: [...input.slotReleases, 0],
+    };
+  }
+
   private stopActiveMode(): void {
     this.input.reset(Boolean(this.localPlayerId));
     this.tapMoveTarget = undefined;
+    this.pendingTapFire = undefined;
+    this.penHoverWorld = undefined;
+    this.renderer.setAimGhost(undefined);
     this.unsubscribeSnapshot?.();
     this.unsubscribeSnapshot = undefined;
     this.hostSession?.destroy();
@@ -1021,12 +1066,16 @@ export class BeatApp {
    * - `tap-move`: subscribe to {@link PointerWorldAdapter} so a canvas click
    *   sets a world tap target (or engage target on an actor); InputController
    *   suppresses its click-to-cast so the same click doesn't also fire slot 0.
-   * - Any other profile: unsubscribe, clear the target, restore click-to-cast.
+   * - `tap-fire`: same subscription, but the tap is consumed as a one-shot
+   *   fire (aim toward the world point + queue slot-0 cast on the next
+   *   `handleInput`). Movement still flows from the on-screen stick / keys.
+   * - Any other profile: unsubscribe, clear pending intents, restore click-to-cast.
    */
   private applyControlProfile(profileId: UiProfileId): void {
+    const usesPointerWorld = profileId === 'tap-move' || profileId === 'tap-fire';
     const alreadyApplied =
       this.activeControlProfile === profileId &&
-      (this.unsubscribePointerWorld !== undefined) === (profileId === 'tap-move');
+      (this.unsubscribePointerWorld !== undefined) === usesPointerWorld;
     if (alreadyApplied) {
       return;
     }
@@ -1034,10 +1083,16 @@ export class BeatApp {
     this.unsubscribePointerWorld?.();
     this.unsubscribePointerWorld = undefined;
     this.tapMoveTarget = undefined;
+    this.pendingTapFire = undefined;
     if (profileId === 'tap-move') {
       this.input.setClickToCastEnabled(false);
       this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
         this.tapMoveTarget = { x: intent.worldX, y: intent.worldY };
+      });
+    } else if (profileId === 'tap-fire') {
+      this.input.setClickToCastEnabled(false);
+      this.unsubscribePointerWorld = this.pointerWorld.onIntent((intent) => {
+        this.pendingTapFire = { worldX: intent.worldX, worldY: intent.worldY };
       });
     } else {
       this.input.setClickToCastEnabled(true);
@@ -1496,6 +1551,7 @@ const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string
   { value: 'desktop-kbm', label: 'Keyboard + mouse' },
   { value: 'mmo-touch', label: 'Touch: stick + fire' },
   { value: 'tap-move', label: 'Tap to move' },
+  { value: 'tap-fire', label: 'Tap to fire' },
   { value: 'tank-touch', label: 'Tank touch' },
   { value: 'platform-touch', label: 'Platform touch' },
   { value: 'custom', label: 'Custom' },
