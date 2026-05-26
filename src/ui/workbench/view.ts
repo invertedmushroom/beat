@@ -131,7 +131,6 @@ function presetsPanelHtml(): string {
                 <button class="button rules-example" type="button" data-example="execute">Execute</button>
                 <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
                 <button class="button rules-example" type="button" data-example="platform-preset">Platform</button>
-                <button class="button rules-example" type="button" data-example="platform-controls">Platform Controls</button>
                 <button class="button rules-example" type="button" data-example="deathmatch-preset">Deathmatch</button>
                 <button class="button rules-example" type="button" data-example="duel-preset">Duel</button>
                 <button class="button rules-example" type="button" data-example="king-zone-preset">King Zone</button>
