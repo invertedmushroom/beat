@@ -1,4 +1,4 @@
-import { createDefaultRuleset, defaultObjectiveForKind } from './engine/defaultRules';
+import { createDefaultRuleset, defaultDeathmatchObjective, defaultKingZoneObjective, defaultObjectiveForKind } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
 import { hashRuleset } from './engine/rulesHash';
 import { validateRuleset } from './engine/rulesValidation';
@@ -1885,6 +1885,32 @@ function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConf
 function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
   if (example === 'combo-preset') {
     return createDefaultRuleset();
+  }
+  if (example === 'deathmatch-preset') {
+    const preset = createDefaultRuleset();
+    preset.id = 'beat-deathmatch';
+    preset.name = 'Beat Deathmatch';
+    preset.match.scoreLimit = 10;
+    preset.objectives = [defaultDeathmatchObjective('center-relic')];
+    return preset;
+  }
+  if (example === 'duel-preset') {
+    const preset = createDefaultRuleset();
+    preset.id = 'beat-duel';
+    preset.name = 'Beat Duel';
+    preset.maxPlayers = 2;
+    preset.match.scoreLimit = 5;
+    preset.match.friendlyFire = true;
+    preset.objectives = [defaultDeathmatchObjective('center-relic')];
+    return preset;
+  }
+  if (example === 'king-zone-preset') {
+    const preset = createDefaultRuleset();
+    preset.id = 'beat-king-zone';
+    preset.name = 'Beat King Zone';
+    preset.match.scoreLimit = 30;
+    preset.objectives = [defaultKingZoneObjective('center-relic')];
+    return preset;
   }
   if (example === 'physics-preset') {
     const preset = createDefaultRuleset();

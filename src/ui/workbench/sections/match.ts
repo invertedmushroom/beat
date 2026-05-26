@@ -61,14 +61,25 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
   const rawObjective = ruleset.objectives.find((candidate) => candidate.id === state.selectedObjectiveId) ?? ruleset.objectives[0];
   const zone = objective ? selectedScoreZone(objective, state.selectedScoreZoneId) : undefined;
   const showKindPicker = ruleset.objectives.length === 1 && !!rawObjective;
-  const kindPicker = showKindPicker
+  const gameTypeBody = showKindPicker
     ? `
-          <label class="field"><span>Objective kind</span><select id="workbench-objective-kind" data-objective-kind="true">${optionsHtml(
+        <div class="workbench-grid workbench-grid--chain">
+          <label class="field"><span>Game type</span><select id="workbench-objective-kind" data-objective-kind="true">${optionsHtml(
             objectiveKindOptions(),
             rawObjective.kind,
           )}</select></label>
-        `
-    : '';
+          <div class="workbench-summary workbench-summary--inline">
+            <span>${escapeHtml(matchGameTypeDetail(ruleset))}</span>
+          </div>
+        </div>
+      `
+    : `
+        <div class="workbench-summary">
+          <strong>${escapeHtml(matchGameTypeLabel(ruleset))}</strong>
+          <span>${escapeHtml(matchGameTypeDetail(ruleset))}</span>
+        </div>
+        <div class="workbench-chain__empty">Multiple objectives — edit via Advanced JSON or remove extras to change game type here.</div>
+      `;
   const nonRelicSummary =
     rawObjective && rawObjective.kind !== 'relicPush'
       ? `<div class="workbench-chain__empty">${escapeHtml(
@@ -78,15 +89,7 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
         )}</div>`
       : '';
   return [
-    sectionShell(
-      'Game Type',
-      `
-        <div class="workbench-summary">
-          <strong>${escapeHtml(matchGameTypeLabel(ruleset))}</strong>
-          <span>${escapeHtml(matchGameTypeDetail(ruleset))}</span>
-        </div>
-      `,
-    ),
+    sectionShell('Game Type', gameTypeBody),
     sectionShell(
       'Teams',
       `
@@ -108,7 +111,6 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
               objectiveOptions(ruleset),
               objective.id,
             )}</select></label>
-            ${kindPicker}
             ${objectiveFieldsHtml(objective)}
           </div>
           <div class="workbench-chain__group">
@@ -133,12 +135,7 @@ export function matchObjectivesHtml(ruleset: Ruleset, state: WorkbenchState): st
           </div>
         `
         : rawObjective
-          ? `
-          <div class="workbench-grid workbench-grid--chain">
-            ${kindPicker}
-            ${nonRelicSummary}
-          </div>
-        `
+          ? nonRelicSummary
           : '<div class="workbench-chain__empty">No objective scoring</div>',
     ),
   ].join('');
