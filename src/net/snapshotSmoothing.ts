@@ -179,23 +179,31 @@ export class SnapshotSmoother {
     if (!history || history.length === 0) {
       return player;
     }
-    const result = interpolateTimed(history, renderTick, this.ruleset.tickRate, (older, newer, t, extrapolateSeconds) => ({
-      ...newer,
-      x: extrapolateSeconds === undefined ? lerp(older.x, newer.x, t) : newer.x + newer.vx * extrapolateSeconds,
-      y: extrapolateSeconds === undefined ? lerp(older.y, newer.y, t) : newer.y + newer.vy * extrapolateSeconds,
-      vx: newer.vx,
-      vy: newer.vy,
-      aimDx: normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).x,
-      aimDy: normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).y,
-      facingDx: normalizeOr(lerp(older.facingDx, newer.facingDx, t), lerp(older.facingDy, newer.facingDy, t), {
+    const result = interpolateTimed(history, renderTick, this.ruleset.tickRate, (older, newer, t, extrapolateSeconds) => {
+      const facingDx = normalizeOr(lerp(older.facingDx, newer.facingDx, t), lerp(older.facingDy, newer.facingDy, t), {
         x: newer.facingDx,
         y: newer.facingDy,
-      }).x,
-      facingDy: normalizeOr(lerp(older.facingDx, newer.facingDx, t), lerp(older.facingDy, newer.facingDy, t), {
+      }).x;
+      const facingDy = normalizeOr(lerp(older.facingDx, newer.facingDx, t), lerp(older.facingDy, newer.facingDy, t), {
         x: newer.facingDx,
         y: newer.facingDy,
-      }).y,
-    }));
+      }).y;
+      const isFacingAim = this.ruleset.player.aim.mode === 'facing';
+      const aimDx = isFacingAim ? facingDx : normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).x;
+      const aimDy = isFacingAim ? facingDy : normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).y;
+
+      return {
+        ...newer,
+        x: extrapolateSeconds === undefined ? lerp(older.x, newer.x, t) : newer.x + newer.vx * extrapolateSeconds,
+        y: extrapolateSeconds === undefined ? lerp(older.y, newer.y, t) : newer.y + newer.vy * extrapolateSeconds,
+        vx: newer.vx,
+        vy: newer.vy,
+        aimDx,
+        aimDy,
+        facingDx,
+        facingDy,
+      };
+    });
     this.noteExtrapolation(`player:${player.playerId}`, result.extrapolating, result.extrapolatedSeconds, dt);
     return result.value;
   }
@@ -292,6 +300,10 @@ export function replayPendingInputs(
     }
     x += velocity.x * dt;
     y += velocity.y * dt;
+  }
+
+  if (ruleset.player.aim.mode === 'facing') {
+    aim = facing;
   }
 
   return {
@@ -403,6 +415,9 @@ function normalizeOr(x: number, y: number, fallback: { x: number; y: number }): 
 }
 
 function rotate(vector: { x: number; y: number }, radians: number): { x: number; y: number } {
+  if (Math.abs(radians) < 0.0001) {
+    return vector;
+  }
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
   return normalizeOr(vector.x * cos - vector.y * sin, vector.x * sin + vector.y * cos, vector);

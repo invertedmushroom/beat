@@ -523,14 +523,17 @@ export class BeatApp {
     while (diff < -Math.PI) diff += 2 * Math.PI;
     while (diff > Math.PI) diff -= 2 * Math.PI;
 
-    let moveX = 0;
+    const rules = this.ruleset ?? this.editableRuleset;
+    const turnSpeedDegrees = rules?.player.movement.turnSpeedDegrees ?? 180;
+    const tickRate = rules?.tickRate ?? 30;
+    const turnRadians = (turnSpeedDegrees * Math.PI) / 180 / tickRate;
+
+    let moveX: number;
     let moveY: number;
 
     if (Math.abs(diff) <= Math.PI / 2) {
       // Forward half: steering rotates towards stick, throttle drives forward (negative Y)
-      if (Math.abs(diff) > 0.05) {
-        moveX = Math.sign(diff);
-      }
+      moveX = Math.min(1, Math.max(-1, diff / turnRadians));
       moveY = -stickDist;
     } else {
       // Reverse half: steering rotates rear towards stick, throttle drives backward (positive Y)
@@ -538,9 +541,7 @@ export class BeatApp {
       while (rearDiff < -Math.PI) rearDiff += 2 * Math.PI;
       while (rearDiff > Math.PI) rearDiff -= 2 * Math.PI;
 
-      if (Math.abs(rearDiff) > 0.05) {
-        moveX = Math.sign(rearDiff);
-      }
+      moveX = Math.min(1, Math.max(-1, rearDiff / turnRadians));
       moveY = stickDist;
     }
 
@@ -602,7 +603,11 @@ export class BeatApp {
       while (diff < -Math.PI) diff += 2 * Math.PI;
       while (diff > Math.PI) diff -= 2 * Math.PI;
 
-      const moveX = Math.abs(diff) > 0.1 ? Math.sign(diff) : 0;
+      const turnSpeedDegrees = rules?.player.movement.turnSpeedDegrees ?? 180;
+      const tickRate = rules?.tickRate ?? 30;
+      const turnRadians = (turnSpeedDegrees * Math.PI) / 180 / tickRate;
+
+      const moveX = Math.min(1, Math.max(-1, diff / turnRadians));
       const moveY = Math.abs(diff) > Math.PI / 3 ? 0 : -1;
       return { ...input, moveX, moveY };
     }
