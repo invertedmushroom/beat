@@ -1932,11 +1932,60 @@ function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
       groundProbeDistance: 0.1,
     };
     preset.obstacles = [
-      { id: 'floor-step-left', x: -8, y: 6.2, halfWidth: 5.2, halfHeight: 0.55 },
-      { id: 'floor-step-right', x: 8, y: 6.2, halfWidth: 5.2, halfHeight: 0.55 },
-      { id: 'mid-platform', x: 0, y: 1.7, halfWidth: 4.2, halfHeight: 0.42 },
-      { id: 'high-platform', x: -8, y: -2.7, halfWidth: 3.4, halfHeight: 0.42 },
+      { id: 'floor', x: 0, y: 9.2, halfWidth: 18, halfHeight: 0.8 },
+      { id: 'bottom-left', x: -11, y: 5.2, halfWidth: 0.8, halfHeight: 0.25 },
+      { id: 'bottom-left_center', x: -6.5, y: 7.2, halfWidth: 0.8, halfHeight: 0.25 },
+      { id: 'bottom-right', x: 11, y: 5.2, halfWidth: 0.8, halfHeight: 0.25 },
+      { id: 'bottom-right_center', x: 6.5, y: 7.2, halfWidth: 0.8, halfHeight: 0.25 },
+      { id: 'lower-center', x: 0, y: 3.8, halfWidth: 6.2, halfHeight: 0.35 },
+      { id: 'mid-left', x: -8.2, y: 0.2, halfWidth: 3.4, halfHeight: 0.35 },
+      { id: 'mid-right', x: 8.2, y: 0.2, halfWidth: 3.4, halfHeight: 0.35 },
+      { id: 'top-left', x: -10.5, y: -3.8, halfWidth: 3.4, halfHeight: 0.35 },
+      { id: 'top-right', x: 10.5, y: -3.8, halfWidth: 3.4, halfHeight: 0.35 },
+      { id: 'top-platform', x: 0, y: -6.8, halfWidth: 5.8, halfHeight: 0.35 },
     ];
+    const platformObjective = preset.objectives[0];
+    if (platformObjective.kind === 'relicPush') {
+      platformObjective.spawn = { x: 0, y: -7.2 };
+      platformObjective.scoreZones = [
+        { id: 'players-goal', team: 'players', x: 12, y: 8.0, radius: 2.45, points: 1, color: '#2fd17c' },
+        { id: 'hostile-goal', team: 'hostile', x: -12, y: 8.0, radius: 2.45, points: 1, color: '#ff6b4a' },
+      ];
+    }
+    preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
+    return preset;
+  }
+  if (example === 'platform-controls') {
+    const preset = createDefaultRuleset();
+    preset.id = 'beat-platform-controls';
+    preset.name = 'Platform Controls';
+    preset.player.damping = 1.1;
+    preset.player.speed = 8.8;
+    preset.player.movement.mode = 'platform';
+    preset.player.movement.platform = {
+      gravity: 26,
+      jumpVelocity: 13,
+      airControl: 0.62,
+      maxFallSpeed: 22,
+      groundProbeDistance: 0.12,
+    };
+    preset.obstacles = [
+      { id: 'floor', x: 0, y: 9.0, halfWidth: 18, halfHeight: 0.8 },
+      { id: 'bottom-left', x: -10, y: 8.0, halfWidth: 4.2, halfHeight: 0.45 },
+      { id: 'bottom-right', x: 10, y: 8.0, halfWidth: 4.2, halfHeight: 0.45 },
+      { id: 'lower-center', x: 0, y: 4.2, halfWidth: 5.0, halfHeight: 0.32 },
+      { id: 'mid-left', x: -7.4, y: 0.0, halfWidth: 3.2, halfHeight: 0.32 },
+      { id: 'mid-right', x: 7.4, y: 0.0, halfWidth: 3.2, halfHeight: 0.32 },
+      { id: 'top-platform', x: 0, y: -6.4, halfWidth: 5.0, halfHeight: 0.32 },
+    ];
+    const controlsObjective = preset.objectives[0];
+    if (controlsObjective.kind === 'relicPush') {
+      controlsObjective.spawn = { x: 0, y: -6.8 };
+      controlsObjective.scoreZones = [
+        { id: 'players-goal', team: 'players', x: 11, y: 8.2, radius: 2.45, points: 1, color: '#2fd17c' },
+        { id: 'hostile-goal', team: 'hostile', x: -11, y: 8.2, radius: 2.45, points: 1, color: '#ff6b4a' },
+      ];
+    }
     preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
     return preset;
   }
