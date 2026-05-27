@@ -644,6 +644,11 @@ h2 {
   color: #b1af9d;
 }
 
+.room-row--stale {
+  opacity: 0.78;
+  color: #c7c1ac;
+}
+
 .room-summary {
   color: #e5dfc7;
   font-size: 13px;

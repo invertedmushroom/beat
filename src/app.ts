@@ -57,6 +57,8 @@ import { workbenchHtml } from './ui/workbench/view';
 import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 
+const ROOM_STALE_MS = 5_000;
+
 type Mode = 'idle' | 'solo' | 'lab' | 'host' | 'client';
 
 export class BeatApp {
@@ -420,8 +422,9 @@ export class BeatApp {
   private async joinRoom(room: RoomInfo): Promise<void> {
     const rooms = await this.refreshRoomsNow();
     const liveRoom = rooms.find((candidate) => candidate.roomId === room.roomId);
-    if (!liveRoom || liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers) {
-      this.log(`join blocked: ${room.name} is unavailable`);
+    const stale = liveRoom ? Date.now() - liveRoom.lastHeartbeat > ROOM_STALE_MS : false;
+    if (!liveRoom || liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers || stale) {
+      this.log(`join blocked: ${room.name} is unavailable${stale ? ' (stale)' : ''}`);
       this.setStatus(`room unavailable: ${room.name}`);
       return;
     }
@@ -732,14 +735,15 @@ export class BeatApp {
     const sortedRooms = [...openRooms, ...fullRooms];
     for (const room of sortedRooms) {
       const row = document.createElement('button');
-      const joinable = room.status === 'open' && room.playerCount < room.maxPlayers;
-      row.className = `room-row${joinable ? '' : ' room-row--full'}`;
+      const stale = Date.now() - room.lastHeartbeat > ROOM_STALE_MS;
+      const joinable = room.status === 'open' && room.playerCount < room.maxPlayers && !stale;
+      row.className = `room-row${joinable ? '' : ' room-row--full'}${stale ? ' room-row--stale' : ''}`;
       row.type = 'button';
       row.disabled = !joinable;
       const rulesLabel = room.rulesetName ? `${room.rulesetName} (${room.rulesetId})` : room.rulesetId;
       row.innerHTML = `
         <span class="room-row__name">${escapeHtml(room.name)}</span>
-        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers}${joinable ? '' : ' · full'} · rules ${escapeHtml(rulesLabel)}</span>
+        <span class="room-row__meta">${room.playerCount}/${room.maxPlayers}${stale ? ' · stale' : joinable ? '' : ' · full'} · rules ${escapeHtml(rulesLabel)}</span>
         <span class="room-row__meta room-row__meta--sub">map ${escapeHtml(room.mapBundleId)} · content ${shortHash(room.contentHash)} · rules ${shortHash(room.rulesetHash)}</span>
       `;
       if (joinable) {

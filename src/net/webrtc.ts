@@ -578,6 +578,11 @@ export class ClientSession {
     this.disconnected = true;
     this.cleanupTransport();
     this.pendingIce.length = 0;
+    this.currentRoom = undefined;
+    this.localPlayerId = undefined;
+    this.sawRoomInDirectory = false;
+    this.receivedFirstSnapshot = false;
+    this.lastHostMessageAt = 0;
   }
 
   private handleRooms(rooms: RoomInfo[]): void {
