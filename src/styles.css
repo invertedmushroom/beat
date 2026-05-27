@@ -711,6 +711,13 @@ h2 {
   display: none;
 }
 
+#status-line,
+#hash-line,
+#peer-line,
+#network-line {
+  display: none;
+}
+
 .local-mechanics {
   display: flex;
   flex-wrap: wrap;
