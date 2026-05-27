@@ -17,6 +17,7 @@ describe('profile presets', () => {
     expect(BUILTIN_PROFILE_IDS).toContain('tank-touch');
     expect(BUILTIN_PROFILE_IDS).toContain('tank-single');
     expect(BUILTIN_PROFILE_IDS).toContain('platform-touch');
+    expect(BUILTIN_PROFILE_IDS).toContain('orthogonal-touch');
   });
 
   it('returns immutable preset copies', () => {
@@ -97,5 +98,13 @@ describe('adaptProfileToRules', () => {
 
   it('preserves tank-single under tank rules', () => {
     expect(adaptProfileToRules('tank-single', { movement: 'tank', aim: 'facing' })).toBe('tank-single');
+  });
+
+  it('forces orthogonal-touch when rules say orthogonal', () => {
+    expect(adaptProfileToRules('mmo-touch', { movement: 'orthogonal', aim: 'free' })).toBe('orthogonal-touch');
+  });
+
+  it('preserves orthogonal-touch under orthogonal rules', () => {
+    expect(adaptProfileToRules('orthogonal-touch', { movement: 'orthogonal', aim: 'free' })).toBe('orthogonal-touch');
   });
 });

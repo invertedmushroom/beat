@@ -92,8 +92,8 @@ function validatePlayer(value: unknown): Ruleset['player'] {
 function validatePlayerMovement(value: unknown): Ruleset['player']['movement'] {
   const movement = assertRecord(value, 'player.movement');
   const mode = readString(movement.mode, 'player.movement.mode');
-  if (mode !== 'twinStick' && mode !== 'tank' && mode !== 'platform') {
-    throw new Error('player.movement.mode must be twinStick, tank, or platform');
+  if (mode !== 'twinStick' && mode !== 'tank' && mode !== 'platform' && mode !== 'orthogonal') {
+    throw new Error('player.movement.mode must be twinStick, tank, platform, or orthogonal');
   }
   return {
     mode,

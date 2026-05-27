@@ -21,6 +21,7 @@ export type UiProfileId =
   | 'tank-touch'
   | 'tank-single'
   | 'platform-touch'
+  | 'orthogonal-touch'
   | 'custom';
 
 export type MovementWidget = 'leftStick' | 'tapMove' | 'leftRightButtons' | 'keyboard';
@@ -135,6 +136,19 @@ const BUILTIN_PROFILES: Readonly<Record<Exclude<UiProfileId, 'custom'>, UiProfil
     handedness: 'right',
     hints: 'auto',
   },
+  'orthogonal-touch': {
+    id: 'orthogonal-touch',
+    movementWidget: 'leftStick',
+    aimWidget: 'skillDragOnly',
+    showFirePad: false,
+    showMovePad: true,
+    showJumpButton: false,
+    skillBarLayout: 'cluster-right',
+    widgetScale: 1,
+    widgetOpacity: 0.88,
+    handedness: 'right',
+    hints: 'auto',
+  },
 });
 
 export const BUILTIN_PROFILE_IDS: readonly Exclude<UiProfileId, 'custom'>[] = Object.freeze([
@@ -145,6 +159,7 @@ export const BUILTIN_PROFILE_IDS: readonly Exclude<UiProfileId, 'custom'>[] = Ob
   'tank-touch',
   'tank-single',
   'platform-touch',
+  'orthogonal-touch',
 ]);
 
 export function getBuiltinProfile(id: Exclude<UiProfileId, 'custom'>): UiProfile {
@@ -198,6 +213,9 @@ export function adaptProfileToRules(
   }
   if (rules.aim === 'facing' && (profile === 'mmo-touch' || profile === 'tap-fire')) {
     return 'tank-touch';
+  }
+  if (rules.movement === 'orthogonal' && profile !== 'orthogonal-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
+    return 'orthogonal-touch';
   }
   return profile;
 }

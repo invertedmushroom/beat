@@ -2508,6 +2508,10 @@ function updateMovementAndFacing(player: RuntimePlayer, speedMultiplier: number)
     updateTankMovement(player, axisX, axisY, speedMultiplier);
     return;
   }
+  if (ruleset.player.movement.mode === 'orthogonal') {
+    updateOrthogonalMovement(player, axisX, axisY, speedMultiplier);
+    return;
+  }
   updateTwinStickMovement(player, axisX, axisY, speedMultiplier);
 }
 
@@ -2546,6 +2550,30 @@ function updateTwinStickMovement(player: RuntimePlayer, axisX: number, axisY: nu
     return;
   }
   const move = normalized(axisX, axisY);
+  const speed = ruleset.player.speed * speedMultiplier;
+  player.body.setLinvel(move ? { x: move.x * speed, y: move.y * speed } : { x: 0, y: 0 }, true);
+  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
+  if (ruleset.player.aim.mode === 'free' && explicitAim) {
+    player.facing = explicitAim;
+    return;
+  }
+  if (move) {
+    player.facing = move;
+  }
+}
+
+function updateOrthogonalMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
+  if (!ruleset) {
+    return;
+  }
+  let dx = axisX;
+  let dy = axisY;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    dy = 0;
+  } else {
+    dx = 0;
+  }
+  const move = normalized(dx, dy);
   const speed = ruleset.player.speed * speedMultiplier;
   player.body.setLinvel(move ? { x: move.x * speed, y: move.y * speed } : { x: 0, y: 0 }, true);
   const explicitAim = normalized(player.input.aimDx, player.input.aimDy);

@@ -289,6 +289,21 @@ export function replayPendingInputs(
       const reverseMultiplier = throttle < 0 ? ruleset.player.movement.reverseMultiplier : 1;
       const speed = ruleset.player.speed * reverseMultiplier * throttle;
       velocity = { x: facing.x * speed, y: facing.y * speed };
+    } else if (ruleset.player.movement.mode === 'orthogonal') {
+      let dx = clamp(input.moveX, -1, 1);
+      let dy = clamp(input.moveY, -1, 1);
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        dy = 0;
+      } else {
+        dx = 0;
+      }
+      const move = normalized(dx, dy);
+      velocity = move ? { x: move.x * ruleset.player.speed, y: move.y * ruleset.player.speed } : { x: 0, y: 0 };
+      if (ruleset.player.aim.mode === 'free') {
+        facing = aim;
+      } else if (move) {
+        facing = move;
+      }
     } else {
       const move = normalized(input.moveX, input.moveY);
       velocity = move ? { x: move.x * ruleset.player.speed, y: move.y * ruleset.player.speed } : { x: 0, y: 0 };

@@ -134,7 +134,7 @@ export type MeleeAbility = BaseAbility & {
 };
 
 export type Ability = ProjectileAbility | MeleeAbility;
-export type PlayerMovementMode = 'twinStick' | 'tank' | 'platform';
+export type PlayerMovementMode = 'twinStick' | 'tank' | 'platform' | 'orthogonal';
 export type PlayerAimMode = 'free' | 'facing';
 
 export type PlatformMovementConfig = {

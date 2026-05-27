@@ -13,6 +13,7 @@ export const PLAYER_FIELDS: WorkbenchField[] = [
       { value: 'twinStick', label: 'Twin stick' },
       { value: 'tank', label: 'Tank' },
       { value: 'platform', label: 'Platform' },
+      { value: 'orthogonal', label: 'Orthogonal' },
     ],
   },
   {

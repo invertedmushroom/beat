@@ -1889,6 +1889,7 @@ const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string
   { value: 'tank-touch', label: 'Tank touch' },
   { value: 'tank-single', label: 'Touch: single tank stick' },
   { value: 'platform-touch', label: 'Platform touch' },
+  { value: 'orthogonal-touch', label: 'Touch: orthogonal stick' },
   { value: 'custom', label: 'Custom' },
 ];
 

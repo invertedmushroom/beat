@@ -450,6 +450,18 @@ export class InputController {
 
   private updateJoystick(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.joystick);
+    if (this.activeProfileId === 'tank-touch') {
+      stick.value.x = 0;
+      stick.offset.x = 0;
+    } else if (this.activeProfileId === 'orthogonal-touch') {
+      if (Math.abs(stick.value.x) >= Math.abs(stick.value.y)) {
+        stick.value.y = 0;
+        stick.offset.y = 0;
+      } else {
+        stick.value.x = 0;
+        stick.offset.x = 0;
+      }
+    }
     this.touchMove = stick.value;
     this.controls?.joystickKnob.style.setProperty('--knob-x', `${stick.offset.x}px`);
     this.controls?.joystickKnob.style.setProperty('--knob-y', `${stick.offset.y}px`);
@@ -458,6 +470,8 @@ export class InputController {
   private updateFire(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.firePad);
     if (this.activeProfileId === 'tank-touch') {
+      stick.value.y = 0;
+      stick.offset.y = 0;
       this.touchAim = stick.value;
     } else {
       this.touchAim = magnitude(stick.value) > 0.01 ? stick.value : this.lastExplicitAim;

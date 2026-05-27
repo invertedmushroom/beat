@@ -74,6 +74,21 @@ describe('rulesValidation', () => {
     });
   });
 
+  it('validates orthogonal movement mode', () => {
+    const ruleset = createDefaultRuleset();
+    const parsed = validateRuleset({
+      ...ruleset,
+      player: {
+        ...ruleset.player,
+        movement: {
+          ...ruleset.player.movement,
+          mode: 'orthogonal',
+        },
+      },
+    });
+    expect(parsed.player.movement.mode).toBe('orthogonal');
+  });
+
   it('rejects invalid player movement and aim config', () => {
     const ruleset = createDefaultRuleset();
     expect(() =>
