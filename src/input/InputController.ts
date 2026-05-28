@@ -1,5 +1,6 @@
 import type { PlayerInput } from '../engine/protocol';
 import type { UiProfileId } from './profiles';
+import { getProfileBehavior } from './profileRegistry';
 
 type InputListener = (input: PlayerInput) => void;
 
@@ -196,7 +197,10 @@ export class InputController {
     let moveX: number;
     let moveY: number;
 
-    if (this.activeProfileId === 'tank-touch') {
+    const behavior = getProfileBehavior(this.activeProfileId);
+    const firePadIsSteer = behavior.firePadRole === 'tank-steer';
+    if (firePadIsSteer) {
+      // Right pad is repurposed as horizontal steering; left pad is vertical-only.
       moveX = keyboardX + this.touchAim.x;
       moveY = keyboardY + this.touchMove.y;
     } else {
@@ -208,7 +212,7 @@ export class InputController {
       moveY = move.y;
     }
 
-    const touchAiming = (this.firePressed && this.activeProfileId !== 'tank-touch') || this.skillPointerId !== undefined;
+    const touchAiming = (this.firePressed && !firePadIsSteer) || this.skillPointerId !== undefined;
     const explicitAim = touchAiming && magnitude(this.touchAim) > 0.01 ? normalized(this.touchAim) : this.mouseAim;
     if (explicitAim && magnitude(explicitAim) > 0.01) {
       this.lastExplicitAim = explicitAim;
@@ -363,7 +367,7 @@ export class InputController {
     this.firePressed = true;
     this.controls?.firePad.setPointerCapture(event.pointerId);
     this.updateFire(event);
-    if (this.activeProfileId !== 'tank-touch') {
+    if (getProfileBehavior(this.activeProfileId).firePadRole !== 'tank-steer') {
       this.queueSlotPress(0);
     }
   };
@@ -379,7 +383,7 @@ export class InputController {
       return;
     }
     this.updateFire(event);
-    if (this.activeProfileId !== 'tank-touch') {
+    if (getProfileBehavior(this.activeProfileId).firePadRole !== 'tank-steer') {
       this.rememberTouchAim();
       this.queueCast(0);
       this.queueSlotRelease(0);
@@ -450,10 +454,11 @@ export class InputController {
 
   private updateJoystick(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.joystick);
-    if (this.activeProfileId === 'tank-touch') {
+    const constraint = getProfileBehavior(this.activeProfileId).joystickConstraint;
+    if (constraint === 'tank-steering') {
       stick.value.x = 0;
       stick.offset.x = 0;
-    } else if (this.activeProfileId === 'orthogonal-touch') {
+    } else if (constraint === 'cardinal') {
       if (Math.abs(stick.value.x) >= Math.abs(stick.value.y)) {
         stick.value.y = 0;
         stick.offset.y = 0;
@@ -469,7 +474,7 @@ export class InputController {
 
   private updateFire(event: PointerEvent): void {
     const stick = this.readPadVector(event, this.controls?.firePad);
-    if (this.activeProfileId === 'tank-touch') {
+    if (getProfileBehavior(this.activeProfileId).firePadRole === 'tank-steer') {
       stick.value.y = 0;
       stick.offset.y = 0;
       this.touchAim = stick.value;

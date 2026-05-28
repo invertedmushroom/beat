@@ -16,6 +16,7 @@ import { detectCapabilities, type InputCapabilities } from './input/capabilities
 import { InputController, type TouchControlElements } from './input/InputController';
 import { PointerWorldAdapter } from './input/PointerWorldAdapter';
 import { adaptProfileToRules, BUILTIN_PROFILE_IDS, type UiProfileId } from './input/profiles';
+import { getControlProfileOptions, getProfileBehavior, type OverrideKey } from './input/profileRegistry';
 import { SnapshotSmoother, type SnapshotSmoothingStats } from './net/snapshotSmoothing';
 import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
@@ -485,9 +486,7 @@ export class BeatApp {
     if (!this.localPlayerId) {
       return;
     }
-    const afterSingle = this.applySingleStickTankOverride(input);
-    const afterMove = this.applyTapMoveOverride(afterSingle);
-    const adjusted = this.applyTapFireOverride(afterMove);
+    const adjusted = this.applyProfileOverrides(input);
     if (this.mode === 'host' || this.mode === 'solo' || this.mode === 'lab') {
       this.engine?.submitInput(this.localPlayerId, adjusted);
       return;
@@ -498,14 +497,48 @@ export class BeatApp {
   }
 
   /**
-   * When the `tank-single` profile is active and the stick is dragged outside
-   * the deadzone, compute single-stick auto-steering and throttle based on the
-   * stick's angle relative to the player's facing direction.
+   * Runs the override pipeline declared by the active profile in
+   * {@link getProfileBehavior}. Override order matches the array order in
+   * the registry; current behaviour is movement-first then aim/fire so a
+   * profile composing both (e.g. `tank-single-tap`) lets steering and
+   * one-shot fire coexist without re-stomping each other's fields.
+   *
+   * Profiles with no overrides return the input unchanged. The per-override
+   * state (tap target, pending fire, stuck-tick counter) is still owned by
+   * `App`; this method is just the dispatcher.
    */
-  private applySingleStickTankOverride(input: PlayerInput): PlayerInput {
-    if (this.activeControlProfile !== 'tank-single') {
+  private applyProfileOverrides(input: PlayerInput): PlayerInput {
+    const behavior = getProfileBehavior(this.activeControlProfile);
+    if (behavior.overrides.length === 0) {
+      // Keep stuck-tick counter quiet when no profile owns it.
+      this.consecutiveStuckTicks = 0;
       return input;
     }
+    let current = input;
+    for (const key of behavior.overrides) {
+      current = this.runOverride(key, current);
+    }
+    return current;
+  }
+
+  private runOverride(key: OverrideKey, input: PlayerInput): PlayerInput {
+    switch (key) {
+      case 'single-stick-tank':
+        return this.applySingleStickTankOverride(input);
+      case 'tap-move':
+        return this.applyTapMoveOverride(input);
+      case 'tap-fire':
+        return this.applyTapFireOverride(input);
+    }
+  }
+
+  /**
+   * Computes single-stick auto-steering: forward half of the stick drives
+   * forward and steers towards the stick vector; reverse half drives backward
+   * and steers the rear towards the stick. Caller is responsible for ensuring
+   * the active profile actually wants this override (registry decides).
+   */
+  private applySingleStickTankOverride(input: PlayerInput): PlayerInput {
     const renderSnapshot = window.__BEAT_RENDER_SNAPSHOT__;
     const player = renderSnapshot?.players.find((p) => p.playerId === this.localPlayerId)
                    ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
@@ -552,13 +585,12 @@ export class BeatApp {
   }
 
   /**
-   * When the `tap-move` profile is active and a world tap target exists,
-   * override the raw movement vector with a unit direction toward the target.
-   * Clears the target when the local player reaches it. Returns the original
-   * input unchanged for every other profile.
+   * Overrides movement towards a stored world tap target. Caller (the override
+   * dispatcher) only invokes this when the registry routes the active profile
+   * to `'tap-move'`; this method assumes that and only checks for the target.
    */
   private applyTapMoveOverride(input: PlayerInput): PlayerInput {
-    if (this.activeControlProfile !== 'tap-move' || !this.tapMoveTarget) {
+    if (!this.tapMoveTarget) {
       this.consecutiveStuckTicks = 0;
       return input;
     }
@@ -619,15 +651,14 @@ export class BeatApp {
   }
 
   /**
-   * When the `tap-fire` profile is active and a tap has been queued since the
-   * last input frame, override the aim vector toward the tap point and queue
-   * a one-shot slot-0 cast (press+cast+release). Movement is untouched and
-   * still flows from the on-screen stick / keys. Pen and mouse hover already
-   * update `aimDx/aimDy` via {@link InputController.updateMouseAim}, so this
-   * only fires when the user explicitly taps.
+   * Consumes a pending tap-fire intent: overrides aim toward the tap point
+   * and queues a one-shot slot-0 cast (press+cast+release). Movement is left
+   * untouched so composing with `single-stick-tank` (under
+   * `tank-single-tap`) doesn't stomp steering. Caller's profile is already
+   * known to want this override.
    */
   private applyTapFireOverride(input: PlayerInput): PlayerInput {
-    if (this.activeControlProfile !== 'tap-fire' || !this.pendingTapFire) {
+    if (!this.pendingTapFire) {
       return input;
     }
     const tap = this.pendingTapFire;
@@ -1193,17 +1224,18 @@ export class BeatApp {
   /**
    * Switches runtime input ownership based on the active profile.
    *
-   * - `tap-move`: subscribe to {@link PointerWorldAdapter} so a canvas click
-   *   sets a world tap target (or engage target on an actor); InputController
-   *   suppresses its click-to-cast so the same click doesn't also fire slot 0.
-   * - `tap-fire`: same subscription, but the tap is consumed as a one-shot
-   *   fire (aim toward the world point + queue slot-0 cast on the next
-   *   `handleInput`). Movement still flows from the on-screen stick / keys.
-   * - Any other profile: unsubscribe, clear pending intents, restore click-to-cast.
+   * Reads {@link getProfileBehavior} to decide:
+   * - `pointerWorldMode` — whether the canvas captures world taps and how
+   *   (none / tap-target / tap-fire).
+   * - `disablesMouseAim` — whether to silence mouse-driven aim updates.
+   *
+   * Override side-effects (queueing slot-0 casts, etc.) happen later in the
+   * dispatcher; this method only wires the input *sources*.
    */
   private applyControlProfile(profileId: UiProfileId): void {
     this.input.setControlProfile(profileId);
-    const usesPointerWorld = profileId === 'tap-move' || profileId === 'tap-fire';
+    const behavior = getProfileBehavior(profileId);
+    const usesPointerWorld = behavior.pointerWorldMode !== 'none';
     const alreadyApplied =
       this.activeControlProfile === profileId &&
       (this.unsubscribePointerWorld !== undefined) === usesPointerWorld;
@@ -1215,7 +1247,7 @@ export class BeatApp {
     this.unsubscribePointerWorld = undefined;
     this.tapMoveTarget = undefined;
     this.pendingTapFire = undefined;
-    if (profileId === 'tap-move') {
+    if (behavior.pointerWorldMode === 'tap-target') {
       this.input.setClickToCastEnabled(false);
       const sub = this.pointerWorld.onIntent((intent) => {
         this.tapMoveTarget = { x: intent.worldX, y: intent.worldY };
@@ -1223,7 +1255,7 @@ export class BeatApp {
       this.unsubscribePointerWorld = () => {
         sub();
       };
-    } else if (profileId === 'tap-fire') {
+    } else if (behavior.pointerWorldMode === 'tap-fire') {
       this.input.setClickToCastEnabled(false);
       this.input.setMouseAimEnabled(false);
 
@@ -1336,7 +1368,7 @@ export class BeatApp {
     } else {
       this.input.setClickToCastEnabled(true);
     }
-    if (profileId !== 'tap-fire') {
+    if (!behavior.disablesMouseAim) {
       this.input.setMouseAimEnabled(true);
     }
     this.maybeShowProfileHint(profileId);
@@ -1345,14 +1377,11 @@ export class BeatApp {
   /**
    * Shows a transient HUD hint the first time a user activates a tap-driven
    * profile. The "shown" flag is persisted in v2 prefs so it never re-appears
-   * after the user has seen it once.
+   * after the user has seen it once. Hint text comes from the profile
+   * registry.
    */
   private maybeShowProfileHint(profileId: UiProfileId): void {
-    const hintText = profileId === 'tap-fire'
-      ? 'Tap to fire'
-      : profileId === 'tap-move'
-        ? 'Tap to move'
-        : undefined;
+    const hintText = getProfileBehavior(profileId).hintText;
     if (!hintText) {
       this.hideArenaHint();
       return;
@@ -1881,17 +1910,7 @@ export class BeatApp {
   }
 }
 
-const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string }> = [
-  { value: 'desktop-kbm', label: 'Keyboard + mouse' },
-  { value: 'mmo-touch', label: 'Touch: stick + fire' },
-  { value: 'tap-move', label: 'Tap to move' },
-  { value: 'tap-fire', label: 'Tap to fire' },
-  { value: 'tank-touch', label: 'Tank touch' },
-  { value: 'tank-single', label: 'Touch: single tank stick' },
-  { value: 'platform-touch', label: 'Platform touch' },
-  { value: 'orthogonal-touch', label: 'Touch: orthogonal stick' },
-  { value: 'custom', label: 'Custom' },
-];
+const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string }> = getControlProfileOptions();
 
 const UI_PROFILE_ID_SET: ReadonlySet<UiProfileId> = new Set<UiProfileId>([...BUILTIN_PROFILE_IDS, 'custom']);
 

@@ -16,6 +16,7 @@ describe('profile presets', () => {
     expect(BUILTIN_PROFILE_IDS).toContain('tap-fire');
     expect(BUILTIN_PROFILE_IDS).toContain('tank-touch');
     expect(BUILTIN_PROFILE_IDS).toContain('tank-single');
+    expect(BUILTIN_PROFILE_IDS).toContain('tank-single-tap');
     expect(BUILTIN_PROFILE_IDS).toContain('platform-touch');
     expect(BUILTIN_PROFILE_IDS).toContain('orthogonal-touch');
   });
@@ -98,6 +99,14 @@ describe('adaptProfileToRules', () => {
 
   it('preserves tank-single under tank rules', () => {
     expect(adaptProfileToRules('tank-single', { movement: 'tank', aim: 'facing' })).toBe('tank-single');
+  });
+
+  it('preserves tank-single-tap under tank rules with free aim', () => {
+    expect(adaptProfileToRules('tank-single-tap', { movement: 'tank', aim: 'free' })).toBe('tank-single-tap');
+  });
+
+  it('switches tank-single-tap to tank-touch when aim is facing', () => {
+    expect(adaptProfileToRules('tank-single-tap', { movement: 'tank', aim: 'facing' })).toBe('tank-touch');
   });
 
   it('forces orthogonal-touch when rules say orthogonal', () => {
