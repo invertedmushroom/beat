@@ -12,7 +12,7 @@
 6. `npm run build`
 7. `npm run test`
 8. `npm run test:e2e` when UI, hosting, or multiplayer flows changed
-9. `sg scan src spacetimedb tests`
+9. `npm run lint:structural`
 
 ### Graphify usage
 - Read `graphify-out/GRAPH_REPORT.md` first when it exists.
@@ -21,6 +21,13 @@
 
 ### Schema changes
 - After any SpacetimeDB schema change, run `npm run stdb:build` and `npm run stdb:generate` before trusting generated bindings.
+
+### Control ergonomics architecture
+- `src/input/profiles.ts` owns widget/layout presets. `src/input/profileRegistry.ts` owns runtime behavior such as override composition, pointer-world mode, fire-pad role, and joystick constraints.
+- Keep control behavior data-driven. Prefer registry entries and override keys over new profile-id string branches in `src/app.ts` and `src/input/InputController.ts`.
+- `adaptProfileToRules()` in `src/input/profiles.ts` is the public wrapper, but compatibility metadata now lives in `src/input/profileRegistry.ts`. New profiles still need an explicit compatibility decision there.
+- Keep `PlayerInput` canonical. Local control experiments should map into existing move/aim/slot events unless gameplay truly needs a new wire-level concept.
+- Tap-fire world-pointer lifecycle now lives in `src/input/tapFirePointerGesture.ts`. If touch world-pointer logic grows further, extend that controller layer instead of re-inlining the gesture code in `src/app.ts`.
 
 ### ast-grep scope
 - **Primary use: structural search before edits.** Before touching code, use

@@ -96,10 +96,40 @@ Each `objective.scoreZones[]` entry includes:
 - `player.damping`: `0..30`.
 - `player.maxHp`: `1..10000`.
 - `player.respawnTicks`: `0..600`.
-- `player.movement.mode`: `twinStick` or `tank`.
-- `player.movement.turnSpeedDegrees`: `30..1440`.
-- `player.movement.reverseMultiplier`: `0..1`.
+- `player.movement.mode`: `twinStick`, `tank`, `platform`, or `orthogonal`.
+  `orthogonal` is dominant-axis-only motion; both the worker and client-side
+  prediction apply that rule-mode branch so local prediction matches authority.
+- `player.movement.turnSpeedDegrees`: `30..1440` (tank mode only).
+- `player.movement.reverseMultiplier`: `0..1` (tank mode only).
+- `player.movement.platform`: platform physics configuration containing:
+  - `gravity`: platform gravity, e.g. `30`.
+  - `jumpVelocity`: vertical impulse for jumping, e.g. `12`.
+  - `airControl`: horizontal speed factor while airborne, e.g. `0.48`.
+  - `maxFallSpeed`: terminal fall velocity limit, e.g. `20`.
+  - `groundProbeDistance`: vertical raycast length for grounding detection, e.g. `0.1`.
 - `player.aim.mode`: `free` or `facing`.
+
+### Local control adaptation (not part of the rules hash)
+
+The ruleset does **not** encode a UI profile. Local ergonomics are chosen by
+the client and then coerced into a rules-compatible profile through the public
+entry-point in `src/input/profiles.ts`, which delegates compatibility metadata
+to `src/input/profileRegistry.ts`.
+
+- `platform` movement preserves `desktop-kbm`, `tap-move`, `tap-fire`, and
+  `platform-touch`; incompatible profiles fall back to `platform-touch`.
+- `tank` movement preserves `tank-touch`, `tank-single`, `tank-single-tap`,
+  `desktop-kbm`, `tap-move`, and `tap-fire`; other touch layouts fall back to
+  `tank-touch`.
+- `aim.mode = facing` coerces free-aim touch profiles such as `mmo-touch`,
+  `tap-fire`, and `tank-single-tap` to `tank-touch` so the UI matches the rule
+  semantics.
+- `orthogonal` movement preserves `orthogonal-touch`, `desktop-kbm`,
+  `tap-move`, and `tap-fire`; incompatible profiles fall back to
+  `orthogonal-touch`.
+
+This separation keeps gameplay/network rules authoritative while letting the
+same ruleset feel ergonomic on desktop, phone, and hybrid devices.
 
 ### Obstacles
 

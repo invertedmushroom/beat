@@ -1,0 +1,4 @@
+- Control ergonomics split: src/input/profiles.ts owns visual/layout presets; src/input/profileRegistry.ts owns runtime behavior (overrides, pad constraints, pointer-world mode, hint text).
+- app.ts dispatches profile overrides from profileRegistry; InputController reads profileRegistry for fire-pad role and joystick constraints.
+- adaptProfileToRules() is the public compatibility wrapper; compatibility metadata lives in src/input/profileRegistry.ts.
+- tap-fire canvas gesture lifecycle lives in src/input/tapFirePointerGesture.ts instead of inline app.ts state.

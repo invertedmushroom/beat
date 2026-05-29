@@ -1,39 +1,43 @@
-# Control ergonomics & local UI preferences — design plan
+# Control ergonomics & local UI preferences — design reference
 
-> Status: **research / design**, not yet implemented.
-> Owner: TBD. Captured from a deep-research pass on the existing Beat codebase
-> (`src/utils/preferences.ts`, `src/app.ts`, `src/input/`, `src/net/pointerWorldAdapter.ts`,
-> the workbench Local Preferences panel, and existing Playwright coverage) plus W3C/MDN
-> guidance on mixed input, pointer media queries, and target sizing.
+> Status: **Implemented** and revised after the profile-registry refactor.
+> Beat now splits control ergonomics into three layers:
+> `src/input/profiles.ts` for widget/layout presets,
+> `src/input/profileRegistry.ts` for runtime behavior,
+> and `src/app.ts` + `src/input/InputController.ts` for source wiring.
 >
-> The goal of this doc is to give the next implementer a single source of truth so the
-> work doesn't degrade into ad-hoc switches inside `InputController`.
+> This document is the architectural reference for Beat's current multi-modal,
+> profile-driven control system and the remaining cleanup work around it.
 
 ## 1. What Beat already has
 
-- **Local-only UI preferences** live in `src/ui/preferences.ts` under
-  `beat.uiPreferences.v1`. Currently: HUD scale, skill-bar position, touch
-  handedness, touch scale, touch opacity, trace-open state, HUD density. Parser
-  clamps and falls back safely — good base pattern.
+- **Local-only UI preferences** now live in `src/ui/preferences.ts` under
+  `beat.uiPreferences.v2`, with v1 fallback/migration kept intact. Profile
+  choice is stored per capability bucket so the same user can prefer different
+  defaults on desktop, touch-only, and hybrid devices.
 - **`app.ts` hot-applies** these by setting CSS custom properties and `data-*`
-  flags on `.app-shell`. UI prefs do **not** alter the rules fingerprint
-  (asserted by an existing test).
-- **Touch layer** is fixed: one movement joystick, one fire pad, four skill
-  buttons. CSS reveals it under `@media (pointer: coarse), (max-width: 760px)`.
-  Handedness only swaps pads; skill-bar position only chooses bottom/left/right.
-- **`InputController`** hardcodes concrete widgets (joystick, firePad,
-  skillButtons), keyboard, mouse, pointer capture, aim memory, and slot-0
-  click-to-cast. New schemes risk becoming branches in a single class that
-  already knows too much.
-- **Pointer-to-world groundwork exists but is unused**:
-  `PointerWorldAdapter` emits `moveTo` / `engage` intents with world coords,
-  actor picking, and `pointerType`. Wired in `BeatApp` to renderer helpers but
-  not subscribed into gameplay yet.
-- **Rules already support multiple modes**: movement `twinStick | tank | platform`,
-  aim `free | facing`, plus platform gravity/jump. Tests cover tank firing along
-  facing and platform jump/gravity.
-- **Playwright coverage** exists for mobile movement, mobile charged-skill drag
-  aiming, tank mode, platform mode, and local-prefs persistence.
+  flags on `.app-shell`. UI prefs still do **not** alter the rules fingerprint
+  (asserted by tests).
+- **Capability detection and last-active modality tracking** exist in
+  `src/input/capabilities.ts` via `detectCapabilities()` and `ModalityTracker`.
+  Default profile selection is bucket-aware (`fine-only | coarse-only | hybrid`).
+- **Widget layout remains fixed at the primitive level**: one movement joystick,
+  one fire pad, four skill buttons, plus platform L/R + jump alternatives. The
+  important change is that widget *behavior* is no longer inferred from raw
+  profile-id branches spread across the app.
+- **Runtime behavior is now declarative**: `src/input/profileRegistry.ts`
+  defines per-profile override composition, joystick constraint, fire-pad role,
+  pointer-world mode, mouse-aim policy, hint text, and labels.
+- **`PointerWorldAdapter` is in active use**: `tap-move` routes canvas taps to
+  movement targets, while `tap-fire` / `tank-single-tap` route them into the
+  tap-fire / hold-to-charge gesture flow.
+- **Rules support multiple movement modes**: `twinStick | tank | platform |
+  orthogonal`, plus `aim.mode = free | facing`. Worker logic and client
+  prediction both implement the orthogonal branch.
+- **Automated coverage now spans both behavior and presentation**: unit tests
+  cover rules adaptation and the profile registry, while Playwright covers core
+  mobile movement, charged-skill aiming, tank mode, platform mode, and local
+  preferences persistence.
 
 ## 2. Where the current approach breaks
 
@@ -61,9 +65,9 @@
 3. **Capabilities are detected from web standards**, not user-agent strings:
    `pointer`, `any-pointer`, `navigator.maxTouchPoints`, and
    `PointerEvent.pointerType` for last-active modality tracking.
-4. **Preset-first, custom-second.** Ship ~4 curated profiles. Expose
-   per-widget tweaks only inside a `custom` profile to avoid configuration
-   overload.
+4. **Preset-first, custom-second.** Ship a curated set of built-in profiles.
+  Expose per-widget tweaks only inside a `custom` profile to avoid
+  configuration overload.
 5. **Profiles are rules-aware**: the active profile is filtered/adapted based
    on the active ruleset's movement/aim mode.
 6. **Honor concurrent input** (WCAG): keep the touch overlay available when a
@@ -75,29 +79,38 @@
 8. **Single-pointer alternatives** for any path/multi-touch gesture (WCAG
    2.5.1).
 
-## 4. Proposed schema (v2)
+## 4. Current schema (v2)
 
 ```ts
 type UiProfileId =
   | 'desktop-kbm'
   | 'mmo-touch'
   | 'tap-move'
+  | 'tap-fire'
   | 'tank-touch'
+  | 'tank-single'
+  | 'tank-single-tap'
   | 'platform-touch'
+  | 'orthogonal-touch'
   | 'custom';
+
+type Modality = 'keyboard' | 'mouse' | 'touch' | 'pen';
 
 type InputCapabilities = {
   primaryPointer: 'fine' | 'coarse' | 'none';
   anyFinePointer: boolean;
   anyCoarsePointer: boolean;
   maxTouchPoints: number;
-  lastActiveModality: 'keyboard' | 'mouse' | 'touch' | 'pen';
+  bucket: 'fine-only' | 'coarse-only' | 'hybrid' | 'none';
 };
+
+// tracked separately by ModalityTracker, not stored in InputCapabilities
+type LastActiveModality = Modality;
 
 type UiProfile = {
   id: UiProfileId;
-  movementWidget: 'leftStick' | 'tapMove' | 'leftRightButtons';
-  aimWidget: 'firePad' | 'facingOnly' | 'skillDragOnly';
+  movementWidget: 'leftStick' | 'tapMove' | 'leftRightButtons' | 'keyboard';
+  aimWidget: 'firePad' | 'facingOnly' | 'skillDragOnly' | 'mouse';
   showFirePad: boolean;
   showMovePad: boolean;
   showJumpButton: boolean;
@@ -106,6 +119,17 @@ type UiProfile = {
   widgetOpacity: number;   // replaces touchOpacity
   handedness: 'left' | 'right';
   hints: 'auto' | 'minimal' | 'verbose';
+};
+
+type ProfileBehavior = {
+  id: UiProfileId;
+  label: string;
+  overrides: readonly ('single-stick-tank' | 'tap-move' | 'tap-fire')[];
+  joystickConstraint: 'none' | 'tank-steering' | 'cardinal';
+  firePadRole: 'aim-and-fire' | 'tank-steer';
+  pointerWorldMode: 'none' | 'tap-target' | 'tap-fire';
+  disablesMouseAim: boolean;
+  hintText?: string;
 };
 
 type UiPreferencesV2 = {
@@ -119,23 +143,27 @@ type UiPreferencesV2 = {
 };
 ```
 
-`CapabilityBucket` is a coarse classification (e.g.
-`fine-only | coarse-only | hybrid`) used to pick a different default profile
-per device class for the same user. This is the W3C "concurrent input
-mechanisms" recommendation expressed as storage.
+`UiProfile` and `ProfileBehavior` are intentionally separate. `UiProfile`
+describes what is shown; `ProfileBehavior` describes how input sources are
+interpreted at runtime. That split is what removed most of the profile-id
+branching from `app.ts` and `InputController.ts`.
 
 Migration: load v1 → fold legacy fields into the `custom` profile defaults and
 into the global knobs.
 
 ## 5. Curated profile presets
 
-| Profile          | Movement                         | Aim / fire                              | Notes                                                                                       |
-| ---------------- | -------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `desktop-kbm`    | WASD                             | Mouse aim, LMB/keys cast                | Formalises today's desktop default.                                                         |
-| `mmo-touch`      | Left thumbstick                  | Right fire pad + drag-to-aim on charged | Today's mobile default; Flyff-style baseline.                                               |
-| `tap-move`       | Tap empty ground = `moveTo`      | Tap actor = `engage`; skills on right   | Uses existing `PointerWorldAdapter`. No movement stick. Larger skills / spare space.        |
-| `tank-touch`     | Left stick *or* fwd/rev + L/R    | No independent aim pad; fire follows facing | Fits `movement=tank` + `aim=facing`. Drop the aim pad rather than fake it.              |
-| `platform-touch` | Discrete L/R buttons + jump      | Skills on opposite side                 | Fits `movement=platform`. Temporary aim widget only while a free-aim skill is held.         |
+| Profile            | Movement                         | Aim / fire                              | Notes                                                                                       |
+| ------------------ | -------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `desktop-kbm`      | WASD                             | Mouse aim, LMB/keys cast                | Formalises today's desktop default.                                                         |
+| `mmo-touch`        | Left thumbstick                  | Right fire pad + drag-to-aim on charged | Today's mobile default baseline.                                               |
+| `tap-move`         | Tap empty ground = `moveTo`      | Tap actor = `engage`; skills on right   | Uses smart canvas visual position coordinate offsets. Vertical direct jump taps on spot.   |
+| `tap-fire`         | Left thumbstick                  | Quick tap to fire, drag hold to aim     | Tap-to-fire hold-to-aim mobile gesture engine. Locks last aim vector on release.            |
+| `tank-touch`       | Left stick (pure vert Y-slider)  | Right stick (pure horiz X-slider)       | Split tank controls: left vertical vertical Y-axis for throttle, right horizontal X-axis L/R steering. |
+| `tank-single`      | Unrestrained left joystick       | Skills on opposite side                 | Single stick proportional driving (distance = throttle, angle = steering).                  |
+| `tank-single-tap`  | Unrestrained left joystick       | Tap/hold on canvas + skills             | Composes single-stick tank steering with tap-fire / hold-to-charge world-tap gestures.     |
+| `platform-touch`   | Discrete L/R buttons + jump      | Skills on opposite side                 | Fits `movement=platform`. Jump button on right.                                             |
+| `orthogonal-touch` | Left stick (4-way gate lock)     | Skills on opposite side                 | Locks mechanical knob to horizontal or vertical axis purely to prevent diagonal drift.     |
 
 Hints are generated from `(rules.movement, rules.aim, profile.id)`:
 
@@ -143,56 +171,45 @@ Hints are generated from `(rules.movement, rules.aim, profile.id)`:
 - tank + facing     → "Steer and fire in facing direction"
 - platform          → "Use left/right and jump"
 - tap-move          → "Tap ground to move, tap actors to engage"
+- orthogonal        → "Move purely along dominant axis (no diagonals)"
 
-## 6. Implementation plan (phased)
+## 6. Current implementation
 
-### Phase 1 — foundation, no behavior change
-1. Add `src/input/capabilities.ts` exporting `detectCapabilities()` and a
-   `last-active modality` tracker that updates from `PointerEvent.pointerType`
-   and key events.
-2. Add `UiPreferencesV2` types + migration in
-   [src/ui/preferences.ts](src/ui/preferences.ts). Keep the v1 storage
-   key readable; write v2 to a new key (`beat.uiPreferences.v2`) so a
-   downgrade still works.
-3. Introduce `src/input/profiles.ts` with the four presets + `custom`. No
-   wiring yet.
-4. Extend the existing Playwright local-prefs persistence test to cover v1→v2
-   migration. Assert rules fingerprint still unchanged.
+### 6.1 Capability and preference resolution
+1. `src/input/capabilities.ts` detects the current capability bucket and tracks
+   the last-active modality.
+2. `src/ui/preferences.ts` stores `UiPreferencesV2`, resolves the active
+   profile per capability bucket, and migrates from v1 safely.
 
-### Phase 2 — refactor `InputController` by responsibility
-Split into:
-- **CapabilityDetector** (Phase 1).
-- **ProfileResolver** — picks active profile from `(capabilities, rules, prefs)`.
-- **WidgetLayer** — owns DOM widgets (joystick, fire pad, skill buttons,
-  jump button, L/R buttons). Mounts/unmounts based on the active profile.
-- **InputMapper** — turns raw inputs from the active widgets into canonical
-  `PlayerInput`. One mapper per movement/aim widget family.
+### 6.2 Presentation vs behavior split
+1. `src/input/profiles.ts` owns visual/layout preset data (`UiProfile`) and the
+   rules-aware compatibility table in `adaptProfileToRules()`.
+2. `src/input/profileRegistry.ts` owns runtime behavior (`ProfileBehavior`):
+   override composition, pad constraints, fire-pad role, pointer-world mode,
+   mouse-aim policy, labels, and hint text.
 
-`InputController` becomes a thin coordinator. Do not add more `if (widget)`
-branches to the current class.
+### 6.3 Runtime wiring
+1. `src/app.ts` reads `ProfileBehavior` to:
+   - derive the profile-picker options,
+   - decide pointer-world ownership (`none`, `tap-target`, `tap-fire`),
+   - dispatch the declared override pipeline in order.
+2. `src/input/InputController.ts` reads `ProfileBehavior` to:
+   - repurpose the right pad as steering for `tank-touch`,
+   - lock the left pad to Y-only for `tank-touch`,
+   - lock the left pad to the dominant axis for `orthogonal-touch`,
+   - preserve standard aim-and-fire semantics for the remaining profiles.
 
-### Phase 3 — tap-to-move
-- Subscribe `PointerWorldAdapter`'s `moveTo` / `engage` intents into gameplay
-  **only when the active profile is `tap-move`** (or `custom` opts in).
-- Canvas `pointerdown` ownership is decided by the profile: either the
-  direct-fire mapper (today's behavior) or the pointer-world mapper. Never both.
-- Add Playwright coverage: tap empty ground moves; tap actor engages; profile
-  switch hot-swaps ownership without reload.
-
-### Phase 4 — Controls panel in arena
-- Today, prefs only live in the workbench, which disappears during play.
-- Add a Controls subpanel reachable from the arena HUD with: profile picker,
-  handedness, widget scale, widget opacity, hints verbosity, "Preview controls"
-  button.
-- "Preview controls" launches a stripped-down local preview using the existing
-  lab/local-bench code path with a dummy actor — no multiplayer, no rules
-  mutation. Cheap to build because the lab already does this.
-
-### Phase 5 — hybrid device polish
-- Surface touch overlay opportunistically when a `touch`/`pen` pointer event
-  arrives, fade it when `mouse`/`keyboard` becomes the last-active modality.
-  Never discard the user's profile choice; only the visibility/affordance of
-  the overlay changes.
+### 6.4 Remaining cleanup opportunities
+- Compatibility metadata now lives alongside other per-profile behavior in
+  `src/input/profileRegistry.ts`, but the fallback policy is still centralized
+  rather than fully declarative. If the set of profile families grows, that may
+  be worth revisiting.
+- Tap-fire canvas gestures now live in `src/input/tapFirePointerGesture.ts`.
+  If more world-pointer gesture variants appear, the next step is a shared
+  pointer-world gesture layer rather than more one-off helpers.
+- `custom` currently mirrors `mmo-touch` behavior and only customizes layout.
+  If custom semantics become user-configurable, the behavior registry will need
+  a custom branch too.
 
 ## 7. Test matrix
 
@@ -224,15 +241,15 @@ branches to the current class.
 
 ## 9. Open questions
 
-- Should `customProfile` be one global custom, or one per capability bucket?
-  Default suggestion: one global custom, but `activeProfileByBucket` can still
-  pick a different built-in preset per bucket.
-- Should profile choice be synced across devices for the same player?
-  Current answer: no — these are local ergonomics and that's the whole point
-  of keeping them out of the rules layer.
-- Where does the "Preview controls" arena live structurally — under `rooms/`
-  as a synthetic local room, or as a renderer-only sandbox? Likely the
-  former, reusing the lab path.
+- Should `custom` remain layout-only, or should it eventually choose from the
+  same behavior primitives as built-in profiles?
+- Should `adaptProfileToRules()` stay as a separate compatibility table, or be
+  folded into registry metadata once more profiles are added?
+- Future variants such as d-pad movement, pen-hover affordances, or alternate
+  orthogonal/tank pads should reuse the same canonical `PlayerInput` contract.
+  The open question is only how many new local override keys they justify.
+- Should profile choice be synced across devices for the same player? Current
+  answer remains no — these are local ergonomics by design.
 
 ## 10. References
 
@@ -241,8 +258,11 @@ branches to the current class.
 - W3C WCAG: Concurrent Input Mechanisms; Pointer Gestures (2.5.1); Target Size
   (2.5.5 / 2.5.8).
 - Repo: [src/ui/preferences.ts](src/ui/preferences.ts),
+  [src/input/capabilities.ts](src/input/capabilities.ts),
+  [src/input/profiles.ts](src/input/profiles.ts),
+  [src/input/profileRegistry.ts](src/input/profileRegistry.ts),
   [src/app.ts](src/app.ts),
-  [src/input](src/input),
+  [src/input/InputController.ts](src/input/InputController.ts),
   [src/net/pointerWorldAdapter.ts](src/net/pointerWorldAdapter.ts),
   [tests/solo-smoke.spec.ts](tests/solo-smoke.spec.ts),
   [AGENTS.md](AGENTS.md).
