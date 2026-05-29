@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_PROFILE_IDS, type UiProfileId } from './profiles';
 import {
+  coerceProfileToRules,
   getControlProfileOptions,
   getProfileBehavior,
+  isProfileCompatibleWithRules,
   listBuiltinBehaviorIds,
 } from './profileRegistry';
 
@@ -54,6 +56,25 @@ describe('profile registry', () => {
       (id) => getProfileBehavior(id).disablesMouseAim,
     );
     expect(disablesMouse.sort()).toEqual(['tank-single-tap', 'tap-fire'].sort());
+  });
+
+  it('treats mmo-touch as only coherent under twin-stick free aim', () => {
+    expect(isProfileCompatibleWithRules('mmo-touch', { movement: 'twinStick', aim: 'free' })).toBe(true);
+    expect(isProfileCompatibleWithRules('mmo-touch', { movement: 'tank', aim: 'free' })).toBe(false);
+    expect(isProfileCompatibleWithRules('mmo-touch', { movement: 'twinStick', aim: 'facing' })).toBe(false);
+  });
+
+  it('keeps tap-fire compatible with all movement modes but not facing aim', () => {
+    expect(isProfileCompatibleWithRules('tap-fire', { movement: 'platform', aim: 'free' })).toBe(true);
+    expect(isProfileCompatibleWithRules('tap-fire', { movement: 'orthogonal', aim: 'free' })).toBe(true);
+    expect(isProfileCompatibleWithRules('tap-fire', { movement: 'tank', aim: 'facing' })).toBe(false);
+  });
+
+  it('coerces incompatible profiles to the expected rules-aware fallbacks', () => {
+    expect(coerceProfileToRules('mmo-touch', { movement: 'platform', aim: 'free' })).toBe('platform-touch');
+    expect(coerceProfileToRules('mmo-touch', { movement: 'tank', aim: 'free' })).toBe('tank-touch');
+    expect(coerceProfileToRules('mmo-touch', { movement: 'orthogonal', aim: 'free' })).toBe('orthogonal-touch');
+    expect(coerceProfileToRules('tank-single-tap', { movement: 'tank', aim: 'facing' })).toBe('tank-touch');
   });
 
   it('tank-single-tap composes single-stick-tank then tap-fire', () => {

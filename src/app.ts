@@ -17,6 +17,7 @@ import { InputController, type TouchControlElements } from './input/InputControl
 import { PointerWorldAdapter } from './input/PointerWorldAdapter';
 import { adaptProfileToRules, BUILTIN_PROFILE_IDS, type UiProfileId } from './input/profiles';
 import { getControlProfileOptions, getProfileBehavior, type OverrideKey } from './input/profileRegistry';
+import { installTapFirePointerGesture } from './input/tapFirePointerGesture';
 import { SnapshotSmoother, type SnapshotSmoothingStats } from './net/snapshotSmoothing';
 import { HostSession, ClientSession, type NetDiagnostics } from './net/webrtc';
 import { CanvasRenderer } from './render/CanvasRenderer';
@@ -157,9 +158,6 @@ export class BeatApp {
   private pendingTapFire?: { worldX: number; worldY: number };
   private penHoverWorld?: { x: number; y: number };
   private unsubscribePointerWorld?: () => void;
-  private activeTouchId?: number;
-  private touchHoldTimer?: number;
-  private isHoldingTouch = false;
   private consecutiveStuckTicks = 0;
   private arenaHintTimer?: number;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
@@ -688,6 +686,15 @@ export class BeatApp {
       slotPresses: [...input.slotPresses, 0],
       slotReleases: [...input.slotReleases, 0],
     };
+  }
+
+  private getLocalPlayerAimOrigin(): { x: number; y: number } | undefined {
+    const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
+                   ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
+    if (!player) {
+      return undefined;
+    }
+    return { x: player.x, y: player.y };
   }
 
   private stopActiveMode(): void {
@@ -1258,113 +1265,17 @@ export class BeatApp {
     } else if (behavior.pointerWorldMode === 'tap-fire') {
       this.input.setClickToCastEnabled(false);
       this.input.setMouseAimEnabled(false);
-
-      const onDown = (event: PointerEvent) => {
-        if (event.button !== 0 && event.button !== 2) {
-          return;
-        }
-        event.preventDefault();
-        try {
-          this.canvas.setPointerCapture(event.pointerId);
-        } catch {
-          // ignore
-        }
-
-        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
-        if (!world) return;
-
-        this.activeTouchId = event.pointerId;
-        this.isHoldingTouch = false;
-
-        this.touchHoldTimer = window.setTimeout(() => {
-          this.isHoldingTouch = true;
-          this.input.pressSlot(0);
-
-          const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
-                         ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
-          if (player) {
-            const dx = world.x - player.x;
-            const dy = world.y - player.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist > 0.001) {
-              this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
-            }
-          }
-        }, 200);
-      };
-
-      const onMove = (event: PointerEvent) => {
-        if (event.pointerId !== this.activeTouchId) return;
-        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
-        if (!world) return;
-
-        if (this.isHoldingTouch) {
-          const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
-                         ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
-          if (player) {
-            const dx = world.x - player.x;
-            const dy = world.y - player.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist > 0.001) {
-              this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
-            }
-          }
-        }
-      };
-
-      const onUp = (event: PointerEvent) => {
-        if (event.pointerId !== this.activeTouchId) return;
-        event.preventDefault();
-
-        try {
-          if (this.canvas.hasPointerCapture(event.pointerId)) {
-            this.canvas.releasePointerCapture(event.pointerId);
-          }
-        } catch {
-          // ignore
-        }
-
-        window.clearTimeout(this.touchHoldTimer);
-        this.touchHoldTimer = undefined;
-
-        const world = this.renderer.clientToWorld(event.clientX, event.clientY);
-        if (world) {
-          if (this.isHoldingTouch) {
-            const player = window.__BEAT_RENDER_SNAPSHOT__?.players.find((p) => p.playerId === this.localPlayerId)
-                           ?? this.lastSnapshot?.players.find((p) => p.playerId === this.localPlayerId);
-            if (player) {
-              const dx = world.x - player.x;
-              const dy = world.y - player.y;
-              const dist = Math.hypot(dx, dy);
-              if (dist > 0.001) {
-                this.input.setLastExplicitAim({ x: dx / dist, y: dy / dist });
-              }
-            }
-            this.input.releaseSlot(0);
-          } else {
-            this.pendingTapFire = { worldX: world.x, worldY: world.y };
-          }
-        }
-
-        this.isHoldingTouch = false;
-        this.activeTouchId = undefined;
-      };
-
-      this.canvas.addEventListener('pointerdown', onDown);
-      this.canvas.addEventListener('pointermove', onMove);
-      this.canvas.addEventListener('pointerup', onUp);
-      this.canvas.addEventListener('pointercancel', onUp);
-
-      this.unsubscribePointerWorld = () => {
-        this.canvas.removeEventListener('pointerdown', onDown);
-        this.canvas.removeEventListener('pointermove', onMove);
-        this.canvas.removeEventListener('pointerup', onUp);
-        this.canvas.removeEventListener('pointercancel', onUp);
-        window.clearTimeout(this.touchHoldTimer);
-        this.touchHoldTimer = undefined;
-        this.isHoldingTouch = false;
-        this.activeTouchId = undefined;
-      };
+      this.unsubscribePointerWorld = installTapFirePointerGesture({
+        canvas: this.canvas,
+        clientToWorld: (clientX, clientY) => this.renderer.clientToWorld(clientX, clientY),
+        getAimOrigin: () => this.getLocalPlayerAimOrigin(),
+        setExplicitAim: (aim) => this.input.setLastExplicitAim(aim),
+        pressPrimarySlot: () => this.input.pressSlot(0),
+        releasePrimarySlot: () => this.input.releaseSlot(0),
+        queueQuickTapFire: (world) => {
+          this.pendingTapFire = { worldX: world.x, worldY: world.y };
+        },
+      });
     } else {
       this.input.setClickToCastEnabled(true);
     }

@@ -1,17 +1,20 @@
 /**
- * Curated control profiles for the local ergonomics layer.
+ * Curated control-profile presentation data.
  *
- * Phase 1 scaffolding: these presets describe widget layout and intent for
- * the future profile-driven control system. No code yet consumes them at
- * runtime; `InputController` still owns all widget wiring. The presets are
- * exported so Phase 2 can split `InputController` into a profile resolver +
- * widget layer + input mapper without re-litigating the design.
+ * This file is the visual/layout half of the ergonomics system: which widgets
+ * exist, whether they are shown, and their display-related defaults. Runtime
+ * behavior now lives in `profileRegistry.ts`, which decides override
+ * composition, pad constraints, pointer-world ownership, and mouse-aim
+ * policy. The split keeps appearance and behavior independently testable.
  *
- * See `docs/control-ergonomics-plan.md` for the rationale.
+ * `adaptProfileToRules()` remains here as the public compatibility entry-point,
+ * but the compatibility metadata now lives in `profileRegistry.ts` alongside
+ * other per-profile behavior.
  */
 
 import type { PlayerAimMode, PlayerMovementMode } from '../engine/protocol';
 import type { CapabilityBucket, InputCapabilities } from './capabilities';
+import { coerceProfileToRules } from './profileRegistry';
 
 export type UiProfileId =
   | 'desktop-kbm'
@@ -219,18 +222,5 @@ export function adaptProfileToRules(
   profile: UiProfileId,
   rules: { movement: PlayerMovementMode; aim: PlayerAimMode },
 ): UiProfileId {
-  if (profile === 'custom') return profile;
-  if (rules.movement === 'platform' && profile !== 'platform-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
-    return 'platform-touch';
-  }
-  if (rules.movement === 'tank' && profile !== 'tank-touch' && profile !== 'tank-single' && profile !== 'tank-single-tap' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
-    return 'tank-touch';
-  }
-  if (rules.aim === 'facing' && (profile === 'mmo-touch' || profile === 'tap-fire' || profile === 'tank-single-tap')) {
-    return 'tank-touch';
-  }
-  if (rules.movement === 'orthogonal' && profile !== 'orthogonal-touch' && profile !== 'desktop-kbm' && profile !== 'tap-move' && profile !== 'tap-fire') {
-    return 'orthogonal-touch';
-  }
-  return profile;
+  return coerceProfileToRules(profile, rules);
 }

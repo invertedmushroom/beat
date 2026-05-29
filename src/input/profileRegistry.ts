@@ -14,6 +14,7 @@
  * which describes *appearance*. This file describes *behaviour wiring*.
  */
 
+import type { PlayerAimMode, PlayerMovementMode } from '../engine/protocol';
 import type { UiProfileId } from './profiles';
 
 /** Ordered list of override functions to apply to the per-tick PlayerInput. */
@@ -48,9 +49,18 @@ export type ProfileBehavior = {
   readonly pointerWorldMode: PointerWorldMode;
   readonly disablesMouseAim: boolean;
   readonly hintText?: string;
+  readonly compatibleMovementModes: readonly PlayerMovementMode[];
+  readonly compatibleAimModes: readonly PlayerAimMode[];
 };
 
 const NONE: readonly OverrideKey[] = Object.freeze([]);
+const ALL_AIM_MODES: readonly PlayerAimMode[] = Object.freeze(['free', 'facing']);
+const ALL_MOVEMENT_MODES: readonly PlayerMovementMode[] = Object.freeze(['twinStick', 'tank', 'platform', 'orthogonal']);
+const FREE_AIM_ONLY: readonly PlayerAimMode[] = Object.freeze(['free']);
+const TWIN_STICK_ONLY: readonly PlayerMovementMode[] = Object.freeze(['twinStick']);
+const TWIN_STICK_AND_TANK: readonly PlayerMovementMode[] = Object.freeze(['twinStick', 'tank']);
+const TWIN_STICK_AND_PLATFORM: readonly PlayerMovementMode[] = Object.freeze(['twinStick', 'platform']);
+const TWIN_STICK_AND_ORTHOGONAL: readonly PlayerMovementMode[] = Object.freeze(['twinStick', 'orthogonal']);
 
 const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior>> = Object.freeze({
   'desktop-kbm': {
@@ -61,6 +71,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'aim-and-fire',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: ALL_MOVEMENT_MODES,
+    compatibleAimModes: ALL_AIM_MODES,
   },
   'mmo-touch': {
     id: 'mmo-touch',
@@ -70,6 +82,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'aim-and-fire',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: TWIN_STICK_ONLY,
+    compatibleAimModes: FREE_AIM_ONLY,
   },
   'tap-move': {
     id: 'tap-move',
@@ -80,6 +94,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     pointerWorldMode: 'tap-target',
     disablesMouseAim: false,
     hintText: 'Tap to move',
+    compatibleMovementModes: ALL_MOVEMENT_MODES,
+    compatibleAimModes: ALL_AIM_MODES,
   },
   'tap-fire': {
     id: 'tap-fire',
@@ -90,6 +106,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     pointerWorldMode: 'tap-fire',
     disablesMouseAim: true,
     hintText: 'Tap to fire',
+    compatibleMovementModes: ALL_MOVEMENT_MODES,
+    compatibleAimModes: FREE_AIM_ONLY,
   },
   'tank-touch': {
     id: 'tank-touch',
@@ -99,6 +117,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'tank-steer',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: TWIN_STICK_AND_TANK,
+    compatibleAimModes: ALL_AIM_MODES,
   },
   'tank-single': {
     id: 'tank-single',
@@ -108,6 +128,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'aim-and-fire',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: TWIN_STICK_AND_TANK,
+    compatibleAimModes: ALL_AIM_MODES,
   },
   'tank-single-tap': {
     id: 'tank-single-tap',
@@ -118,6 +140,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     pointerWorldMode: 'tap-fire',
     disablesMouseAim: true,
     hintText: 'Tap to fire',
+    compatibleMovementModes: TWIN_STICK_AND_TANK,
+    compatibleAimModes: FREE_AIM_ONLY,
   },
   'platform-touch': {
     id: 'platform-touch',
@@ -127,6 +151,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'aim-and-fire',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: TWIN_STICK_AND_PLATFORM,
+    compatibleAimModes: ALL_AIM_MODES,
   },
   'orthogonal-touch': {
     id: 'orthogonal-touch',
@@ -136,6 +162,8 @@ const BEHAVIORS: Readonly<Record<Exclude<UiProfileId, 'custom'>, ProfileBehavior
     firePadRole: 'aim-and-fire',
     pointerWorldMode: 'none',
     disablesMouseAim: false,
+    compatibleMovementModes: TWIN_STICK_AND_ORTHOGONAL,
+    compatibleAimModes: ALL_AIM_MODES,
   },
 });
 
@@ -149,6 +177,35 @@ const CUSTOM_BEHAVIOR: ProfileBehavior = Object.freeze({
 export function getProfileBehavior(id: UiProfileId): ProfileBehavior {
   if (id === 'custom') return CUSTOM_BEHAVIOR;
   return BEHAVIORS[id];
+}
+
+type RulesShape = { movement: PlayerMovementMode; aim: PlayerAimMode };
+
+export function isProfileCompatibleWithRules(profile: UiProfileId, rules: RulesShape): boolean {
+  if (profile === 'custom') {
+    return true;
+  }
+  const behavior = BEHAVIORS[profile];
+  return behavior.compatibleMovementModes.includes(rules.movement) && behavior.compatibleAimModes.includes(rules.aim);
+}
+
+export function coerceProfileToRules(profile: UiProfileId, rules: RulesShape): UiProfileId {
+  if (isProfileCompatibleWithRules(profile, rules)) {
+    return profile;
+  }
+  if (rules.movement === 'platform') {
+    return 'platform-touch';
+  }
+  if (rules.movement === 'tank') {
+    return 'tank-touch';
+  }
+  if (rules.aim === 'facing') {
+    return 'tank-touch';
+  }
+  if (rules.movement === 'orthogonal') {
+    return 'orthogonal-touch';
+  }
+  return profile;
 }
 
 export function getControlProfileOptions(): ReadonlyArray<{ value: UiProfileId; label: string }> {

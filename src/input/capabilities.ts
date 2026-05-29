@@ -1,13 +1,14 @@
 /**
  * Input capability detection and last-active modality tracking.
  *
- * Phase 1 foundation for the profile-driven control system. Detects what
- * pointing devices the platform exposes via standards-based signals
- * (`@media (pointer)`, `@media (any-pointer)`, `navigator.maxTouchPoints`),
- * and tracks the last input modality the user actually used so the UI layer
- * can adapt without discarding the user's chosen profile.
+ * This module feeds the profile-driven control system with two pieces of local
+ * context:
+ * - a coarse capability bucket used to choose defaults per device class, and
+ * - the last-active modality used to adjust affordances without discarding the
+ *   user's chosen profile.
  *
- * No behavior wired yet — this module is consumed by Phase 2+.
+ * It is consumed by the current preferences / profile-resolution flow rather
+ * than being future scaffolding.
  */
 
 export type PrimaryPointer = 'fine' | 'coarse' | 'none';
