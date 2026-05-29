@@ -149,6 +149,7 @@ Player movement is updated per tick from input:
 
 - `updateMovementAndFacing()` chooses twin-stick or tank steering.
 - `updateTwinStickMovement()` converts move axes into velocity and facing.
+- `updateOrthogonalMovement()` keeps only the dominant move axis before applying velocity.
 - `updateTankMovement()` rotates facing and applies throttle-based velocity.
 - Facing and aim are separated when `player.aim.mode` is `free`.
 
