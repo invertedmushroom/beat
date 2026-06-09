@@ -108,6 +108,15 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
     );
   }
 
+  async leaveRoom(roomId: string, peerId: string): Promise<void> {
+    await this.withConnection((connection) =>
+      connection.reducers.leaveHostedRoom({
+        roomId,
+        peerId,
+      }),
+    );
+  }
+
   async sendSignal(signal: RoomSignal): Promise<void> {
     await this.withConnection(async (connection) => {
       if (signal.kind === 'answer') {

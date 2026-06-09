@@ -60,13 +60,21 @@ import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 
 const ROOM_STALE_MS = 5_000;
+const PEER_ID_STORAGE_KEY = 'beat:peer-id:v1';
+const ACTIVE_CLIENT_SESSION_KEY = 'beat:active-client-session:v1';
+const ACTIVE_CLIENT_SESSION_TTL_MS = 10 * 60_000;
 
 type Mode = 'idle' | 'solo' | 'lab' | 'host' | 'client';
+
+type StoredActiveClientSession = {
+  roomId: string;
+  savedAt: number;
+};
 
 export class BeatApp {
   private readonly directoryRuntime = createRoomDirectory();
   private readonly directory = this.directoryRuntime.directory;
-  private readonly peerId = createId('peer');
+  private readonly peerId = loadSessionPeerId();
   private readonly handleFullscreenChange = () => this.syncFullscreenButton();
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState === 'visible') {
@@ -165,6 +173,7 @@ export class BeatApp {
   private labActorIds = new Set<string>();
   private labSpawnIndex = 0;
   private labPaused = false;
+  private restoringClientSession = false;
 
   constructor(container: HTMLElement) {
     this.root = container;
@@ -418,11 +427,17 @@ export class BeatApp {
     this.setStatus(lab ? 'lab: test bench' : 'solo: browser worker authority');
   }
 
-  private async joinRoom(room: RoomInfo): Promise<void> {
+  private async joinRoom(room: RoomInfo, options: { allowReservedSlot?: boolean } = {}): Promise<void> {
     const rooms = await this.refreshRoomsNow();
     const liveRoom = rooms.find((candidate) => candidate.roomId === room.roomId);
     const stale = liveRoom ? Date.now() - liveRoom.lastHeartbeat > ROOM_STALE_MS : false;
-    if (!liveRoom || liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers || stale) {
+    const reservedSlot = Boolean(options.allowReservedSlot);
+    const unavailable =
+      !liveRoom ||
+      liveRoom.status === 'closed' ||
+      stale ||
+      (!reservedSlot && (liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers));
+    if (unavailable) {
       this.log(`join blocked: ${room.name} is unavailable${stale ? ' (stale)' : ''}`);
       this.setStatus(`room unavailable: ${room.name}`);
       return;
@@ -430,6 +445,7 @@ export class BeatApp {
     room = liveRoom;
     this.stopActiveMode();
     this.mode = 'client';
+    this.storeActiveClientSession(room.roomId);
     this.localPlayerId = undefined;
     this.renderer.setRuleset(undefined);
     this.renderer.setEmptyMessage(`Joining ${room.name}...`);
@@ -738,6 +754,7 @@ export class BeatApp {
     this.mode = 'idle';
     this.setRulesLocked(false);
     this.applyUiPreferences();
+    this.clearActiveClientSession();
     this.showMenu();
     this.setStatus(`idle: ${this.directoryRuntime.label}`);
   }
@@ -755,8 +772,38 @@ export class BeatApp {
     return rooms;
   }
 
+  private async restoreActiveClientSession(rooms: RoomInfo[]): Promise<void> {
+    if (this.mode !== 'idle' || this.restoringClientSession) {
+      return;
+    }
+    const stored = readActiveClientSession();
+    if (!stored) {
+      return;
+    }
+    const room = rooms.find((candidate) => candidate.roomId === stored.roomId);
+    if (!room) {
+      return;
+    }
+    this.restoringClientSession = true;
+    try {
+      this.log(`restoring room: ${room.name}`);
+      await this.joinRoom(room, { allowReservedSlot: true });
+    } finally {
+      this.restoringClientSession = false;
+    }
+  }
+
+  private storeActiveClientSession(roomId: string): void {
+    writeActiveClientSession({ roomId, savedAt: Date.now() });
+  }
+
+  private clearActiveClientSession(): void {
+    removeActiveClientSession();
+  }
+
   private renderRooms(rooms: RoomInfo[]): void {
     this.currentRooms = rooms;
+    void this.restoreActiveClientSession(rooms);
     this.roomSummary.innerHTML = '';
     const openRooms = rooms.filter((room) => room.status === 'open' && room.playerCount < room.maxPlayers);
     const fullRooms = rooms.filter((room) => room.status !== 'open' || room.playerCount >= room.maxPlayers);
@@ -1818,6 +1865,66 @@ export class BeatApp {
       fireKnob: requireNode<HTMLElement>('#touch-fire-knob'),
       skillButtons: this.skillButtons,
     };
+  }
+}
+
+function loadSessionPeerId(): string {
+  const existing = readSessionItem(PEER_ID_STORAGE_KEY);
+  if (existing) {
+    return existing;
+  }
+  const peerId = createId('peer');
+  writeSessionItem(PEER_ID_STORAGE_KEY, peerId);
+  return peerId;
+}
+
+function readActiveClientSession(): StoredActiveClientSession | undefined {
+  const raw = readSessionItem(ACTIVE_CLIENT_SESSION_KEY);
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredActiveClientSession>;
+    if (typeof parsed.roomId !== 'string' || typeof parsed.savedAt !== 'number') {
+      removeActiveClientSession();
+      return undefined;
+    }
+    if (Date.now() - parsed.savedAt > ACTIVE_CLIENT_SESSION_TTL_MS) {
+      removeActiveClientSession();
+      return undefined;
+    }
+    return { roomId: parsed.roomId, savedAt: parsed.savedAt };
+  } catch {
+    removeActiveClientSession();
+    return undefined;
+  }
+}
+
+function writeActiveClientSession(session: StoredActiveClientSession): void {
+  writeSessionItem(ACTIVE_CLIENT_SESSION_KEY, JSON.stringify(session));
+}
+
+function removeActiveClientSession(): void {
+  try {
+    window.sessionStorage.removeItem(ACTIVE_CLIENT_SESSION_KEY);
+  } catch {
+    // Storage may be unavailable in private or embedded contexts.
+  }
+}
+
+function readSessionItem(key: string): string | undefined {
+  try {
+    return window.sessionStorage.getItem(key) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSessionItem(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Storage may be unavailable in private or embedded contexts.
   }
 }
 

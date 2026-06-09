@@ -36,6 +36,7 @@ export type RoomDirectory = {
   refreshRooms?(): void | Promise<void>;
   subscribeRooms(listener: (rooms: RoomInfo[]) => void): () => void;
   requestJoinRoom?(roomId: string, peerId: string, displayName: string): void | Promise<void>;
+  leaveRoom?(roomId: string, peerId: string): void | Promise<void>;
   sendSignal(signal: RoomSignal): void | Promise<void>;
   subscribeSignals(peerId: string, listener: (signal: RoomSignal) => void): () => void;
   destroy(): void;

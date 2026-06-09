@@ -28,6 +28,10 @@ describe('net message decoding guards', () => {
     expect(decodeClientMessage(JSON.stringify({ type: 'hello', displayName: '' }))).toBeUndefined();
   });
 
+  it('accepts client leave messages', () => {
+    expect(decodeClientMessage(encodeMessage({ type: 'leave' }))).toEqual({ type: 'leave' });
+  });
+
   it('accepts valid client input and rejects malformed payloads', () => {
     expect(
       decodeClientMessage(

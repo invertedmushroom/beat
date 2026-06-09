@@ -14,6 +14,9 @@ const LEGACY_CHANNEL_LABEL = 'beat';
 const HOST_SNAPSHOT_INTERVAL_MS = 50;
 const MAX_SNAPSHOT_BUFFERED_AMOUNT = 64_000;
 const CLIENT_CONNECT_TIMEOUT_MS = 15_000;
+const HOST_PEER_TIMEOUT_MS = 60_000;
+const CLIENT_RECONNECT_AFTER_SILENCE_MS = 5_000;
+const CLIENT_ROOM_MISSING_GRACE_MS = 60_000;
 const MAX_PEER_DISPLAY_NAME_LENGTH = 24;
 
 type LogListener = (message: string) => void;
@@ -30,6 +33,8 @@ type PeerState = {
   sessionId: string;
   remoteDescriptionReady: boolean;
   pendingIce: RTCIceCandidateInit[];
+  lastHeardAt: number;
+  disconnectedAt?: number;
   lastReceivedInputSequence: number;
   lastSnapshotSentAt: number;
   droppedSnapshots: number;
@@ -70,6 +75,7 @@ export class HostSession {
   private droppedSnapshots = 0;
   private coalescedSnapshots = 0;
   private backlogBytes = 0;
+  private lastPeerTimeoutCheckAt = Date.now();
 
   constructor(
     private readonly options: {
@@ -88,6 +94,7 @@ export class HostSession {
     } catch (error: unknown) {
       this.log(`room advertise failed: ${readError(error)}`);
     }
+    this.lastPeerTimeoutCheckAt = Date.now();
     this.heartbeatHandle = window.setInterval(() => this.heartbeat(), 2_000);
     this.statsHandle = window.setInterval(() => void this.reportStats(), 1_000);
     this.unsubscribeSignals = this.options.directory.subscribeSignals(this.options.hostPeerId, (signal) => {
@@ -130,6 +137,9 @@ export class HostSession {
   }
 
   private sendPeerSnapshot(peer: PeerState, message: string, bytes: number, now: number): void {
+    if (peer.disconnectedAt !== undefined) {
+      return;
+    }
     const channel = peer.snapshotChannel;
     if (channel?.readyState !== 'open') {
       return;
@@ -153,6 +163,7 @@ export class HostSession {
   }
 
   private heartbeat(): void {
+    this.checkPeerTimeouts();
     this.publishRoomState('room heartbeat failed');
   }
 
@@ -191,15 +202,21 @@ export class HostSession {
   private async acceptOffer(signal: RoomSignal): Promise<void> {
     const offerPayload = unwrapSignalPayload<RTCSessionDescriptionInit>(signal.payload);
     const sessionId = offerPayload.sessionId ?? signal.signalId;
-    this.replacePeer(signal.fromPeerId);
+    const existing = this.peers.get(signal.fromPeerId);
+    if (existing) {
+      this.closePeerTransport(existing, false);
+    }
 
     const connection = new RTCPeerConnection(await getRtcConfig());
     const peerState: PeerState = {
       connection,
+      playerId: existing?.playerId,
+      displayName: existing?.displayName,
       sessionId,
       remoteDescriptionReady: false,
       pendingIce: [],
-      lastReceivedInputSequence: 0,
+      lastHeardAt: Date.now(),
+      lastReceivedInputSequence: existing?.lastReceivedInputSequence ?? 0,
       lastSnapshotSentAt: 0,
       droppedSnapshots: 0,
       coalescedSnapshots: 0,
@@ -207,6 +224,9 @@ export class HostSession {
       maxBacklogBytes: 0,
     };
     this.peers.set(signal.fromPeerId, peerState);
+    if (existing?.playerId) {
+      this.log(`peer reconnected: ${shortPeer(signal.fromPeerId)}`);
+    }
     this.bindConnectionLogs(connection, `host<-${shortPeer(signal.fromPeerId)}`);
 
     connection.onicecandidate = (event) => {
@@ -246,7 +266,11 @@ export class HostSession {
       peer.snapshotChannel = channel;
     }
 
-    channel.onopen = () => this.log(`${channel.label} open: ${peerId}`);
+    channel.onopen = () => {
+      peer.lastHeardAt = Date.now();
+      peer.disconnectedAt = undefined;
+      this.log(`${channel.label} open: ${peerId}`);
+    };
     channel.onerror = () => this.log(`${channel.label} error: ${peerId}`);
     channel.onmessage = (event: MessageEvent<string>) => {
       const message = decodeClientMessage(event.data);
@@ -259,14 +283,21 @@ export class HostSession {
       if (this.peers.get(peerId) !== peer || channel !== peer.controlChannel) {
         return;
       }
-      this.closePeer(peerId, peer, false);
-      this.log(`peer left: ${peerId}`);
+      this.disconnectPeer(peerId, peer);
+      this.log(`peer disconnected: ${peerId}`);
     };
   }
 
   private handlePeerMessage(peerId: string, peer: PeerState, channel: RTCDataChannel, message: ClientToHostMessage): void {
+    peer.lastHeardAt = Date.now();
+    peer.disconnectedAt = undefined;
     if (message.type === 'hello') {
       this.handleHello(peerId, peer, channel, message.displayName);
+      return;
+    }
+    if (message.type === 'leave') {
+      this.closePeer(peerId, peer, false);
+      this.log(`peer left: ${peerId}`);
       return;
     }
     if (message.type === 'ping') {
@@ -284,6 +315,7 @@ export class HostSession {
 
   private handleHello(peerId: string, peer: PeerState, channel: RTCDataChannel, displayName: string): void {
     const normalizedDisplayName = displayName.trim().slice(0, MAX_PEER_DISPLAY_NAME_LENGTH) || 'Player';
+    const rejoiningPlayer = Boolean(peer.playerId);
     peer.displayName = normalizedDisplayName;
     if (!peer.playerId && this.currentPlayerCount >= this.options.room.maxPlayers) {
       const target = peer.controlChannel?.readyState === 'open' ? peer.controlChannel : channel;
@@ -314,7 +346,7 @@ export class HostSession {
     const target = peer.controlChannel?.readyState === 'open' ? peer.controlChannel : channel;
     target.send(response);
     this.bytesSent += response.length;
-    this.log(`${normalizedDisplayName} joined`);
+    this.log(`${normalizedDisplayName} ${rejoiningPlayer ? 'rejoined' : 'joined'}`);
   }
 
   private applyPeerInputs(peer: PeerState, message: Extract<ClientToHostMessage, { type: 'input' }>): void {
@@ -370,12 +402,14 @@ export class HostSession {
     }
   }
 
-  private replacePeer(peerId: string): void {
-    const existing = this.peers.get(peerId);
-    if (!existing) {
+  private disconnectPeer(peerId: string, peer: PeerState): void {
+    if (this.peers.get(peerId) !== peer) {
       return;
     }
-    this.closePeer(peerId, existing, false);
+    const now = Date.now();
+    peer.lastHeardAt = now;
+    peer.disconnectedAt = now;
+    this.closePeerTransport(peer, false);
   }
 
   private closePeer(peerId: string, peer: PeerState, notifyHostClosed: boolean): void {
@@ -385,8 +419,21 @@ export class HostSession {
       this.options.engine.removePlayer(peer.playerId);
       this.currentPlayerCount = Math.max(1, this.currentPlayerCount - 1);
     }
+    this.closePeerTransport(peer, notifyHostClosed);
+    this.peers.delete(peerId);
+    this.pendingIceByPeer.delete(peerId);
+    if (removedPlayer) {
+      this.publishRoomState('room heartbeat failed');
+    }
+  }
+
+  private closePeerTransport(peer: PeerState, notifyHostClosed: boolean): void {
     if (notifyHostClosed && peer.controlChannel?.readyState === 'open') {
-      peer.controlChannel.send(encodeMessage({ type: 'host-closed' }));
+      try {
+        peer.controlChannel.send(encodeMessage({ type: 'host-closed' }));
+      } catch {
+        // The channel may already be closing.
+      }
     }
     for (const channel of [peer.controlChannel, peer.inputChannel, peer.snapshotChannel]) {
       if (channel) {
@@ -397,10 +444,36 @@ export class HostSession {
         channel.close();
       }
     }
+    peer.controlChannel = undefined;
+    peer.inputChannel = undefined;
+    peer.snapshotChannel = undefined;
+    peer.connection.onconnectionstatechange = null;
+    peer.connection.onicecandidate = null;
+    peer.connection.onicecandidateerror = null;
+    peer.connection.oniceconnectionstatechange = null;
+    peer.connection.ondatachannel = null;
     peer.connection.close();
-    this.peers.delete(peerId);
-    if (removedPlayer) {
-      this.publishRoomState('room heartbeat failed');
+  }
+
+  private checkPeerTimeouts(): void {
+    const now = Date.now();
+    const elapsedSinceLastCheck = now - this.lastPeerTimeoutCheckAt;
+    this.lastPeerTimeoutCheckAt = now;
+    if (elapsedSinceLastCheck > HOST_PEER_TIMEOUT_MS) {
+      for (const peer of this.peers.values()) {
+        peer.lastHeardAt = now;
+        if (peer.disconnectedAt !== undefined) {
+          peer.disconnectedAt = now;
+        }
+      }
+      return;
+    }
+    for (const [peerId, peer] of Array.from(this.peers)) {
+      if (now - peer.lastHeardAt <= HOST_PEER_TIMEOUT_MS) {
+        continue;
+      }
+      this.log(`peer timed out: ${peerId}`);
+      this.closePeer(peerId, peer, false);
     }
   }
 
@@ -416,7 +489,7 @@ export class HostSession {
     const bytesPerSecond = (this.bytesSent - this.lastBytesSent) / elapsedSeconds;
     this.lastStatsAt = now;
     this.lastBytesSent = this.bytesSent;
-    const peers = Array.from(this.peers.values());
+    const peers = Array.from(this.peers.values()).filter((peer) => peer.disconnectedAt === undefined);
     const candidateType = peers.find((peer) => peer.candidateType === 'relay')?.candidateType ?? peers.find((peer) => peer.candidateType)?.candidateType ?? 'unknown';
     const rttMs = average(peers.map((peer) => peer.rttMs).filter((value): value is number => value !== undefined));
     const backlogBytes = Math.max(this.backlogBytes, ...peers.map((peer) => peer.snapshotChannel?.bufferedAmount ?? 0));
@@ -440,6 +513,9 @@ export class HostSession {
 
   private async refreshConnectionStats(): Promise<void> {
     for (const peer of this.peers.values()) {
+      if (peer.disconnectedAt !== undefined) {
+        continue;
+      }
       await refreshPeerConnectionStats(peer.connection, (stats) => {
         peer.candidateType = stats.candidateType ?? peer.candidateType;
         peer.rttMs = stats.rttMs ?? peer.rttMs;
@@ -464,7 +540,7 @@ export class ClientSession {
   private hostSilenceHandle?: number;
   private statsHandle?: number;
   private currentRoom?: RoomInfo;
-  private readonly sessionId = createId('session');
+  private sessionId = createId('session');
   private readonly pendingIce: RTCIceCandidateInit[] = [];
   private readonly pendingInputQueue = new PendingInputQueue();
   private remoteDescriptionReady = false;
@@ -477,7 +553,9 @@ export class ClientSession {
   private disconnected = false;
   private lastHostMessageAt = 0;
   private sawRoomInDirectory = false;
+  private roomMissingSince: number | undefined;
   private receivedFirstSnapshot = false;
+  private reconnectPromise?: Promise<void>;
   private bytesReceived = 0;
   private lastBytesReceived = 0;
   private lastStatsAt = performance.now();
@@ -494,12 +572,19 @@ export class ClientSession {
     },
   ) {}
 
-  async connect(room: RoomInfo): Promise<void> {
+  async connect(room: RoomInfo, options: { preserveSnapshotState?: boolean } = {}): Promise<void> {
+    this.cleanupTransport();
     this.currentRoom = room;
     this.disconnected = false;
+    this.sessionId = createId('session');
+    this.remoteDescriptionReady = false;
+    this.pendingIce.length = 0;
     this.lastHostMessageAt = Date.now();
-    this.sawRoomInDirectory = false;
-    this.receivedFirstSnapshot = false;
+    this.sawRoomInDirectory = options.preserveSnapshotState ? this.sawRoomInDirectory : false;
+    this.roomMissingSince = undefined;
+    if (!options.preserveSnapshotState) {
+      this.receivedFirstSnapshot = false;
+    }
     const rtcConfig = await getRtcConfig();
     this.log(describeRtcConfig(rtcConfig));
     this.connection = new RTCPeerConnection(rtcConfig);
@@ -575,12 +660,21 @@ export class ClientSession {
   }
 
   destroy(): void {
+    const shouldLeaveRoom = !this.disconnected;
+    const room = this.currentRoom;
+    if (shouldLeaveRoom) {
+      this.sendLeave();
+      if (room) {
+        void Promise.resolve(this.options.directory.leaveRoom?.(room.roomId, this.options.peerId)).catch((error: unknown) => this.log(`room leave failed: ${readError(error)}`));
+      }
+    }
     this.disconnected = true;
     this.cleanupTransport();
     this.pendingIce.length = 0;
     this.currentRoom = undefined;
     this.localPlayerId = undefined;
     this.sawRoomInDirectory = false;
+    this.roomMissingSince = undefined;
     this.receivedFirstSnapshot = false;
     this.lastHostMessageAt = 0;
   }
@@ -589,16 +683,30 @@ export class ClientSession {
     if (this.disconnected || !this.currentRoom) {
       return;
     }
-    const roomOpen = rooms.some((room) => room.roomId === this.currentRoom?.roomId && room.status !== 'closed');
-    if (roomOpen) {
+    const currentRoom = rooms.find((room) => room.roomId === this.currentRoom?.roomId);
+    if (currentRoom && currentRoom.status !== 'closed') {
+      this.currentRoom = currentRoom;
       this.sawRoomInDirectory = true;
+      this.roomMissingSince = undefined;
+      if (this.receivedFirstSnapshot && Date.now() - this.lastHostMessageAt > CLIENT_RECONNECT_AFTER_SILENCE_MS) {
+        this.requestReconnect('room visible after host silence');
+      }
       return;
     }
     if (!this.sawRoomInDirectory || !this.localPlayerId) {
       return;
     }
-    this.log('room closed');
-    this.notifyDisconnect();
+    if (currentRoom?.status === 'closed') {
+      this.log('room closed');
+      this.notifyDisconnect();
+      return;
+    }
+    const now = Date.now();
+    this.roomMissingSince ??= now;
+    if (now - this.roomMissingSince > CLIENT_ROOM_MISSING_GRACE_MS) {
+      this.log('room missing');
+      this.notifyDisconnect();
+    }
   }
 
   private async handleSignal(signal: RoomSignal): Promise<void> {
@@ -638,9 +746,14 @@ export class ClientSession {
     }
     this.connection.onconnectionstatechange = () => {
       const state = this.connection?.connectionState;
-      if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+      if (state === 'disconnected' || state === 'failed') {
         this.log(`connection ${state}`);
-        this.notifyDisconnect();
+        this.requestReconnect(`connection ${state}`);
+        return;
+      }
+      if (state === 'closed') {
+        this.log('connection closed');
+        this.requestReconnect('connection closed');
       }
     };
   }
@@ -657,7 +770,9 @@ export class ClientSession {
     channel.onerror = () => this.log('control channel error');
     channel.onclose = () => {
       this.log('control channel closed');
-      this.notifyDisconnect();
+      if (this.receivedFirstSnapshot) {
+        this.requestReconnect('control channel closed');
+      }
     };
     channel.onmessage = (event: MessageEvent<string>) => this.handleHostMessage(event.data, event.data.length);
   }
@@ -734,10 +849,71 @@ export class ClientSession {
       }
       return;
     }
-    if (silenceMs > CLIENT_CONNECT_TIMEOUT_MS) {
-      this.log('host timed out');
+    if (silenceMs > CLIENT_RECONNECT_AFTER_SILENCE_MS) {
+      this.requestReconnect('host silent');
+    }
+    if (this.roomMissingSince !== undefined && Date.now() - this.roomMissingSince > CLIENT_ROOM_MISSING_GRACE_MS) {
+      this.log('room missing');
       this.notifyDisconnect();
     }
+  }
+
+  private sendLeave(): void {
+    const channel = this.controlChannel;
+    if (channel?.readyState !== 'open') {
+      return;
+    }
+    try {
+      channel.send(encodeMessage({ type: 'leave' }));
+    } catch {
+      // The browser may already be tearing down the transport.
+    }
+  }
+
+  private requestReconnect(reason: string): void {
+    if (this.disconnected || !this.currentRoom || this.reconnectPromise) {
+      return;
+    }
+    this.reconnectPromise = this.reconnect(reason).finally(() => {
+      this.reconnectPromise = undefined;
+    });
+  }
+
+  private async reconnect(reason: string): Promise<void> {
+    const room = await this.findReconnectRoom();
+    if (this.disconnected) {
+      return;
+    }
+    if (!room) {
+      this.roomMissingSince ??= Date.now();
+      return;
+    }
+    this.log(`reconnecting: ${reason}`);
+    try {
+      await this.connect(room, { preserveSnapshotState: true });
+    } catch (error: unknown) {
+      this.log(`reconnect failed: ${readError(error)}`);
+    }
+  }
+
+  private async findReconnectRoom(): Promise<RoomInfo | undefined> {
+    const roomId = this.currentRoom?.roomId;
+    if (!roomId) {
+      return undefined;
+    }
+    try {
+      if (typeof this.options.directory.refreshRooms === 'function') {
+        await Promise.resolve(this.options.directory.refreshRooms());
+      }
+    } catch (error: unknown) {
+      this.log(`room refresh failed: ${readError(error)}`);
+    }
+    const room = this.options.directory.listRooms().find((candidate) => candidate.roomId === roomId && candidate.status !== 'closed');
+    if (room) {
+      this.currentRoom = room;
+      this.roomMissingSince = undefined;
+    }
+    return room;
   }
 
   private async flushIce(): Promise<void> {
@@ -807,6 +983,7 @@ export class ClientSession {
     }
     this.disconnected = true;
     this.cleanupTransport();
+    this.roomMissingSince = undefined;
     for (const listener of this.disconnectListeners) {
       listener();
     }

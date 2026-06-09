@@ -9,7 +9,8 @@ const MAX_INPUT_EVENTS = 16;
 export type ClientToHostMessage =
   | { type: 'hello'; displayName: string }
   | { type: 'input'; input: PlayerInput; redundantInputs?: PlayerInput[] }
-  | { type: 'ping'; sentAtMs: number };
+  | { type: 'ping'; sentAtMs: number }
+  | { type: 'leave' };
 
 export type HostToClientMessage =
   | { type: 'welcome'; playerId: string; room: RoomInfo; ruleset: Ruleset }
@@ -48,6 +49,8 @@ function isClientMessage(value: unknown): value is ClientToHostMessage {
       return typeof value.displayName === 'string' && value.displayName.trim().length > 0 && value.displayName.length <= MAX_DISPLAY_NAME_LENGTH;
     case 'ping':
       return isFiniteNumber(value.sentAtMs);
+    case 'leave':
+      return true;
     case 'input':
       if (!isPlayerInput(value.input)) {
         return false;

@@ -809,6 +809,34 @@ test('mobile client returns to menu when host leaves', async ({ context, page: h
   await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__ === undefined)).toBeTruthy();
 });
 
+test('client reload rejoins the reserved player slot', async ({ context, page: host }) => {
+  const roomName = `Reload Rejoin ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  const roomRow = client.locator('.room-row').filter({ hasText: roomName });
+  await expect(roomRow).toBeVisible();
+  await roomRow.click();
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+
+  const clientPlayerId = await host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.playerId);
+  expect(clientPlayerId).toBeTruthy();
+
+  await client.reload();
+  await expect(client.locator('#arena-view')).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.filter((player) => player.displayName === 'Client').length ?? 0)).toBe(1);
+  await expect
+    .poll(async () => host.evaluate((playerId) => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.playerId === playerId, clientPlayerId))
+    .toBeTruthy();
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+});
+
 test('multiplayer movement survives dropped snapshot packets', async ({ context, page: host }) => {
   await host.addInitScript(() => {
     const originalSend = RTCDataChannel.prototype.send;
