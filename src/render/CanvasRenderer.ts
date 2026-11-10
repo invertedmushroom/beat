@@ -19,6 +19,7 @@ export class CanvasRenderer {
   private snapshotProvider?: () => EngineSnapshot | undefined;
   private cameraZoom = 1;
   private aimGhost?: Vec2;
+  private predictionGhost?: { playerId: string; x: number; y: number };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const context = canvas.getContext('2d');
@@ -34,6 +35,7 @@ export class CanvasRenderer {
     this.ruleset = ruleset;
     if (!ruleset) {
       this.snapshot = undefined;
+      this.predictionGhost = undefined;
     }
   }
 
@@ -55,6 +57,10 @@ export class CanvasRenderer {
    */
   setAimGhost(point: Vec2 | undefined): void {
     this.aimGhost = point ? { x: point.x, y: point.y } : undefined;
+  }
+
+  setPredictionGhost(ghost: { playerId: string; x: number; y: number } | undefined): void {
+    this.predictionGhost = ghost;
   }
 
   resizeNow(): void {
@@ -247,6 +253,8 @@ export class CanvasRenderer {
       }
     }
 
+    this.drawPredictionGhost(camera);
+
     for (const text of this.snapshot?.combatTexts ?? []) {
       const { x, y } = worldToViewport(camera, text.x, text.y);
       const progress = text.lifetimeTicks > 0 ? text.ageTicks / text.lifetimeTicks : 1;
@@ -298,6 +306,30 @@ export class CanvasRenderer {
     this.ctx.textAlign = 'left';
     this.ctx.fillStyle = '#b9b4a8';
     this.ctx.fillText(`tick ${this.snapshot?.tick ?? 0}`, 16, height - 18);
+  }
+
+  private drawPredictionGhost(camera: CameraState): void {
+    const ghost = this.predictionGhost;
+    const player = this.snapshot?.players.find((entry) => entry.playerId === ghost?.playerId);
+    if (!ghost || !player?.alive || !this.ruleset) return;
+    const predicted = worldToViewport(camera, ghost.x, ghost.y);
+    const authoritative = worldToViewport(camera, player.x, player.y);
+    const radius = this.ruleset.player.radius * camera.scale;
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.65;
+    this.ctx.strokeStyle = '#67e8f9';
+    this.ctx.lineWidth = 2;
+    this.ctx.setLineDash([5, 4]);
+    this.ctx.beginPath();
+    this.ctx.moveTo(authoritative.x, authoritative.y);
+    this.ctx.lineTo(predicted.x, predicted.y);
+    this.ctx.stroke();
+    this.ctx.beginPath();
+    this.ctx.arc(predicted.x, predicted.y, radius, 0, Math.PI * 2);
+    this.ctx.fillStyle = 'rgba(103, 232, 249, 0.16)';
+    this.ctx.fill();
+    this.ctx.stroke();
+    this.ctx.restore();
   }
 
   private drawHpBar(x: number, y: number, width: number, hp: number, maxHp: number, alive: boolean): void {

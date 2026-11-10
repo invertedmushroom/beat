@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier2d-compat';
 import { initializeRapier as prepareRapier } from './rapier';
 import { canStartCharge, chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
-import { movementMultiplier, nextPlayerMovement, playerAim } from './playerMovement';
+import { displacePlayer, isArenaPositionBlocked, movementMultiplier, nextPlayerMovement, playerAim } from './playerMovement';
 import type {
   Ability,
   AbilityEffect,
@@ -2292,33 +2292,11 @@ function movePlayerSafely(player: RuntimePlayer, direction: Vec2, distance: numb
   if (!ruleset || !player.alive) {
     return 0;
   }
-  const unit = normalized(direction.x, direction.y);
-  if (!unit) {
-    return 0;
+  const result = displacePlayer(player.body.translation(), direction, distance, ruleset);
+  if (result.moved > 0) {
+    player.body.setTranslation(result, true);
   }
-  const radius = ruleset.player.radius;
-  const stepDistance = Math.max(0.08, radius * 0.45);
-  let remaining = clamp(distance, 0, 12);
-  let moved = 0;
-  const start = player.body.translation();
-  let current: Vec2 = { x: start.x, y: start.y };
-  while (remaining > 0.001) {
-    const nextDistance = Math.min(stepDistance, remaining);
-    const candidate = {
-      x: current.x + unit.x * nextDistance,
-      y: current.y + unit.y * nextDistance,
-    };
-    if (hitsArenaOrObstacle(candidate, radius)) {
-      break;
-    }
-    current = candidate;
-    moved += nextDistance;
-    remaining -= nextDistance;
-  }
-  if (moved > 0) {
-    player.body.setTranslation(current, true);
-  }
-  return moved;
+  return result.moved;
 }
 
 function findProjectileHit(projectile: RuntimeProjectile, from: Vec2, to: Vec2): RuntimePlayer | undefined {
@@ -2338,21 +2316,7 @@ function findProjectileHit(projectile: RuntimeProjectile, from: Vec2, to: Vec2):
 }
 
 function hitsArenaOrObstacle(point: Vec2, radius: number): boolean {
-  if (!ruleset) {
-    return true;
-  }
-  const halfW = ruleset.arena.width / 2;
-  const halfH = ruleset.arena.height / 2;
-  if (point.x < -halfW + radius || point.x > halfW - radius || point.y < -halfH + radius || point.y > halfH - radius) {
-    return true;
-  }
-  return ruleset.obstacles.some(
-    (obstacle) =>
-      point.x >= obstacle.x - obstacle.halfWidth - radius &&
-      point.x <= obstacle.x + obstacle.halfWidth + radius &&
-      point.y >= obstacle.y - obstacle.halfHeight - radius &&
-      point.y <= obstacle.y + obstacle.halfHeight + radius,
-  );
+  return !ruleset || isArenaPositionBlocked(point, radius, ruleset);
 }
 
 function addImpact(x: number, y: number, radius: number, color: string): void {

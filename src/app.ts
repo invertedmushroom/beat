@@ -1490,7 +1490,7 @@ export class BeatApp {
       this.mode === 'client' ? (this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []) ?? snapshot) : snapshot;
     if (this.snapshotSmoother) this.smoothingStats = this.snapshotSmoother.stats();
     if (this.ruleset && this.mode !== 'idle' && this.mode !== 'replay') {
-      this.replays.capture(this.ruleset, this.mode, snapshot, this.localPlayerId, this.smoothingStats);
+      this.replays.capture(this.ruleset, this.mode, snapshot, this.localPlayerId, this.smoothingStats, this.snapshotSmoother?.predictionAtTick(snapshot.tick));
     }
     this.lastSnapshot = presentationSnapshot;
     window.__BEAT_SNAPSHOT__ = presentationSnapshot;
@@ -1523,6 +1523,7 @@ export class BeatApp {
     this.renderer.setSnapshotProvider(() => {
       const view = this.replays.render(performance.now());
       if (!view) return undefined;
+      this.renderer.setPredictionGhost(view.predictionGhost);
       this.lastSnapshot = view.snapshot;
       window.__BEAT_SNAPSHOT__ = view.snapshot;
       window.__BEAT_RENDER_SNAPSHOT__ = view.snapshot;
@@ -2072,6 +2073,7 @@ function shellHtml(): string {
             <button id="replay-back" class="button" type="button" aria-label="Previous replay frame">−1 frame</button>
             <button id="replay-forward" class="button" type="button" aria-label="Next replay frame">+1 frame</button>
             <label>Speed <select id="replay-speed" aria-label="Replay speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+            <label><input id="replay-ghost" type="checkbox" checked /> Prediction ghost</label>
           </div>
           <input id="replay-timeline" type="range" min="0" max="0" step="1" value="0" aria-label="Replay position" />
           <div id="replay-time"></div>

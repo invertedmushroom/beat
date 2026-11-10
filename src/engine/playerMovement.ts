@@ -59,6 +59,29 @@ export function playerAim(input: MovementInput, facing: Vec2, rules: Ruleset['pl
     (rules.movement.mode === 'tank' ? undefined : normalized(input.moveX, input.moveY)) ?? facing;
 }
 
+export function isArenaPositionBlocked(point: Vec2, radius: number, rules: Pick<Ruleset, 'arena' | 'obstacles'>): boolean {
+  if (point.x < -rules.arena.width / 2 + radius || point.x > rules.arena.width / 2 - radius ||
+      point.y < -rules.arena.height / 2 + radius || point.y > rules.arena.height / 2 - radius) return true;
+  return rules.obstacles.some((box) => point.x >= box.x - box.halfWidth - radius && point.x <= box.x + box.halfWidth + radius &&
+    point.y >= box.y - box.halfHeight - radius && point.y <= box.y + box.halfHeight + radius);
+}
+
+/** The authority's bounded displacement rule for dashes and knockback. */
+export function displacePlayer(position: Vec2, direction: Vec2, distance: number, rules: Ruleset): Vec2 & { moved: number } {
+  const unit = normalized(direction.x, direction.y);
+  let x = position.x, y = position.y, moved = 0;
+  if (!unit) return { x, y, moved };
+  let remaining = Math.max(0, Math.min(12, distance));
+  const stride = Math.max(0.08, rules.player.radius * 0.45);
+  while (remaining > 0.001) {
+    const step = Math.min(stride, remaining);
+    const candidate = { x: x + unit.x * step, y: y + unit.y * step };
+    if (isArenaPositionBlocked(candidate, rules.player.radius, rules)) break;
+    x = candidate.x; y = candidate.y; moved += step; remaining -= step;
+  }
+  return { x, y, moved };
+}
+
 function clamp(value: number): number { return Math.max(-1, Math.min(1, value)); }
 function normalized(x: number, y: number): Vec2 | undefined {
   const length = Math.hypot(x, y);

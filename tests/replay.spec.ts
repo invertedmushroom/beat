@@ -1,7 +1,82 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { createDefaultRuleset } from '../src/engine/defaultRules';
 import type { EngineSnapshot } from '../src/engine/protocol';
-import { ReplayRecorder, serializeReplay } from '../src/replay/archive';
+import { parseReplay, ReplayRecorder, serializeReplay } from '../src/replay/archive';
+
+test('client recordings retain aligned ghosts and show a predicted dash before delayed input reaches the host', async ({ page: host, context }, testInfo) => {
+  await host.goto('/');
+  const roomName = `Ghost ${Date.now()}`;
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await host.getByRole('button', { name: 'Host', exact: true }).click();
+  const client = await context.newPage();
+  await client.addInitScript(() => {
+    const state = { hold: false, queued: [] as Array<() => void>, ghostStrokes: 0 };
+    Object.assign(window, { ghostTest: state });
+    const create = RTCPeerConnection.prototype.createDataChannel;
+    RTCPeerConnection.prototype.createDataChannel = function (...args) {
+      const channel = create.apply(this, args);
+      if (args[0] === 'beat-input') {
+        const send = channel.send.bind(channel);
+        channel.send = ((data: string) => { if (state.hold) state.queued.push(() => send(data)); else send(data); }) as typeof channel.send;
+      }
+      return channel;
+    };
+    const stroke = CanvasRenderingContext2D.prototype.stroke;
+    CanvasRenderingContext2D.prototype.stroke = function (...args: Parameters<typeof stroke>) {
+      if (this.strokeStyle === '#67e8f9') state.ghostStrokes++;
+      stroke.apply(this, args);
+    };
+  });
+  await client.goto('/');
+  await client.locator('#display-name').fill('Client');
+  await client.locator('.room-row').filter({ hasText: roomName }).click();
+  await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
+  await client.bringToFront();
+  const start = await host.evaluate(() => window.__BEAT_SNAPSHOT__!.players.find((player) => player.displayName === 'Client')!.x);
+  await client.keyboard.down('Digit4');
+  await expect.poll(() => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.charging?.chargeTicks ?? 0)).toBeGreaterThan(3);
+  await client.evaluate(() => { (window as unknown as { ghostTest: { hold: boolean } }).ghostTest.hold = true; });
+  await client.keyboard.up('Digit4');
+  await expect.poll(() => client.evaluate(() => window.__BEAT_RENDER_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.x ?? 0)).toBeGreaterThan(start + 1.5);
+  expect(await host.evaluate(() => window.__BEAT_SNAPSHOT__!.players.find((player) => player.displayName === 'Client')!.x)).toBeCloseTo(start, 1);
+  await client.evaluate(() => {
+    const state = (window as unknown as { ghostTest: { hold: boolean; queued: Array<() => void> } }).ghostTest;
+    state.hold = false;
+    for (const send of state.queued.splice(0)) send();
+  });
+  await expect.poll(() => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.find((player) => player.displayName === 'Client')?.x ?? 0)).toBeGreaterThan(start + 1.5);
+  const tick = await client.evaluate(() => window.__BEAT_SNAPSHOT__!.tick);
+  await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.tick ?? 0)).toBeGreaterThan(tick + 35);
+  const downloadEvent = client.waitForEvent('download');
+  await client.locator('#export-live-replay').click();
+  const download = await downloadEvent;
+  const clip = parseReplay(Uint8Array.from(await readFile((await download.path())!)).buffer);
+  const index = clip.frames.findIndex((frame, i) => frame.diagnostics?.predictedPosition && clip.frames[i + 1]?.diagnostics?.predictedPosition);
+  expect(index).toBeGreaterThanOrEqual(0);
+  await client.getByRole('button', { name: 'Menu', exact: true }).click();
+  await client.locator('#watch-replay').click();
+  await client.locator('#replay-timeline').fill(String(Math.ceil((clip.frames[index].tick - clip.frames[0].tick) / clip.metadata.ruleset.tickRate * 1000)));
+  await expect(client.locator('#replay-details')).toContainText('Aligned error:');
+  await expect(client.getByLabel('Prediction ghost')).toBeEnabled();
+  const strokes = () => client.evaluate(() => (window as unknown as { ghostTest: { ghostStrokes: number } }).ghostTest.ghostStrokes);
+  await expect.poll(strokes).toBeGreaterThan(0);
+  await client.getByLabel('Prediction ghost').uncheck();
+  await client.evaluate(() => new Promise(requestAnimationFrame));
+  const stopped = await strokes();
+  await client.evaluate(() => new Promise(requestAnimationFrame));
+  expect(await strokes()).toBe(stopped);
+  await client.getByLabel('Prediction ghost').check();
+  await expect.poll(strokes).toBeGreaterThan(stopped);
+  await client.setViewportSize({ width: 390, height: 844 });
+  await client.screenshot({ path: testInfo.outputPath('prediction-ghost.png') });
+  await client.getByRole('button', { name: 'Menu', exact: true }).click();
+  await client.evaluate(() => new Promise(requestAnimationFrame));
+  const left = await strokes();
+  await client.evaluate(() => new Promise(requestAnimationFrame));
+  expect(await strokes()).toBe(left);
+});
 
 for (const tickRate of [60, 120]) {
   test(`replay buttons step between recorded samples at ${tickRate} Hz`, async ({ page }) => {

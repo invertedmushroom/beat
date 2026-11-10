@@ -1,5 +1,5 @@
 import type { EngineSnapshot, Ruleset } from '../engine/protocol';
-import type { SnapshotSmoothingStats } from '../net/snapshotSmoothing';
+import type { AlignedPrediction, SnapshotSmoothingStats } from '../net/snapshotSmoothing';
 import { MAX_REPLAY_FILE_BYTES, parseReplay, ReplayRecorder, serializeReplay, type ReplayClip, type ReplaySource } from '../replay/archive';
 import { ReplayPlayer, type ReplayView } from '../replay/player';
 
@@ -17,6 +17,7 @@ export class ReplayFeature {
   private readonly speed: HTMLSelectElement;
   private readonly time: HTMLElement;
   private readonly details: HTMLElement;
+  private readonly ghostToggle: HTMLInputElement;
   private readonly downloads = new Map<string, number>();
   private recorder?: ReplayRecorder;
   private retained?: ReplayClip;
@@ -47,6 +48,7 @@ export class ReplayFeature {
     this.speed = node('#replay-speed');
     this.time = node('#replay-time');
     this.details = node('#replay-details');
+    this.ghostToggle = node('#replay-ghost');
     const options = { signal: this.events.signal };
     this.watch.addEventListener('click', () => { const clip = this.currentClip(); if (clip) this.onOpen(clip); }, options);
     for (const button of this.exports) button.addEventListener('click', () => this.download(), options);
@@ -71,7 +73,7 @@ export class ReplayFeature {
     this.syncButtons();
   }
 
-  capture(rules: Ruleset, source: ReplaySource, snapshot: EngineSnapshot, localPlayerId?: string, stats?: SnapshotSmoothingStats): void {
+  capture(rules: Ruleset, source: ReplaySource, snapshot: EngineSnapshot, localPlayerId?: string, stats?: SnapshotSmoothingStats, prediction?: AlignedPrediction): void {
     if (this.destroyed || this.recordingFailed) return;
     try {
       const rulesChanged = rules !== this.rules && JSON.stringify(rules) !== this.rulesJson;
@@ -87,6 +89,7 @@ export class ReplayFeature {
       this.rules = rules;
       this.recorded = this.recorder.record(snapshot, source === 'client' && stats ? {
         pendingInputs: stats.pendingInputs, predictionError: stats.predictionErrorEwma, snapCorrections: stats.snapCorrections,
+        predictedPosition: prediction?.tick === snapshot.tick ? { x: prediction.x, y: prediction.y } : undefined,
       } : undefined) || this.recorded;
       this.liveStatus.textContent = 'Recording replay';
       for (const button of this.exports) button.disabled = !this.recorded;
@@ -122,6 +125,8 @@ export class ReplayFeature {
     this.timeline.max = String(clip.durationMs);
     this.timeline.value = '0';
     this.speed.value = '1';
+    this.ghostToggle.checked = true;
+    this.ghostToggle.disabled = !clip.frames.some((frame) => frame.diagnostics?.predictedPosition);
     this.syncButtons();
   }
 
@@ -132,10 +137,13 @@ export class ReplayFeature {
     this.toggle.setAttribute('aria-pressed', String(view.playing));
     this.timeline.value = String(view.positionMs);
     this.time.textContent = `${seconds(view.positionMs)} / ${seconds(view.durationMs)} · tick ${view.snapshot.tick}`;
+    const ghost = view.predictionGhost;
+    const player = view.snapshot.players.find((entry) => entry.playerId === ghost?.playerId);
+    const error = ghost && player ? `Aligned error: ${Math.hypot(ghost.x - player.x, ghost.y - player.y).toFixed(3)} m` : 'No aligned prediction sample';
     this.details.textContent = view.diagnostics
-      ? `Recorded prediction error (avg): ${view.diagnostics.predictionError.toFixed(3)} m · pending inputs ${view.diagnostics.pendingInputs} · corrections ${view.diagnostics.snapCorrections}`
+      ? `${error} · avg ${view.diagnostics.predictionError.toFixed(3)} m · pending inputs ${view.diagnostics.pendingInputs} · corrections ${view.diagnostics.snapCorrections}`
       : 'Recorded authoritative state';
-    return view;
+    return { ...view, predictionGhost: this.ghostToggle.checked ? ghost : undefined };
   }
 
   destroy(): void {

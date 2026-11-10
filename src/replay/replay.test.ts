@@ -10,6 +10,22 @@ const metadata = { version: 1 as const, ruleset: rules, source: 'client' as cons
 const diagnostics = { pendingInputs: 3, predictionError: 0.12, snapCorrections: 2 };
 
 describe('bounded replay archives', () => {
+  it('stores an optional aligned prediction in four arena-quantized bytes', () => {
+    const withGhost = new ReplayRecorder(metadata), withoutGhost = new ReplayRecorder(metadata);
+    const predictedPosition = { x: 1.234, y: -3.456 };
+    withGhost.record(snapshot(1), { ...diagnostics, predictedPosition });
+    withoutGhost.record(snapshot(1), diagnostics);
+    const encoded = serializeReplay(withGhost.clip()!);
+    expect(encoded.length - serializeReplay(withoutGhost.clip()!).length).toBe(4);
+    predictedPosition.x = 99;
+    const parsed = parseReplay(encoded.buffer);
+    expect(parsed.frames[0].diagnostics?.predictedPosition?.x).toBeCloseTo(1.234, 2);
+    expect(parsed.frames[0].diagnostics?.predictedPosition?.y).toBeCloseTo(-3.456, 2);
+    const offset = 12 + new DataView(encoded.buffer).getUint32(8, true);
+    const missingDiagnostics = encoded.slice(); missingDiagnostics[offset] &= ~2;
+    expect(() => parseReplay(missingDiagnostics.buffer)).toThrow();
+    expect(() => withGhost.record(snapshot(2), { ...diagnostics, predictedPosition: { x: NaN, y: 0 } })).toThrow(/prediction/);
+  });
   it.each([1, 2] as const)('imports archives containing codec v%s snapshots', (version) => {
     const encoder = new SnapshotEncoder(rules.arena, 60, version);
     const frames = [1, 2].map((tick) => {
@@ -119,6 +135,26 @@ describe('bounded replay archives', () => {
 });
 
 describe('visual replay playback', () => {
+  it('interpolates ghost and authoritative samples together, with no ghost across missing or respawned samples', () => {
+    const recorder = new ReplayRecorder(metadata);
+    recorder.record(snapshot(1), { ...diagnostics, predictedPosition: { x: 1, y: 0 } });
+    recorder.record(snapshot(2), { ...diagnostics, predictedPosition: { x: 3, y: 0 } });
+    const respawn = snapshot(3); respawn.players[0].respawnTick = 3;
+    recorder.record(respawn, { ...diagnostics, predictedPosition: { x: 6, y: 0 } });
+    recorder.record(snapshot(4), diagnostics);
+    const player = new ReplayPlayer(parseReplay(serializeReplay(recorder.clip()!).buffer));
+    player.seek(500 / rules.tickRate);
+    const view = player.frame(0);
+    expect(view.predictionGhost?.playerId).toBe('p1');
+    expect(view.predictionGhost?.x).toBeCloseTo(2, 2);
+    expect(view.snapshot.players[0].x).toBeCloseTo(0.15, 2);
+    player.seek(1500 / rules.tickRate);
+    expect(player.frame(0).predictionGhost).toBeUndefined();
+    player.seek(3000 / rules.tickRate);
+    expect(player.frame(0).predictionGhost).toBeUndefined();
+    player.seek(0);
+    expect(player.frame(0).predictionGhost?.x).toBeCloseTo(1, 2);
+  });
   it.each([30, 60, 120])('steps between recorded samples at %sHz, including gaps and interpolated positions', (tickRate) => {
     const custom = structuredClone(metadata);
     custom.ruleset.tickRate = tickRate;

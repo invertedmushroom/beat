@@ -1,6 +1,6 @@
 import type { EngineSnapshot, Ruleset } from '../engine/protocol';
 import { validateRuleset } from '../engine/rulesValidation';
-import { MAX_SNAPSHOT_FRAME_BYTES, SNAPSHOT_PACKET_BYTES, SnapshotDecoder, SnapshotEncoder } from '../net/snapshotCodec';
+import { dequantizePosition, quantizePosition, MAX_SNAPSHOT_FRAME_BYTES, SNAPSHOT_PACKET_BYTES, SnapshotDecoder, SnapshotEncoder } from '../net/snapshotCodec';
 
 export const MAX_REPLAY_BYTES = 16 * 1024 * 1024;
 export const MAX_REPLAY_DURATION_MS = 5 * 60_000;
@@ -9,7 +9,7 @@ const MAX_FRAMES = 10_000;
 const MAGIC = new TextEncoder().encode('BEATRPL1');
 
 export type ReplaySource = 'solo' | 'lab' | 'host' | 'client';
-export type ReplayDiagnostics = { pendingInputs: number; predictionError: number; snapCorrections: number };
+export type ReplayDiagnostics = { pendingInputs: number; predictionError: number; snapCorrections: number; predictedPosition?: { x: number; y: number } };
 export type ReplayMetadata = { version: 1; ruleset: Ruleset; source: ReplaySource; recordedAt: number; localPlayerId?: string };
 export type ReplayFrame = { tick: number; keyframe: boolean; packets: readonly Uint8Array[]; diagnostics?: ReplayDiagnostics };
 export type ReplayClip = Readonly<{ metadata: ReplayMetadata; frames: readonly ReplayFrame[]; bytes: number; durationMs: number }>;
@@ -33,6 +33,8 @@ export class ReplayRecorder {
   record(snapshot: EngineSnapshot, diagnostics?: ReplayDiagnostics): boolean {
     if (snapshot.tick - this.lastTick < Math.max(1, Math.ceil(this.metadata.ruleset.tickRate / 30))) return false;
     if (snapshot.rulesetId !== this.metadata.ruleset.id) throw new Error('Replay ruleset changed');
+    if (diagnostics?.predictedPosition && (this.metadata.source !== 'client' || !this.metadata.localPlayerId ||
+      !Number.isFinite(diagnostics.predictedPosition.x) || !Number.isFinite(diagnostics.predictedPosition.y))) throw new Error('Invalid replay prediction sample');
     const current = this.groups.at(-1);
     // Reserve an upper bound for the next frame before encoding: a new
     // checkpoint allows the preceding group to be evicted without breaking ACK dependencies.
@@ -40,7 +42,7 @@ export class ReplayRecorder {
     const packets = this.encoder.encode(snapshot);
     if (!packets.length) return false;
     const frame: ReplayFrame = { tick: snapshot.tick, keyframe: new DataView(packets[0].buffer).getUint32(8) === 0xffffffff, packets,
-      diagnostics: diagnostics ? { ...diagnostics } : undefined };
+      diagnostics: diagnostics ? { ...diagnostics, predictedPosition: diagnostics.predictedPosition ? { ...diagnostics.predictedPosition } : undefined } : undefined };
     const size = frameBytes(frame);
     if (size > this.limits.maxBytes) throw new Error('Snapshot exceeds replay recording budget');
     if (frame.keyframe) this.groups.push({ frames: [], bytes: 0 });
@@ -75,13 +77,17 @@ export function serializeReplay(clip: ReplayClip): Uint8Array<ArrayBuffer> {
   bytes.set(metadata, 12);
   let offset = 12 + metadata.length;
   for (const frame of clip.frames) {
-    data.setUint8(offset++, Number(frame.keyframe) | (frame.diagnostics ? 2 : 0));
+    data.setUint8(offset++, Number(frame.keyframe) | (frame.diagnostics ? 2 : 0) | (frame.diagnostics?.predictedPosition ? 4 : 0));
     data.setUint32(offset, frame.tick, true); offset += 4;
     data.setUint16(offset, frame.packets.length, true); offset += 2;
     if (frame.diagnostics) {
       data.setUint16(offset, frame.diagnostics.pendingInputs, true); offset += 2;
       data.setFloat64(offset, frame.diagnostics.predictionError, true); offset += 8;
       data.setUint32(offset, frame.diagnostics.snapCorrections, true); offset += 4;
+      if (frame.diagnostics.predictedPosition) {
+        data.setUint16(offset, quantizePosition(frame.diagnostics.predictedPosition.x, clip.metadata.ruleset.arena.width), true); offset += 2;
+        data.setUint16(offset, quantizePosition(frame.diagnostics.predictedPosition.y, clip.metadata.ruleset.arena.height), true); offset += 2;
+      }
     }
     for (const packet of frame.packets) {
       data.setUint16(offset, packet.length, true); offset += 2;
@@ -110,9 +116,13 @@ export function parseReplay(buffer: ArrayBuffer): ReplayClip {
   while (reader.remaining > 0) {
     if (frames.length >= MAX_FRAMES) throw new Error('Replay has too many frames');
     const flags = reader.u8(), tick = reader.u32(), count = reader.u16();
-    if (flags > 3 || tick <= lastTick || count < 1 || count > 512 || (!frames.length && !(flags & 1))) throw new Error('Invalid replay frame index');
-    const diagnostics = flags & 2 ? { pendingInputs: reader.u16(), predictionError: reader.f64(), snapCorrections: reader.u32() } : undefined;
+    if (flags > 7 || tick <= lastTick || count < 1 || count > 512 || (!frames.length && !(flags & 1)) ||
+      ((flags & 4) && (!(flags & 2) || !metadata.localPlayerId || metadata.source !== 'client'))) throw new Error('Invalid replay frame index');
+    const diagnostics: ReplayDiagnostics | undefined = flags & 2 ? { pendingInputs: reader.u16(), predictionError: reader.f64(), snapCorrections: reader.u32() } : undefined;
     if (diagnostics && (diagnostics.pendingInputs > 64 || !Number.isFinite(diagnostics.predictionError) || diagnostics.predictionError < 0)) throw new Error('Invalid replay diagnostics');
+    if ((flags & 4) && diagnostics) diagnostics.predictedPosition = {
+      x: dequantizePosition(reader.u16(), metadata.ruleset.arena.width), y: dequantizePosition(reader.u16(), metadata.ruleset.arena.height),
+    };
     const packets: Uint8Array<ArrayBuffer>[] = [];
     let snapshot: EngineSnapshot | undefined;
     for (let i = 0; i < count; i++) {
@@ -139,7 +149,7 @@ export function parseReplay(buffer: ArrayBuffer): ReplayClip {
 }
 
 function frameBytes(frame: ReplayFrame): number {
-  return 7 + (frame.diagnostics ? 14 : 0) + frame.packets.reduce((sum, packet) => sum + 2 + packet.length, 0);
+  return 7 + (frame.diagnostics ? 14 : 0) + (frame.diagnostics?.predictedPosition ? 4 : 0) + frame.packets.reduce((sum, packet) => sum + 2 + packet.length, 0);
 }
 function makeClip(metadata: ReplayMetadata, frames: readonly ReplayFrame[], bytes: number): ReplayClip {
   return { metadata, frames, bytes, durationMs: (frames.at(-1)!.tick - frames[0].tick) / metadata.ruleset.tickRate * 1000 };

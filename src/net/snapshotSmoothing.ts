@@ -1,6 +1,6 @@
 import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
 import { applyPlatformGravity } from '../engine/platformMovement';
-import { movementMultiplier, nextPlayerMovement, playerAim } from '../engine/playerMovement';
+import { displacePlayer, isArenaPositionBlocked, movementMultiplier, nextPlayerMovement, playerAim } from '../engine/playerMovement';
 import { canStartCharge } from '../engine/charge';
 import type { CollisionPrediction } from './collisionPrediction';
 
@@ -9,6 +9,9 @@ export const MAX_EXTRAPOLATION_SECONDS = 0.15;
 export const MAX_SNAPSHOT_HISTORY = 12;
 export const LOCAL_RECONCILE_RATE = 9;
 export const LOCAL_SNAP_DISTANCE = 2.4;
+const MAX_PREDICTION_HISTORY = 128;
+export type AlignedPrediction = Readonly<{ tick: number; x: number; y: number }>;
+type PredictionStep = { steps: number; sequence: number; x: number; y: number };
 
 type PlayerSnapshot = EngineSnapshot['players'][number];
 type ProjectileSnapshot = EngineSnapshot['projectiles'][number];
@@ -34,7 +37,10 @@ export class SnapshotSmoother {
   private readonly playerHistory = new Map<string, Array<Timed<PlayerSnapshot>>>();
   private readonly projectileHistory = new Map<string, Array<Timed<ProjectileSnapshot>>>();
   private readonly extrapolatingIds = new Set<string>();
-  private renderedLocal?: { x: number; y: number };
+  private readonly predictionHistory = new Map<number, { x: number; y: number; sequence: number; respawnTick: number }>();
+  private alignedPrediction?: AlignedPrediction;
+  private correctionOffset = { x: 0, y: 0 };
+  private correctionRate = LOCAL_RECONCILE_RATE;
   private lastRenderAtMs?: number;
   private predictionErrorEwma = 0;
   private predictionErrorMax = 0;
@@ -43,7 +49,6 @@ export class SnapshotSmoother {
   private remoteExtrapolationSeconds = 0;
   private snapshotGapEwma = 0;
   private snapshotGapMax = 0;
-  private measuredPredictionTick = -1;
   private pendingInputCount = 0;
   private collisionPrediction?: CollisionPrediction;
   private destroyed = false;
@@ -63,15 +68,44 @@ export class SnapshotSmoother {
     this.destroyed = true;
     this.collisionPrediction?.destroy();
     this.collisionPrediction = undefined;
+    this.predictionHistory.clear();
+    this.alignedPrediction = undefined;
   }
 
   setLocalPlayer(playerId: string | undefined): void {
     this.localPlayerId = playerId;
-    this.renderedLocal = undefined;
+    this.predictionHistory.clear();
+    this.alignedPrediction = undefined;
+    this.correctionOffset = { x: 0, y: 0 };
   }
 
   pushAuthoritative(snapshot: EngineSnapshot, receivedAtMs = performance.now()): void {
     if (this.latest && snapshot.tick <= this.latest.tick) return;
+    const player = snapshot.players.find((entry) => entry.playerId === this.localPlayerId);
+    const previousPlayer = this.latest?.players.find((entry) => entry.playerId === this.localPlayerId);
+    const sameLife = player?.alive && previousPlayer?.alive && player.respawnTick === previousPlayer.respawnTick;
+    const predicted = this.predictionHistory.get(snapshot.tick);
+    this.alignedPrediction = undefined;
+    if (sameLife && predicted && predicted.sequence === player.lastInputSequence && predicted.respawnTick === player.respawnTick) {
+      this.alignedPrediction = { tick: snapshot.tick, x: predicted.x, y: predicted.y };
+      const error = distance(predicted, player);
+      this.predictionErrorEwma = this.predictionErrorEwma * 0.9 + error * 0.1;
+      this.predictionErrorMax = Math.max(this.predictionErrorMax, error);
+      const { zero, soft, hard } = this.reconciliationThresholds();
+      if (error > zero) {
+        this.correctionOffset.x += predicted.x - player.x;
+        this.correctionOffset.y += predicted.y - player.y;
+      }
+      const offset = Math.hypot(this.correctionOffset.x, this.correctionOffset.y);
+      if (error >= hard || offset >= hard) { this.correctionOffset = { x: 0, y: 0 }; this.snapCorrections++; }
+      this.correctionRate = LOCAL_RECONCILE_RATE + 15 * Math.max(0, Math.min(1, (offset - soft) / (hard - soft)));
+    } else {
+      // Coalesced inputs, missed predictions, and life changes have no matching
+      // timeline. Accept the new anchor without manufacturing an error sample.
+      this.correctionOffset = { x: 0, y: 0 };
+    }
+    if (!sameLife) this.predictionHistory.clear();
+    for (const tick of this.predictionHistory.keys()) if (tick <= snapshot.tick) this.predictionHistory.delete(tick);
     if (this.latest && snapshot.tick > this.latest.tick) {
       const gap = (snapshot.tick - this.latest.tick) / this.ruleset.tickRate;
       this.snapshotGapEwma = this.snapshotGapEwma * 0.9 + gap * 0.1;
@@ -82,6 +116,15 @@ export class SnapshotSmoother {
     this.latestReceivedAtMs = receivedAtMs;
     this.ingestPlayers(snapshot);
     this.ingestProjectiles(snapshot);
+  }
+
+  predictionAtTick(tick: number): AlignedPrediction | undefined {
+    return this.alignedPrediction?.tick === tick ? this.alignedPrediction : undefined;
+  }
+
+  private reconciliationThresholds(): { zero: number; soft: number; hard: number } {
+    return { zero: Math.max(0.001, Math.hypot(this.ruleset.arena.width, this.ruleset.arena.height) / 65535 * 2),
+      soft: Math.max(0.15, this.ruleset.player.radius * 0.5), hard: Math.max(LOCAL_SNAP_DISTANCE, this.ruleset.player.radius * 5) };
   }
 
   render(nowMs: number, pendingInputs: readonly PlayerInput[] = []): EngineSnapshot | undefined {
@@ -157,27 +200,20 @@ export class SnapshotSmoother {
   }
 
   private predictLocalPlayer(player: PlayerSnapshot, pendingInputs: readonly PlayerInput[], dt: number): PlayerSnapshot {
-    const target = replayPendingInputs(player, pendingInputs, this.ruleset, this.collisionPrediction?.stepLocal);
-    const current = this.renderedLocal ?? { x: player.x, y: player.y };
-    const correction = distance(current, target);
-
-    if (this.latest && this.measuredPredictionTick !== this.latest.tick) {
-      this.predictionErrorEwma = this.predictionErrorEwma * 0.9 + correction * 0.1;
-      this.predictionErrorMax = Math.max(this.predictionErrorMax, correction);
-      this.measuredPredictionTick = this.latest.tick;
+    const target = replayPendingInputs(player, pendingInputs, this.ruleset, this.collisionPrediction?.stepLocal, (step) => {
+      const tick = this.latest!.tick + step.steps;
+      this.predictionHistory.set(tick, { x: step.x, y: step.y, sequence: step.sequence, respawnTick: player.respawnTick });
+      while (this.predictionHistory.size > MAX_PREDICTION_HISTORY) this.predictionHistory.delete(this.predictionHistory.keys().next().value!);
+    });
+    const decay = Math.exp(-this.correctionRate * dt);
+    this.correctionOffset.x *= decay; this.correctionOffset.y *= decay;
+    if (Math.hypot(this.correctionOffset.x, this.correctionOffset.y) <= this.reconciliationThresholds().zero) this.correctionOffset = { x: 0, y: 0 };
+    let next = { x: target.x + this.correctionOffset.x, y: target.y + this.correctionOffset.y };
+    if ((this.correctionOffset.x !== 0 || this.correctionOffset.y !== 0) && isArenaPositionBlocked(next, this.ruleset.player.radius, this.ruleset)) {
+      this.correctionOffset = { x: 0, y: 0 };
+      next = target;
+      this.snapCorrections++;
     }
-
-    const shouldSnap = correction > LOCAL_SNAP_DISTANCE;
-    const blend = shouldSnap ? 1 : Math.min(1, dt * LOCAL_RECONCILE_RATE);
-    if (shouldSnap) {
-      this.snapCorrections += 1;
-    }
-
-    const next = {
-      x: current.x + (target.x - current.x) * blend,
-      y: current.y + (target.y - current.y) * blend,
-    };
-    this.renderedLocal = next;
 
     return {
       ...player,
@@ -269,6 +305,7 @@ export function replayPendingInputs(
   pendingInputs: readonly PlayerInput[],
   ruleset: Ruleset,
   integrate?: (state: { x: number; y: number }, velocity: { x: number; y: number }) => { x: number; y: number; vx: number; vy: number },
+  onStep?: (step: PredictionStep) => void,
 ): Pick<PlayerSnapshot, 'x' | 'y' | 'vx' | 'vy' | 'aimDx' | 'aimDy' | 'facingDx' | 'facingDy'> {
   if (!authoritative.alive) return authoritative;
   let x = authoritative.x, y = authoritative.y;
@@ -289,8 +326,19 @@ export function replayPendingInputs(
     ? { ability: chargedAbility, slot: authoritative.charging.slot, startedStep: -authoritative.charging.chargeTicks }
     : undefined;
   let step = 0;
+  let lastSequence = authoritative.lastInputSequence;
+  const applyCast = (ability: NonNullable<typeof abilities[number]>) => {
+    // Aim-assisted movement depends on authoritative target selection.
+    if (ability.targeting !== 'free-aim') return;
+    for (const effect of ability.effects ?? []) {
+      if (effect.kind !== 'selfDash') continue;
+      const displaced = displacePlayer({ x, y }, aim, effect.distance, ruleset);
+      x = displaced.x; y = displaced.y;
+    }
+  };
   for (const input of pendingInputs.slice().sort((a, b) => a.sequence - b.sequence)) {
-    if (input.sequence <= authoritative.lastInputSequence) continue;
+    if (input.sequence <= lastSequence) continue;
+    lastSequence = input.sequence;
     for (const slot of input.slotPresses) {
       const ability = abilities[slot];
       if (canStartCharge(ability, Boolean(charging), (cooldowns.get(ability?.id ?? '') ?? 0) - step)) charging = { ability, slot, startedStep: step };
@@ -300,6 +348,20 @@ export function replayPendingInputs(
     facing = next.facing;
     aim = playerAim(input, facing, ruleset.player);
     jumpHeld = next.jumpHeld;
+    // The authority applies cast/release effects after desired movement is
+    // selected, but before Rapier integrates that tick.
+    for (const slot of input.castSlots) {
+      const ability = abilities[slot];
+      if (ability && !ability.charge && (cooldowns.get(ability.id) ?? 0) <= step) {
+        cooldowns.set(ability.id, step + ability.cooldownTicks);
+        applyCast(ability);
+      }
+    }
+    if (charging && (input.slotReleases.includes(charging.slot) || (charging.ability.charge!.autoRelease && step - charging.startedStep >= charging.ability.charge!.maxTicks))) {
+      cooldowns.set(charging.ability.id, step + charging.ability.cooldownTicks);
+      applyCast(charging.ability);
+      charging = undefined;
+    }
     if (integrate) {
       const integrated = integrate({ x, y }, next.velocity);
       x = integrated.x; y = integrated.y;
@@ -314,15 +376,8 @@ export function replayPendingInputs(
       const damping = 1 + ruleset.player.damping * dt;
       velocity = { x: velocity.x / damping, y: velocity.y / damping };
     }
-    for (const slot of input.castSlots) {
-      const ability = abilities[slot];
-      if (ability && !ability.charge && (cooldowns.get(ability.id) ?? 0) <= step) cooldowns.set(ability.id, step + ability.cooldownTicks);
-    }
-    if (charging && (input.slotReleases.includes(charging.slot) || (charging.ability.charge!.autoRelease && step - charging.startedStep >= charging.ability.charge!.maxTicks))) {
-      cooldowns.set(charging.ability.id, step + charging.ability.cooldownTicks);
-      charging = undefined;
-    }
     step++;
+    onStep?.({ steps: step, sequence: input.sequence, x, y });
   }
   if (ruleset.player.aim.mode === 'facing') aim = facing;
   return { x, y, vx: velocity.x, vy: velocity.y, aimDx: aim.x, aimDy: aim.y, facingDx: facing.x, facingDy: facing.y };

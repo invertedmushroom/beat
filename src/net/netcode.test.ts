@@ -62,10 +62,10 @@ describe('responsive netcode helpers', () => {
     const replay = replayPendingInputs(playerAt('local', 0, 0), [
       input(2, { moveX: 1, slotPresses: [0] }), input(3, { moveX: 1, slotReleases: [0] }), input(4, { moveX: 1 }),
     ], rules);
-    expect(replay.x).toBeCloseTo(rules.player.speed / rules.tickRate * (2 * ability.charge!.moveSpeedMultiplier + 1));
+    expect(replay.x).toBeCloseTo(2.2 + rules.player.speed / rules.tickRate * (2 * ability.charge!.moveSpeedMultiplier + 1));
   });
 
-  it('snaps large local prediction corrections and reports the error', () => {
+  it('renders normal prediction immediately and snaps only a large aligned correction', () => {
     const ruleset = createDefaultRuleset();
     const smoother = new SnapshotSmoother(ruleset, 'local');
     smoother.pushAuthoritative(snapshotAt(10, [playerAt('local', 0, 0)]), 0);
@@ -77,9 +77,95 @@ describe('responsive netcode helpers', () => {
 
     const local = rendered?.players.find((player) => player.playerId === 'local');
     expect(local?.x).toBeGreaterThan(5);
+    expect(smoother.stats().snapCorrections).toBe(0);
+    expect(smoother.stats().predictionErrorMax).toBe(0);
+    smoother.pushAuthoritative(snapshotAt(11, [{ ...playerAt('local', -6, 0), lastInputSequence: 11 }]), 33);
+    expect(smoother.render(33)?.players[0].x).toBe(-6);
     expect(smoother.stats().snapCorrections).toBe(1);
     expect(smoother.stats().predictionErrorMax).toBeGreaterThan(5);
     smoother.destroy();
+  });
+
+  it('records prediction before authority arrives and matches tick, input sequence, and life state', () => {
+    const rules = createDefaultRuleset();
+    const smoother = new SnapshotSmoother(rules, 'local');
+    try {
+      smoother.pushAuthoritative(snapshotAt(10, [playerAt('local', 0, 0)]), 0);
+      smoother.render(0, [input(2, { moveX: 1 }), input(3, { moveX: 1 })]);
+      smoother.pushAuthoritative(snapshotAt(11, [{ ...playerAt('local', 0.5, 0), lastInputSequence: 2 }]), 33);
+      expect(smoother.predictionAtTick(11)?.x).toBeCloseTo(rules.player.speed / rules.tickRate);
+      expect(smoother.stats().predictionErrorMax).toBeCloseTo(0.5 - rules.player.speed / rules.tickRate);
+      smoother.render(33, [input(3, { moveX: 1 })]);
+      smoother.pushAuthoritative(snapshotAt(12, [{ ...playerAt('local', 0.7, 0), lastInputSequence: 4 }]), 66);
+      expect(smoother.predictionAtTick(12)).toBeUndefined();
+      smoother.render(66, [input(5, { moveX: 1 })]);
+      smoother.pushAuthoritative(snapshotAt(13, [{ ...playerAt('local', 0.8, 0), lastInputSequence: 5, respawnTick: 13 }]), 99);
+      expect(smoother.predictionAtTick(13)).toBeUndefined();
+      smoother.setLocalPlayer('other');
+      expect(smoother.predictionAtTick(11)).toBeUndefined();
+    } finally { smoother.destroy(); }
+  });
+
+  it('decays small correction offsets independently of render rate and ignores quantization noise', () => {
+    const rules = createDefaultRuleset();
+    const run = (frames: number, error: number): number => {
+      const smoother = new SnapshotSmoother(rules, 'local');
+      try {
+        smoother.pushAuthoritative(snapshotAt(10, [playerAt('local', 0, 0)]), 0);
+        const predicted = smoother.render(0, [input(2, { moveX: 1 })])!.players[0].x;
+        const actual = predicted - error;
+        smoother.pushAuthoritative(snapshotAt(11, [{ ...playerAt('local', actual, 0), lastInputSequence: 2 }]), 1);
+        let rendered = actual;
+        for (let n = 1; n <= frames; n++) rendered = smoother.render(n * 200 / frames)!.players[0].x;
+        expect(smoother.stats().snapCorrections).toBe(0);
+        return rendered - actual;
+      } finally { smoother.destroy(); }
+    };
+    expect(run(6, 0.1)).toBeCloseTo(run(24, 0.1), 6);
+    expect(run(12, 0.1)).toBeCloseTo(0.1 * Math.exp(-9 * 0.2), 6);
+    expect(run(12, 0.00001)).toBe(0);
+    expect(run(12, 0.8) / 0.8).toBeLessThan(run(12, 0.1) / 0.1);
+  });
+
+  it('predicts a charged dash once, before physics, with the same static collision limit', () => {
+    const rules = createDefaultRuleset();
+    const ability = rules.abilities.find((ability) => ability.charge)!;
+    rules.loadout.abilityIds[0] = ability.id;
+    rules.obstacles = [{ id: 'wall', x: 1.5, y: 0, halfWidth: 0.1, halfHeight: 5 }];
+    const player = playerAt('local', 0, 0);
+    const replay = replayPendingInputs(player, [input(2, { slotPresses: [0] }), input(3, { slotReleases: [0] }),
+      input(3, { slotReleases: [0] }), input(4, { slotReleases: [0] })], rules);
+    expect(replay.x).toBeGreaterThan(0.5);
+    expect(replay.x).toBeLessThan(1.5 - 0.1 - rules.player.radius);
+    expect(replay.vx).toBe(0);
+    player.slotCooldownTicks[0] = 10;
+    expect(replayPendingInputs(player, [input(2, { castSlots: [0], slotPresses: [0], slotReleases: [0] })], rules).x).toBe(0);
+  });
+
+  it('applies instant dashes before physics and gates repeated casts by cooldown', () => {
+    const rules = createDefaultRuleset();
+    rules.obstacles = [];
+    const ability = rules.abilities.find((entry) => entry.id === rules.loadout.abilityIds[0])!;
+    ability.charge = undefined;
+    ability.targeting = 'free-aim';
+    ability.effects = [{ kind: 'selfDash', distance: 2 }];
+    const anchors: number[] = [];
+    const player = playerAt('local', 0, 0);
+    const replay = replayPendingInputs(player, [input(2, { moveX: 1, castSlots: [0] }), input(3, { moveX: 1, castSlots: [0] })], rules,
+      (position, velocity) => { anchors.push(position.x); return { x: position.x + velocity.x / rules.tickRate, y: position.y, vx: velocity.x, vy: velocity.y }; });
+    expect(anchors[0]).toBeCloseTo(2);
+    expect(replay.x).toBeCloseTo(2 + rules.player.speed * 2 / rules.tickRate);
+  });
+
+  it('discards future predictions when an observed death resets the life state', () => {
+    const smoother = new SnapshotSmoother(createDefaultRuleset(), 'local');
+    try {
+      smoother.pushAuthoritative(snapshotAt(10, [playerAt('local', 0, 0)]), 0);
+      smoother.render(0, [input(2), input(3)]);
+      smoother.pushAuthoritative(snapshotAt(11, [{ ...playerAt('local', 0, 0), alive: false, lastInputSequence: 2 }]), 33);
+      smoother.pushAuthoritative(snapshotAt(12, [{ ...playerAt('local', 0, 0), alive: true, respawnTick: 0, lastInputSequence: 3 }]), 66);
+      expect(smoother.predictionAtTick(12)).toBeUndefined();
+    } finally { smoother.destroy(); }
   });
 
   it('honors charge cooldown and stops replaying movement for dead players', () => {
@@ -101,7 +187,7 @@ describe('responsive netcode helpers', () => {
     const player = playerAt('local', 0, 0);
     player.charging = { abilityId: ability.id, slot: 0, chargeTicks: ability.charge!.maxTicks, maxTicks: ability.charge!.maxTicks, ratio: 1, aimDx: 1, aimDy: 0 };
     const replay = replayPendingInputs(player, [input(2, { moveX: 1 }), input(3, { moveX: 1 })], rules);
-    expect(replay.x).toBeCloseTo(rules.player.speed / rules.tickRate * (ability.charge!.moveSpeedMultiplier + 1));
+    expect(replay.x).toBeCloseTo(2.2 + rules.player.speed / rules.tickRate * (ability.charge!.moveSpeedMultiplier + 1));
   });
 
   it('shares orthogonal, tank, and free-aim movement semantics', () => {

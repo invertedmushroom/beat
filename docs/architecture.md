@@ -70,7 +70,7 @@
 - `addPlayer()` creates a Rapier body, sets `team`, `hp`, `maxHp`, `statuses`, and `resources`.
 - Team selection is available via `spawn.team`, `npc.team`, or default assignment.
 - The local host player is placed on team `players`.
-- `src/engine/playerMovement.ts` owns desired movement velocity, facing, aim fallback, and strongest-slow selection. The authoritative worker and local input replay share these calculations. The worker retains ownership of ability effects, dynamic bodies, and constraints.
+- `src/engine/playerMovement.ts` owns desired movement velocity, facing, aim fallback, strongest-slow selection, and bounded static displacement. The worker uses the displacement rule for dashes and knockback. Local input replay uses the same rule for free-aim self-dashes. The worker retains ownership of damage, target selection, dynamic bodies, and constraints.
 - Player snapshots include optional `jumpHeld` state so platform input replay preserves jump edges across authoritative snapshots. Older snapshots default to an unheld jump.
 
 ### Physics and collision
@@ -95,8 +95,9 @@
 
 ## Replays
 
-- `src/replay/archive.ts` owns an independent snapshot baseline chain, bounded retention, and validated `.beat` import/export. Each delta refers to the preceding recorded frame. Checkpoints make retained clips independently decodable after eviction.
-- `src/replay/player.ts` owns seeking, playback time, and interpolation. It restores snapshot decoders from checkpoints and publishes visual snapshots.
+- `src/replay/archive.ts` owns an independent snapshot baseline chain, bounded retention, and validated `.beat` import/export. Each delta refers to the preceding recorded frame. Checkpoints make retained clips independently decodable after eviction. Client diagnostics can include a prediction position quantized to four bytes.
+- `src/net/snapshotSmoothing.ts` retains at most 128 future prediction samples. It matches an arriving authoritative tick by input sequence and observed player life before publishing the recorded prediction or measuring correction error. Correction offsets decay separately from predicted movement.
+- `src/replay/player.ts` owns seeking, playback time, and interpolation. It restores snapshot decoders from checkpoints and publishes visual snapshots with an optional aligned prediction ghost. `CanvasRenderer` owns drawing and clearing the ghost overlay.
 - `src/ui/ReplayFeature.ts` owns the recording, retained clip, file reads, download URLs, and playback controls. `src/app.ts` wires playback to the existing renderer in `replay` mode. Playback starts no engine or network session.
 - See [replays.md](replays.md) for retention, file format, and debugging scope.
 

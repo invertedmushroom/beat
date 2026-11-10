@@ -2,7 +2,8 @@ import type { EngineSnapshot } from '../engine/protocol';
 import { SnapshotDecoder } from '../net/snapshotCodec';
 import type { ReplayClip, ReplayDiagnostics } from './archive';
 
-export type ReplayView = { snapshot: EngineSnapshot; positionMs: number; durationMs: number; playing: boolean; speed: number; diagnostics?: ReplayDiagnostics };
+export type PredictionGhost = { playerId: string; x: number; y: number };
+export type ReplayView = { snapshot: EngineSnapshot; positionMs: number; durationMs: number; playing: boolean; speed: number; diagnostics?: ReplayDiagnostics; predictionGhost?: PredictionGhost };
 
 /** Visual playback only: checkpoints restore the decoder, never the live engine. */
 export class ReplayPlayer {
@@ -67,8 +68,21 @@ export class ReplayPlayer {
     }
     const before = this.recent.get(index)!, after = this.recent.get(nextIndex)!;
     const alpha = after.tick === before.tick ? 0 : Math.max(0, Math.min(1, (targetTick - before.tick) / (after.tick - before.tick)));
+    const predictionGhost = this.ghost(before, after, index, nextIndex, alpha);
     return { snapshot: interpolate(before, after, alpha), positionMs: this.positionMs, durationMs: this.clip.durationMs,
-      playing: this.playing, speed: this.speed, diagnostics: this.clip.frames[index].diagnostics };
+      playing: this.playing, speed: this.speed, diagnostics: this.clip.frames[index].diagnostics, predictionGhost };
+  }
+
+  private ghost(before: EngineSnapshot, after: EngineSnapshot, index: number, nextIndex: number, alpha: number): PredictionGhost | undefined {
+    const playerId = this.clip.metadata.localPlayerId;
+    const player = before.players.find((entry) => entry.playerId === playerId);
+    const predicted = this.clip.frames[index].diagnostics?.predictedPosition;
+    if (!playerId || !player?.alive || !predicted) return undefined;
+    if (alpha === 0) return { playerId, ...predicted };
+    const nextPlayer = after.players.find((entry) => entry.playerId === playerId);
+    const next = this.clip.frames[nextIndex].diagnostics?.predictedPosition;
+    if (!next || !nextPlayer?.alive || nextPlayer.respawnTick !== player.respawnTick) return undefined;
+    return { playerId, x: predicted.x + (next.x - predicted.x) * alpha, y: predicted.y + (next.y - predicted.y) * alpha };
   }
 }
 
