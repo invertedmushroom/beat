@@ -197,6 +197,16 @@ Each binary message is at most **1,000 bytes**, including a 24-byte versioned he
 
 V2 keyframes use `beat-keyframe`, a reliable ordered channel separate from control and ordinary deltas. After processing welcome and creating its decoder, the client sends `snapshot-ack: -1` to enable initial keyframe delivery, preventing cross-channel ordering from delivering the keyframe before welcome. Each peer has at most one outstanding keyframe. Deltas continue against a usable acknowledged baseline while a periodic keyframe is in flight. With no usable baseline, the host waits for recovery rather than queuing full frames every snapshot interval. A keyframe may retry after five seconds only when its channel queue has drained. Its single reassembly slot allows 15 seconds and cannot be evicted by incomplete datagrams. All channels still share the peer connection's congestion and bandwidth limits. V1 retains unreliable keyframes; legacy JSON snapshots retain their original size behavior.
 
+## Local input prediction
+
+`src/engine/playerMovement.ts` supplies the worker and local input replay with the same movement modes, facing, aim fallback, and strongest-slow calculation. Input sampling follows the active ruleset's tick rate. Replay skips acknowledged sequences and advances each remaining input by one tick from the authoritative anchor.
+
+`replayPendingInputs()` expires slows by remaining ticks and applies charge presses before movement. Charge releases and automatic releases take effect after movement, matching worker order. Cooldowns prevent invalid charge starts. Optional `PlayerSnapshot.jumpHeld` preserves the held jump edge in platform mode. The canonical `PlayerInput` format is unchanged.
+
+Once WASM is ready, local replay integrates desired velocity in the isolated Rapier world with player damping, platform gravity, and static arena colliders. Before initialization, local replay uses a numerical approximation. Prediction covers movement and charge speed limits. Ability effects such as dashes, dynamic collisions, tethers, combat, and resource-dependent outcomes still correct from authoritative snapshots. Sequence-based replay also approximates host input coalescing during hitches.
+
+[Replay recordings](replays.md) retain authoritative snapshots and client prediction diagnostics for inspecting these corrections.
+
 ## Collision-constrained remote dead reckoning
 
 `src/net/collisionPrediction.ts` owns an isolated browser Rapier world with the same arena walls, rectangular obstacles, and player radius as the authoritative worker. `SnapshotSmoother` retains its two-tick interpolation buffer. During a short gap it replays a remote player's authoritative position and velocity through at most three fixed physics ticks, with a fractional final step, CCD, wall sliding, and platform gravity when configured. Each render starts from the authoritative anchor so repeated renders do not accumulate prediction twice. Beyond that horizon the predicted position freezes.

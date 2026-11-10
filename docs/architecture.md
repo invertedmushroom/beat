@@ -12,13 +12,14 @@
 
 ## Main app modes
 
-`src/app.ts` supports five runtime modes:
+`src/app.ts` supports six runtime modes:
 
 - `idle`: initial lobby state.
 - `solo`: single-player game using the current ruleset.
 - `lab`: local authoring/test harness using `labSpawns`.
 - `host`: multiplayer host with room advertising and peer connections.
 - `client`: joined player connected to a host over WebRTC.
+- `replay`: visual playback of a retained or imported snapshot recording.
 
 ### Mode behavior
 
@@ -51,7 +52,7 @@
 - The host remains authoritative for simulation and broadcasts snapshots to clients.
 - `src/net/clockSync.ts` estimates the affine host clock from control-channel NTP timestamps. `ClientSession` paces the input ring against worker tick deadlines.
 - `src/net/snapshotCodec.ts` owns shared quantized preparation, per-peer acknowledged baselines, bounded fragmentation, and atomic reconstruction. `snapshotBinary.ts` owns the reusable binary writer and ID-matched array patches in codec v2.
-- `src/net/collisionPrediction.ts` owns the visual Rapier world used by `SnapshotSmoother` during short remote packet gaps. The smoother disposes that world with the client session.
+- `src/net/collisionPrediction.ts` owns the visual Rapier world used by `SnapshotSmoother` for local input replay and short remote packet gaps. The smoother disposes that world with the client session.
 - See [networking.md](networking.md) for wire formats, recovery limits, and timing assumptions.
 
 ## Engine runtime
@@ -69,6 +70,8 @@
 - `addPlayer()` creates a Rapier body, sets `team`, `hp`, `maxHp`, `statuses`, and `resources`.
 - Team selection is available via `spawn.team`, `npc.team`, or default assignment.
 - The local host player is placed on team `players`.
+- `src/engine/playerMovement.ts` owns desired movement velocity, facing, aim fallback, and strongest-slow selection. The authoritative worker and local input replay share these calculations. The worker retains ownership of ability effects, dynamic bodies, and constraints.
+- Player snapshots include optional `jumpHeld` state so platform input replay preserves jump edges across authoritative snapshots. Older snapshots default to an unheld jump.
 
 ### Physics and collision
 
@@ -89,6 +92,13 @@
 - `applySelfEffects()` processes `heal` effects targeting `self`.
 - `applyHitEffect()` handles `heal` effects targeting `hit`.
 - Healing only applies if the player is alive and the amount is positive.
+
+## Replays
+
+- `src/replay/archive.ts` owns an independent snapshot baseline chain, bounded retention, and validated `.beat` import/export. Each delta refers to the preceding recorded frame. Checkpoints make retained clips independently decodable after eviction.
+- `src/replay/player.ts` owns seeking, playback time, and interpolation. It restores snapshot decoders from checkpoints and publishes visual snapshots.
+- `src/ui/ReplayFeature.ts` owns the recording, retained clip, file reads, download URLs, and playback controls. `src/app.ts` wires playback to the existing renderer in `replay` mode. Playback starts no engine or network session.
+- See [replays.md](replays.md) for retention, file format, and debugging scope.
 
 ## Room metadata
 

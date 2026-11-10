@@ -21,7 +21,7 @@ export function estimateSnapshotBytes(snapshot: NetworkSnapshot | EngineSnapshot
   return new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
 }
 
-type Shape = Record<string, 'string' | 'number' | 'boolean' | Shape[] | { optional: Shape | 'string' | 'number' }>;
+type Shape = Record<string, 'string' | 'number' | 'boolean' | Shape[] | { optional: Shape | 'string' | 'number' | 'boolean' }>;
 const status: Shape = { id: 'string', name: 'string', color: 'string', tags: [{ $: 'string' }], stacks: 'number', remainingTicks: 'number', durationTicks: 'number',
   movementMultiplier: { optional: 'number' }, damageDealtMultiplier: { optional: 'number' }, damageTakenMultiplier: { optional: 'number' } };
 const resource: Shape = { id: 'string', name: 'string', color: 'string', value: 'number', max: 'number' };
@@ -29,6 +29,7 @@ const player: Shape = {
   playerId: 'string', displayName: 'string', x: 'number', y: 'number', vx: 'number', vy: 'number', hue: 'number', hp: 'number', maxHp: 'number',
   alive: 'boolean', respawnTick: 'number', slotCooldownTicks: [{ $: 'number' }], lastUsedSlot: 'number', aimDx: 'number', aimDy: 'number',
   facingDx: 'number', facingDy: 'number', role: 'string', team: 'string', lastInputSequence: 'number', statuses: [status], resources: [resource],
+  jumpHeld: { optional: 'boolean' },
   status: { optional: { slowMultiplier: 'number', slowTicks: 'number', slowColor: 'string' } },
   charging: { optional: { slot: 'number', abilityId: 'string', chargeTicks: 'number', maxTicks: 'number', ratio: 'number', aimDx: 'number', aimDy: 'number' } },
 };

@@ -38,6 +38,7 @@ export class CollisionPrediction {
     let remaining = Math.min(Math.max(0, seconds), MAX_REMOTE_PREDICTION_TICKS * dt);
     // Replay from the authoritative anchor each render; elapsed time is never integrated twice.
     this.body.setTranslation({ x: player.x, y: player.y }, true);
+    this.body.setLinearDamping(0);
     this.body.setLinvel({ x: player.vx, y: player.vy }, true);
     this.body.resetForces(true);
     this.body.resetTorques(true);
@@ -54,6 +55,19 @@ export class CollisionPrediction {
     const velocity = this.body.linvel();
     return { x: position.x, y: position.y, vx: velocity.x, vy: velocity.y };
   }
+
+  stepLocal = (state: { x: number; y: number }, velocity: { x: number; y: number }): Pick<PlayerSnapshot, 'x' | 'y' | 'vx' | 'vy'> => {
+    this.body.setTranslation(state, true);
+    this.body.setLinearDamping(this.rules.player.damping);
+    this.body.setLinvel(velocity, true);
+    this.body.resetForces(true);
+    this.body.resetTorques(true);
+    this.world.timestep = 1 / this.rules.tickRate;
+    this.world.step();
+    const position = this.body.translation(), nextVelocity = this.body.linvel();
+    return { x: position.x, y: position.y, vx: nextVelocity.x,
+      vy: this.rules.player.movement.mode === 'platform' ? Math.min(nextVelocity.y, this.rules.player.movement.platform.maxFallSpeed) : nextVelocity.y };
+  };
 
   destroy(): void {
     this.world.free();

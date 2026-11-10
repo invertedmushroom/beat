@@ -58,13 +58,15 @@ import {
 import { workbenchHtml } from './ui/workbench/view';
 import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
+import { ReplayFeature } from './ui/ReplayFeature';
+import type { ReplayClip } from './replay/archive';
 
 const ROOM_STALE_MS = 5_000;
 const PEER_ID_STORAGE_KEY = 'beat:peer-id:v1';
 const ACTIVE_CLIENT_SESSION_KEY = 'beat:active-client-session:v1';
 const ACTIVE_CLIENT_SESSION_TTL_MS = 10 * 60_000;
 
-type Mode = 'idle' | 'solo' | 'lab' | 'host' | 'client';
+type Mode = 'idle' | 'solo' | 'lab' | 'host' | 'client' | 'replay';
 
 type StoredActiveClientSession = {
   roomId: string;
@@ -91,6 +93,7 @@ export class BeatApp {
     this.hostSession?.destroy();
   };
   private readonly renderer: CanvasRenderer;
+  private readonly replays: ReplayFeature;
   private readonly input: InputController;
   private readonly pointerWorld: PointerWorldAdapter;
   private readonly root: HTMLElement;
@@ -186,6 +189,7 @@ export class BeatApp {
     saveUiPreferencesV2(this.uiPreferencesV2);
     this.renderer = new CanvasRenderer(this.canvas);
     this.input = new InputController(this.canvas, this.touchControls());
+    this.replays = new ReplayFeature(this.root, (clip) => this.watchReplay(clip));
     this.pointerWorld = new PointerWorldAdapter({
       target: this.canvas,
       clientToWorld: (clientX, clientY) => this.renderer.clientToWorld(clientX, clientY),
@@ -263,6 +267,7 @@ export class BeatApp {
     this.canvas.removeEventListener('pointerdown', this.onCanvasPointerDownForHover);
     this.input.destroy();
     this.renderer.destroy();
+    this.replays.destroy();
     this.directory.destroy();
   }
 
@@ -463,6 +468,7 @@ export class BeatApp {
     this.clientSession.onWelcome((playerId, joinedRoom, ruleset) => {
       this.localPlayerId = playerId;
       this.ruleset = ruleset;
+      this.input.start(ruleset.tickRate);
       this.applyUiPreferences();
       this.snapshotSmoother?.destroy();
       this.snapshotSmoother = new SnapshotSmoother(ruleset, playerId);
@@ -715,6 +721,8 @@ export class BeatApp {
   }
 
   private stopActiveMode(): void {
+    const wasReplay = this.mode === 'replay';
+    this.replays.endSession();
     this.input.reset(Boolean(this.localPlayerId));
     this.tapMoveTarget = undefined;
     this.pendingTapFire = undefined;
@@ -754,6 +762,8 @@ export class BeatApp {
     this.updateNetworkLine();
     this.renderTrace([], []);
     this.mode = 'idle';
+    this.arenaView.classList.remove('is-replay');
+    if (wasReplay) this.input.start();
     this.setRulesLocked(false);
     this.applyUiPreferences();
     this.clearActiveClientSession();
@@ -1478,6 +1488,10 @@ export class BeatApp {
     }
     const presentationSnapshot =
       this.mode === 'client' ? (this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []) ?? snapshot) : snapshot;
+    if (this.snapshotSmoother) this.smoothingStats = this.snapshotSmoother.stats();
+    if (this.ruleset && this.mode !== 'idle' && this.mode !== 'replay') {
+      this.replays.capture(this.ruleset, this.mode, snapshot, this.localPlayerId, this.smoothingStats);
+    }
     this.lastSnapshot = presentationSnapshot;
     window.__BEAT_SNAPSHOT__ = presentationSnapshot;
     window.__BEAT_RENDER_SNAPSHOT__ = presentationSnapshot;
@@ -1491,6 +1505,32 @@ export class BeatApp {
     this.renderTrace(snapshot.mechanicTraces, snapshot.aiTraces);
     this.setStatus(status);
     this.updateNetworkLine();
+  }
+
+  private watchReplay(clip: ReplayClip): void {
+    if (this.mode !== 'idle') return;
+    this.stopActiveMode();
+    this.mode = 'replay';
+    this.ruleset = clip.metadata.ruleset;
+    this.replays.play(clip);
+    this.renderer.setRuleset(this.ruleset);
+    this.renderer.setLocalPlayer(clip.metadata.localPlayerId);
+    this.showArena();
+    this.input.stop();
+    this.input.reset(false);
+    this.arenaView.classList.add('is-replay');
+    this.hashLine.textContent = clip.metadata.ruleset.name;
+    this.renderer.setSnapshotProvider(() => {
+      const view = this.replays.render(performance.now());
+      if (!view) return undefined;
+      this.lastSnapshot = view.snapshot;
+      window.__BEAT_SNAPSHOT__ = view.snapshot;
+      window.__BEAT_RENDER_SNAPSHOT__ = view.snapshot;
+      this.updateMatchHud(view.snapshot);
+      return view.snapshot;
+    });
+    this.setStatus(`Replay · ${clip.metadata.source}`);
+    this.networkLine.textContent = 'Replay playback';
   }
 
   private spawnSelectedLabActor(): void {
@@ -1702,6 +1742,7 @@ export class BeatApp {
     this.menuView.hidden = true;
     this.workbenchView.hidden = true;
     this.arenaView.hidden = false;
+    if (this.ruleset) this.input.start(this.ruleset.tickRate);
     this.syncLabControls();
     this.syncFullscreenButton();
     requestAnimationFrame(() => this.renderer.resizeNow());
@@ -1986,6 +2027,16 @@ function shellHtml(): string {
                 <button class="button rules-example" type="button" data-example="king-zone-preset">King Zone</button>
               </div>
             </section>
+            <section class="replay-library" aria-labelledby="replay-heading">
+              <h2 id="replay-heading">Replays</h2>
+              <div class="button-grid">
+                <button id="watch-replay" class="button" type="button" disabled>Watch last replay</button>
+                <button id="export-replay" class="button" type="button" disabled>Export replay</button>
+                <button id="import-replay" class="button" type="button">Import replay</button>
+                <input id="replay-file" type="file" accept=".beat" aria-label="Replay file" hidden />
+              </div>
+              <div id="replay-summary" class="room-summary" role="status"></div>
+            </section>
           </section>
         </div>
       </section>
@@ -2012,7 +2063,20 @@ function shellHtml(): string {
             </select>
           </label>
           <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
+          <button id="export-live-replay" class="button arena-action-button" type="button" disabled>Save replay</button>
         </div>
+        <div id="replay-live-status" class="replay-live-status" role="status"></div>
+        <section id="replay-controls" class="replay-controls" aria-label="Replay controls" hidden>
+          <div class="replay-controls__row">
+            <button id="replay-toggle" class="button" type="button" aria-pressed="false">Play replay</button>
+            <button id="replay-back" class="button" type="button" aria-label="Previous replay frame">−1 frame</button>
+            <button id="replay-forward" class="button" type="button" aria-label="Next replay frame">+1 frame</button>
+            <label>Speed <select id="replay-speed" aria-label="Replay speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+          </div>
+          <input id="replay-timeline" type="range" min="0" max="0" step="1" value="0" aria-label="Replay position" />
+          <div id="replay-time"></div>
+          <div id="replay-details" class="room-summary"></div>
+        </section>
         <div id="lab-controls" class="lab-controls" hidden>
           <div class="lab-controls__title">Lab Bench</div>
           <div class="lab-controls__row">

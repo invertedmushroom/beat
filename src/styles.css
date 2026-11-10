@@ -2,6 +2,33 @@
   box-sizing: border-box;
 }
 
+.replay-library { margin-top: 18px; }
+.replay-library .button-grid { margin-top: 10px; }
+.replay-controls {
+  position: absolute;
+  z-index: 10;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(620px, calc(100% - 24px));
+  padding: 14px;
+  border: 1px solid #5d5a4f;
+  border-radius: 12px;
+  background: rgba(20, 20, 20, 0.96);
+  color: #f5f3ed;
+}
+.replay-controls__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.replay-controls .button { padding: 8px 10px; }
+#replay-timeline { width: 100%; margin: 12px 0; accent-color: #2fd17c; }
+.arena-actions #export-live-replay {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  white-space: nowrap;
+}
+.replay-live-status { position: absolute; top: 110px; right: 14px; font-size: 11px; opacity: 0.7; pointer-events: none; }
+.is-replay #skill-bar, .is-replay #touch-controls, .is-replay #arena-log, .is-replay .control-profile-picker, .is-replay #replay-live-status { display: none; }
+
 :root {
   color: #f5f3ed;
   background: #141414;

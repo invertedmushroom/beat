@@ -1,5 +1,7 @@
 import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
-import { applyPlatformGravity, nextPlatformVelocity } from '../engine/platformMovement';
+import { applyPlatformGravity } from '../engine/platformMovement';
+import { movementMultiplier, nextPlayerMovement, playerAim } from '../engine/playerMovement';
+import { canStartCharge } from '../engine/charge';
 import type { CollisionPrediction } from './collisionPrediction';
 
 export const REMOTE_BUFFER_TICKS = 2;
@@ -155,7 +157,7 @@ export class SnapshotSmoother {
   }
 
   private predictLocalPlayer(player: PlayerSnapshot, pendingInputs: readonly PlayerInput[], dt: number): PlayerSnapshot {
-    const target = replayPendingInputs(player, pendingInputs, this.ruleset);
+    const target = replayPendingInputs(player, pendingInputs, this.ruleset, this.collisionPrediction?.stepLocal);
     const current = this.renderedLocal ?? { x: player.x, y: player.y };
     const correction = distance(current, target);
 
@@ -266,88 +268,64 @@ export function replayPendingInputs(
   authoritative: PlayerSnapshot,
   pendingInputs: readonly PlayerInput[],
   ruleset: Ruleset,
+  integrate?: (state: { x: number; y: number }, velocity: { x: number; y: number }) => { x: number; y: number; vx: number; vy: number },
 ): Pick<PlayerSnapshot, 'x' | 'y' | 'vx' | 'vy' | 'aimDx' | 'aimDy' | 'facingDx' | 'facingDy'> {
-  let x = authoritative.x;
-  let y = authoritative.y;
+  if (!authoritative.alive) return authoritative;
+  let x = authoritative.x, y = authoritative.y;
   let facing = normalizeOr(authoritative.facingDx, authoritative.facingDy, { x: 1, y: 0 });
   let aim = normalizeOr(authoritative.aimDx, authoritative.aimDy, facing);
   let velocity = { x: authoritative.vx, y: authoritative.vy };
-  let wasJumpPressed = false;
+  let jumpHeld = authoritative.jumpHeld ?? false;
   const dt = 1 / ruleset.tickRate;
-
+  const abilities = ruleset.loadout.abilityIds.map((id) => ruleset.abilities.find((ability) => ability.id === id));
+  const cooldowns = new Map<string, number>();
+  abilities.forEach((ability, slot) => {
+    if (ability) cooldowns.set(ability.id, Math.max(cooldowns.get(ability.id) ?? 0, authoritative.slotCooldownTicks[slot] ?? 0));
+  });
+  const statuses = authoritative.statuses.map((status) => ({ movementMultiplier: status.movementMultiplier, untilTick: status.remainingTicks }));
+  if (authoritative.status) statuses.push({ movementMultiplier: authoritative.status.slowMultiplier, untilTick: authoritative.status.slowTicks });
+  const chargedAbility = authoritative.charging && ruleset.abilities.find((ability) => ability.id === authoritative.charging!.abilityId);
+  let charging = chargedAbility?.charge && authoritative.charging
+    ? { ability: chargedAbility, slot: authoritative.charging.slot, startedStep: -authoritative.charging.chargeTicks }
+    : undefined;
+  let step = 0;
   for (const input of pendingInputs.slice().sort((a, b) => a.sequence - b.sequence)) {
-    aim = normalizeOr(input.aimDx, input.aimDy, aim);
-    if (ruleset.player.movement.mode === 'platform') {
-      const platform = nextPlatformVelocity({
-        axisX: clamp(input.moveX, -1, 1),
-        axisY: clamp(input.moveY, -1, 1),
-        speed: ruleset.player.speed,
-        speedMultiplier: 1,
-        currentVelocity: velocity,
-        position: { x, y },
-        radius: ruleset.player.radius,
-        arena: ruleset.arena,
-        obstacles: ruleset.obstacles,
-        platform: ruleset.player.movement.platform,
-        wasJumpPressed,
-      });
-      wasJumpPressed = platform.jumpPressed;
-      velocity = applyPlatformGravity(platform.velocity, ruleset.player.movement.platform.gravity, ruleset.player.movement.platform.maxFallSpeed, dt);
-      const explicitAim = normalizeOr(input.aimDx, input.aimDy, aim);
-      if (ruleset.player.aim.mode === 'free') {
-        facing = explicitAim;
-      } else if (Math.abs(input.moveX) > 0.05) {
-        facing = { x: Math.sign(input.moveX), y: 0 };
-      }
-    } else if (ruleset.player.movement.mode === 'tank') {
-      const turnRadians = (ruleset.player.movement.turnSpeedDegrees * Math.PI) / 180 / ruleset.tickRate;
-      facing = rotate(facing, clamp(input.moveX, -1, 1) * turnRadians);
-      const throttle = clamp(-input.moveY, -1, 1);
-      const reverseMultiplier = throttle < 0 ? ruleset.player.movement.reverseMultiplier : 1;
-      const speed = ruleset.player.speed * reverseMultiplier * throttle;
-      velocity = { x: facing.x * speed, y: facing.y * speed };
-    } else if (ruleset.player.movement.mode === 'orthogonal') {
-      let dx = clamp(input.moveX, -1, 1);
-      let dy = clamp(input.moveY, -1, 1);
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        dy = 0;
-      } else {
-        dx = 0;
-      }
-      const move = normalized(dx, dy);
-      velocity = move ? { x: move.x * ruleset.player.speed, y: move.y * ruleset.player.speed } : { x: 0, y: 0 };
-      if (ruleset.player.aim.mode === 'free') {
-        facing = aim;
-      } else if (move) {
-        facing = move;
-      }
-    } else {
-      const move = normalized(input.moveX, input.moveY);
-      velocity = move ? { x: move.x * ruleset.player.speed, y: move.y * ruleset.player.speed } : { x: 0, y: 0 };
-      if (ruleset.player.aim.mode === 'free') {
-        facing = aim;
-      } else if (move) {
-        facing = move;
-      }
+    if (input.sequence <= authoritative.lastInputSequence) continue;
+    for (const slot of input.slotPresses) {
+      const ability = abilities[slot];
+      if (canStartCharge(ability, Boolean(charging), (cooldowns.get(ability?.id ?? '') ?? 0) - step)) charging = { ability, slot, startedStep: step };
     }
-    x += velocity.x * dt;
-    y += velocity.y * dt;
+    const next = nextPlayerMovement({ position: { x, y }, velocity, facing, jumpHeld }, input, ruleset,
+      movementMultiplier(statuses, step) * (charging?.ability.charge?.moveSpeedMultiplier ?? 1));
+    facing = next.facing;
+    aim = playerAim(input, facing, ruleset.player);
+    jumpHeld = next.jumpHeld;
+    if (integrate) {
+      const integrated = integrate({ x, y }, next.velocity);
+      x = integrated.x; y = integrated.y;
+      velocity = { x: integrated.vx, y: integrated.vy };
+    } else {
+      // Used before WASM is ready; authoritative Rapier integration replaces
+      // this approximation in the live smoother as soon as it is available.
+      velocity = ruleset.player.movement.mode === 'platform'
+        ? applyPlatformGravity(next.velocity, ruleset.player.movement.platform.gravity, ruleset.player.movement.platform.maxFallSpeed, dt)
+        : next.velocity;
+      x += velocity.x * dt; y += velocity.y * dt;
+      const damping = 1 + ruleset.player.damping * dt;
+      velocity = { x: velocity.x / damping, y: velocity.y / damping };
+    }
+    for (const slot of input.castSlots) {
+      const ability = abilities[slot];
+      if (ability && !ability.charge && (cooldowns.get(ability.id) ?? 0) <= step) cooldowns.set(ability.id, step + ability.cooldownTicks);
+    }
+    if (charging && (input.slotReleases.includes(charging.slot) || (charging.ability.charge!.autoRelease && step - charging.startedStep >= charging.ability.charge!.maxTicks))) {
+      cooldowns.set(charging.ability.id, step + charging.ability.cooldownTicks);
+      charging = undefined;
+    }
+    step++;
   }
-
-  if (ruleset.player.aim.mode === 'facing') {
-    aim = facing;
-  }
-
-  return {
-    x,
-    y,
-    vx: velocity.x,
-    vy: velocity.y,
-    aimDx: aim.x,
-    aimDy: aim.y,
-    facingDx: facing.x,
-    facingDy: facing.y,
-  };
+  if (ruleset.player.aim.mode === 'facing') aim = facing;
+  return { x, y, vx: velocity.x, vy: velocity.y, aimDx: aim.x, aimDy: aim.y, facingDx: facing.x, facingDy: facing.y };
 }
 
 function interpolateTimed<T>(
@@ -444,17 +422,4 @@ function normalized(x: number, y: number): { x: number; y: number } | undefined 
 
 function normalizeOr(x: number, y: number, fallback: { x: number; y: number }): { x: number; y: number } {
   return normalized(x, y) ?? fallback;
-}
-
-function rotate(vector: { x: number; y: number }, radians: number): { x: number; y: number } {
-  if (Math.abs(radians) < 0.0001) {
-    return vector;
-  }
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  return normalizeOr(vector.x * cos - vector.y * sin, vector.x * sin + vector.y * cos, vector);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }

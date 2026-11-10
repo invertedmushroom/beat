@@ -1,4 +1,8 @@
-import type { Ability } from './protocol';
+import type { Ability, AbilityCharge } from './protocol';
+
+export function canStartCharge(ability: Ability | undefined, charging: boolean, cooldownTicks: number): ability is Ability & { charge: AbilityCharge } {
+  return Boolean(ability?.charge && !charging && cooldownTicks <= 0);
+}
 
 export function chargeRatio(chargeTicks: number, maxTicks: number): number {
   if (maxTicks <= 0) {

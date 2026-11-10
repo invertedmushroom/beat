@@ -5,7 +5,7 @@ import { decodeSnapshotPatch, SnapshotPatchWriter, type Value } from './snapshot
 export const SNAPSHOT_PACKET_BYTES = 1_000;
 const HEADER_BYTES = 24;
 const CHUNK_BYTES = SNAPSHOT_PACKET_BYTES - HEADER_BYTES;
-const MAX_FRAME_BYTES = 256 * 1024;
+export const MAX_SNAPSHOT_FRAME_BYTES = 256 * 1024;
 const MAX_HISTORY = 64;
 const NO_BASELINE = 0xffffffff;
 const MAGIC = 0x4253;
@@ -84,7 +84,7 @@ export class SnapshotEncoder {
     const baseTick = baseline === undefined ? NO_BASELINE : this.ackedTick;
     const value = snapshot.value;
     const bytes = this.writer.encode(value, baseline, this.version);
-    if (bytes.length > MAX_FRAME_BYTES) throw new Error('Snapshot exceeds frame budget');
+    if (bytes.length > MAX_SNAPSHOT_FRAME_BYTES) throw new Error('Snapshot exceeds frame budget');
     const count = Math.ceil(bytes.length / CHUNK_BYTES);
     const hash = checksum(bytes);
     const packets = Array.from({ length: count }, (_, index) => {
@@ -129,7 +129,7 @@ export class SnapshotDecoder {
     const tick = header.getUint32(4), base = header.getUint32(8), size = header.getUint32(12);
     const index = header.getUint16(16), count = header.getUint16(18), hash = header.getUint32(20);
     if (tick === NO_BASELINE || tick <= this.latestTick || (base !== NO_BASELINE && base >= tick)) return {};
-    if (size < 1 || size > MAX_FRAME_BYTES || count !== Math.ceil(size / CHUNK_BYTES) || index >= count) return {};
+    if (size < 1 || size > MAX_SNAPSHOT_FRAME_BYTES || count !== Math.ceil(size / CHUNK_BYTES) || index >= count) return {};
     if (packet.byteLength - HEADER_BYTES !== Math.min(CHUNK_BYTES, size - index * CHUNK_BYTES)) return {};
     if (reliable && base !== NO_BASELINE) return {};
     for (const [id, frame] of this.pending) if (nowMs - frame.createdAt > 1_000) this.pending.delete(id);

@@ -1,8 +1,8 @@
 import RAPIER from '@dimforge/rapier2d-compat';
 import { initializeRapier as prepareRapier } from './rapier';
-import { chargeRatio, scaleAbilityForCharge } from './charge';
+import { canStartCharge, chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
-import { nextPlatformVelocity } from './platformMovement';
+import { movementMultiplier, nextPlayerMovement, playerAim } from './playerMovement';
 import type {
   Ability,
   AbilityEffect,
@@ -586,7 +586,7 @@ function handleSlotPress(player: RuntimePlayer, slot: number): void {
     return;
   }
   player.lastUsedSlot = slot;
-  if (!ability.charge || player.charging || (player.cooldownUntil.get(ability.id) ?? 0) > tick) {
+  if (!canStartCharge(ability, Boolean(player.charging), (player.cooldownUntil.get(ability.id) ?? 0) - tick)) {
     return;
   }
   player.charging = {
@@ -2454,13 +2454,7 @@ function regenerateResources(player: RuntimePlayer): void {
 }
 
 function activeMovementMultiplier(player: RuntimePlayer): number {
-  let multiplier = 1;
-  for (const status of player.statuses.values()) {
-    if (status.untilTick > tick && status.movementMultiplier !== undefined) {
-      multiplier = Math.min(multiplier, status.movementMultiplier);
-    }
-  }
-  return multiplier;
+  return movementMultiplier(player.statuses.values(), tick);
 }
 
 function damageDealtMultiplier(player: RuntimePlayer | undefined): number {
@@ -2487,107 +2481,13 @@ function damageTakenMultiplier(player: RuntimePlayer): number {
 }
 
 function updateMovementAndFacing(player: RuntimePlayer, speedMultiplier: number): void {
-  if (!ruleset) {
-    return;
-  }
-  const axisX = clamp(player.input.moveX, -1, 1);
-  const axisY = clamp(player.input.moveY, -1, 1);
-  if (ruleset.player.movement.mode === 'platform') {
-    updatePlatformMovement(player, axisX, axisY, speedMultiplier);
-    return;
-  }
-  if (ruleset.player.movement.mode === 'tank') {
-    updateTankMovement(player, axisX, axisY, speedMultiplier);
-    return;
-  }
-  if (ruleset.player.movement.mode === 'orthogonal') {
-    updateOrthogonalMovement(player, axisX, axisY, speedMultiplier);
-    return;
-  }
-  updateTwinStickMovement(player, axisX, axisY, speedMultiplier);
-}
-
-function updatePlatformMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
-  if (!ruleset) {
-    return;
-  }
-  const result = nextPlatformVelocity({
-    axisX,
-    axisY,
-    speed: ruleset.player.speed,
-    speedMultiplier,
-    currentVelocity: player.body.linvel(),
-    position: player.body.translation(),
-    radius: ruleset.player.radius,
-    arena: ruleset.arena,
-    obstacles: ruleset.obstacles,
-    platform: ruleset.player.movement.platform,
-    wasJumpPressed: player.wasJumpPressed,
-  });
-  player.wasJumpPressed = result.jumpPressed;
-  player.body.setLinvel(result.velocity, true);
-
-  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
-  if (ruleset.player.aim.mode === 'free' && explicitAim) {
-    player.facing = explicitAim;
-    return;
-  }
-  if (Math.abs(axisX) > 0.05) {
-    player.facing = { x: Math.sign(axisX), y: 0 };
-  }
-}
-
-function updateTwinStickMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
-  if (!ruleset) {
-    return;
-  }
-  const move = normalized(axisX, axisY);
-  const speed = ruleset.player.speed * speedMultiplier;
-  player.body.setLinvel(move ? { x: move.x * speed, y: move.y * speed } : { x: 0, y: 0 }, true);
-  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
-  if (ruleset.player.aim.mode === 'free' && explicitAim) {
-    player.facing = explicitAim;
-    return;
-  }
-  if (move) {
-    player.facing = move;
-  }
-}
-
-function updateOrthogonalMovement(player: RuntimePlayer, axisX: number, axisY: number, speedMultiplier: number): void {
-  if (!ruleset) {
-    return;
-  }
-  let dx = axisX;
-  let dy = axisY;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    dy = 0;
-  } else {
-    dx = 0;
-  }
-  const move = normalized(dx, dy);
-  const speed = ruleset.player.speed * speedMultiplier;
-  player.body.setLinvel(move ? { x: move.x * speed, y: move.y * speed } : { x: 0, y: 0 }, true);
-  const explicitAim = normalized(player.input.aimDx, player.input.aimDy);
-  if (ruleset.player.aim.mode === 'free' && explicitAim) {
-    player.facing = explicitAim;
-    return;
-  }
-  if (move) {
-    player.facing = move;
-  }
-}
-
-function updateTankMovement(player: RuntimePlayer, turnInput: number, throttleInput: number, speedMultiplier: number): void {
-  if (!ruleset) {
-    return;
-  }
-  const turnRadians = (ruleset.player.movement.turnSpeedDegrees * Math.PI) / 180 / ruleset.tickRate;
-  player.facing = rotate(player.facing, turnInput * turnRadians);
-  const throttle = clamp(-throttleInput, -1, 1);
-  const reverseMultiplier = throttle < 0 ? ruleset.player.movement.reverseMultiplier : 1;
-  const speed = ruleset.player.speed * speedMultiplier * reverseMultiplier;
-  player.body.setLinvel({ x: player.facing.x * throttle * speed, y: player.facing.y * throttle * speed }, true);
+  if (!ruleset) return;
+  const next = nextPlayerMovement({
+    position: player.body.translation(), velocity: player.body.linvel(), facing: player.facing, jumpHeld: player.wasJumpPressed,
+  }, player.input, ruleset, speedMultiplier);
+  player.body.setLinvel(next.velocity, true);
+  player.facing = next.facing;
+  player.wasJumpPressed = next.jumpHeld;
 }
 
 function clampPlatformFallSpeeds(): void {
@@ -2655,6 +2555,7 @@ function readSnapshot(): EngineSnapshot {
         resources: toResourceSnapshots(player),
         charging: player.charging ? toChargingSnapshot(player.charging) : undefined,
         lastInputSequence: player.input.sequence,
+        jumpHeld: player.wasJumpPressed,
       };
     }),
   };
@@ -3024,18 +2925,7 @@ function findAimAssistTarget(owner: RuntimePlayer, ability: Ability, aim: Vec2):
 }
 
 function aimForPlayer(player: RuntimePlayer): Vec2 {
-  if (ruleset?.player.aim.mode === 'facing') {
-    return player.facing;
-  }
-  const aim = normalized(player.input.aimDx, player.input.aimDy);
-  if (aim) {
-    return aim;
-  }
-  const move = ruleset?.player.movement.mode === 'tank' ? undefined : normalized(player.input.moveX, player.input.moveY);
-  if (move) {
-    return move;
-  }
-  return player.facing;
+  return ruleset ? playerAim(player.input, player.facing, ruleset.player) : player.facing;
 }
 
 function sameTeam(a: RuntimePlayer | undefined, b: RuntimePlayer | undefined): boolean {
@@ -3051,15 +2941,6 @@ function stableSeed(value: string): number {
     hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
   }
   return hash % 10_000;
-}
-
-function rotate(vector: Vec2, radians: number): Vec2 {
-  if (Math.abs(radians) < 0.0001) {
-    return vector;
-  }
-  const cos = Math.cos(radians);
-  const sin = Math.sin(radians);
-  return normalized(vector.x * cos - vector.y * sin, vector.x * sin + vector.y * cos) ?? vector;
 }
 
 function normalized(x: number, y: number): Vec2 | undefined {

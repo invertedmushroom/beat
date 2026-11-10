@@ -446,6 +446,8 @@ export type PlayerSnapshot = {
   resources: ResourceSnapshot[];
   charging?: ChargingSnapshot;
   lastInputSequence: number;
+  /** Held jump state at the authoritative tick, used when replaying platform input. */
+  jumpHeld?: boolean;
 };
 
 export type PlayerStatusSnapshot = {
