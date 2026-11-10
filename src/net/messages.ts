@@ -9,7 +9,7 @@ const MAX_REDUNDANT_INPUTS = 64;
 const MAX_INPUT_EVENTS = 16;
 
 export type ClientToHostMessage =
-  | { type: 'hello'; displayName: string; snapshotProtocol?: 1 }
+  | { type: 'hello'; displayName: string; snapshotProtocol?: 1; snapshotCodecVersion?: 2 }
   | { type: 'input'; input: PlayerInput; redundantInputs?: PlayerInput[] }
   | { type: 'ping'; sentAtMs: number }
   | { type: 'snapshot-ack'; tick: number }
@@ -20,6 +20,7 @@ export type HostToClientMessage =
   | { type: 'snapshot'; snapshot: NetworkSnapshot }
   | { type: 'notice'; message: string }
   | { type: 'host-closed' }
+  | { type: 'timing'; timing: EngineTickTiming }
   | { type: 'pong'; sentAtMs: number; receivedAtMs: number; serverSentAtMs?: number; timing?: EngineTickTiming };
 
 export function encodeMessage(message: ClientToHostMessage | HostToClientMessage): string {
@@ -56,7 +57,8 @@ function isClientMessage(value: unknown): value is ClientToHostMessage {
   switch (value.type) {
     case 'hello':
       return typeof value.displayName === 'string' && value.displayName.trim().length > 0 && value.displayName.length <= MAX_DISPLAY_NAME_LENGTH &&
-        (value.snapshotProtocol === undefined || value.snapshotProtocol === 1);
+        (value.snapshotProtocol === undefined || value.snapshotProtocol === 1) &&
+        (value.snapshotCodecVersion === undefined || (value.snapshotProtocol === 1 && value.snapshotCodecVersion === 2));
     case 'ping':
       return isFiniteNumber(value.sentAtMs);
     case 'leave':
@@ -93,6 +95,8 @@ function isHostMessage(value: unknown): value is HostToClientMessage {
       return typeof value.message === 'string';
     case 'host-closed':
       return true;
+    case 'timing':
+      return isTickTiming(value.timing);
     case 'pong':
       return isFiniteNumber(value.sentAtMs) && isFiniteNumber(value.receivedAtMs) &&
         (value.serverSentAtMs === undefined || (isFiniteNumber(value.serverSentAtMs) && value.serverSentAtMs >= value.receivedAtMs)) &&

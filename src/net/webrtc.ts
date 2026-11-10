@@ -1,17 +1,18 @@
 import type { EngineClient } from '../engine/EngineClient';
-import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
+import type { EngineSnapshot, EngineTickTiming, PlayerInput, Ruleset } from '../engine/protocol';
 import type { RoomDirectory, RoomInfo, RoomSignal } from '../rooms/directory';
 import { createId } from '../utils/ids';
 import { fromNetworkSnapshot, toNetworkSnapshot } from './compactSnapshot';
 import { decodeClientMessage, decodeHostMessage, encodeMessage, type ClientToHostMessage } from './messages';
 import { PendingInputQueue } from './pendingInputs';
 import { AffineClockSync } from './clockSync';
-import { SnapshotDecoder, SnapshotEncoder } from './snapshotCodec';
+import { prepareSnapshot, SnapshotDecoder, SnapshotEncoder, type PreparedSnapshot } from './snapshotCodec';
 import { describeRtcConfig, getRtcConfig } from './rtcConfig';
 
 const CONTROL_CHANNEL_LABEL = 'beat-control';
 const INPUT_CHANNEL_LABEL = 'beat-input';
 const SNAPSHOT_CHANNEL_LABEL = 'beat-snapshot';
+const KEYFRAME_CHANNEL_LABEL = 'beat-keyframe';
 const LEGACY_CHANNEL_LABEL = 'beat';
 const HOST_SNAPSHOT_INTERVAL_MS = 50;
 const MAX_SNAPSHOT_BUFFERED_AMOUNT = 64_000;
@@ -30,6 +31,10 @@ type PeerState = {
   controlChannel?: RTCDataChannel;
   inputChannel?: RTCDataChannel;
   snapshotChannel?: RTCDataChannel;
+  keyframeChannel?: RTCDataChannel;
+  keyframeReady?: boolean;
+  keyframeTick?: number;
+  keyframeSentAt?: number;
   playerId?: string;
   displayName?: string;
   sessionId: string;
@@ -83,6 +88,8 @@ export class HostSession {
   private backlogBytes = 0;
   private lastPeerTimeoutCheckAt = Date.now();
   private destroyed = false;
+  private unsubscribeTiming?: () => void;
+  private lastTiming?: EngineTickTiming;
 
   constructor(
     private readonly options: {
@@ -112,13 +119,16 @@ export class HostSession {
     this.unsubscribeSignals = this.options.directory.subscribeSignals(this.options.hostPeerId, (signal) => {
       void this.handleSignal(signal);
     });
+    this.lastTiming = this.options.engine.tickTiming();
+    this.unsubscribeTiming = this.options.engine.onTiming((timing) => this.handleTickTiming(timing));
   }
 
   broadcastSnapshot(snapshot: EngineSnapshot): void {
     if (this.destroyed) return;
     const now = performance.now();
+    const prepared = prepareSnapshot(snapshot, this.options.ruleset.arena);
     for (const peer of this.peers.values()) {
-      this.sendPeerSnapshot(peer, snapshot, now);
+      this.sendPeerSnapshot(peer, snapshot, now, prepared);
     }
   }
 
@@ -142,13 +152,14 @@ export class HostSession {
       window.clearInterval(this.statsHandle);
     }
     this.unsubscribeSignals?.();
+    this.unsubscribeTiming?.();
     void Promise.resolve(this.options.directory.closeRoom(this.options.room.roomId)).catch((error: unknown) => this.log(`room close failed: ${readError(error)}`));
     for (const [peerId, peer] of Array.from(this.peers)) {
       this.closePeer(peerId, peer, true);
     }
   }
 
-  private sendPeerSnapshot(peer: PeerState, snapshot: EngineSnapshot, now: number): void {
+  private sendPeerSnapshot(peer: PeerState, snapshot: EngineSnapshot, now: number, prepared: PreparedSnapshot): void {
     if (peer.disconnectedAt !== undefined || !peer.playerId) {
       return;
     }
@@ -169,10 +180,19 @@ export class HostSession {
       return;
     }
     try {
-      const packets = peer.snapshotEncoder?.encode(snapshot);
-      if (packets) {
-        if (packets.length === 0) return;
-        for (const packet of packets) channel.send(packet as Uint8Array<ArrayBuffer>);
+      if (peer.snapshotEncoder) {
+        const reliable = peer.snapshotEncoder.version === 2;
+        if (reliable && !peer.keyframeReady) return;
+        const keyframeChannel = peer.keyframeChannel;
+        const keyframeAvailable = !reliable || (keyframeChannel?.readyState === 'open' &&
+          keyframeChannel.bufferedAmount <= MAX_SNAPSHOT_BUFFERED_AMOUNT &&
+          (peer.keyframeTick === undefined || (now - (peer.keyframeSentAt ?? now) >= 5_000 && keyframeChannel.bufferedAmount === 0)));
+        const frame = peer.snapshotEncoder.encodePrepared(prepared, keyframeAvailable);
+        if (!frame) return;
+        const target = reliable && frame.keyframe ? keyframeChannel! : channel;
+        const packets = frame.packets;
+        for (const packet of packets) target.send(packet as Uint8Array<ArrayBuffer>);
+        if (reliable && frame.keyframe) { peer.keyframeTick = frame.tick; peer.keyframeSentAt = now; }
         this.bytesSent += packets.reduce((sum, packet) => sum + packet.byteLength, 0);
         peer.lastSnapshotBytes = Math.max(...packets.map((packet) => packet.byteLength));
       } else {
@@ -189,6 +209,21 @@ export class HostSession {
     }
     peer.lastSnapshotSentAt = now;
     this.lastSnapshotBytes = peer.lastSnapshotBytes;
+  }
+
+  private handleTickTiming(timing: EngineTickTiming): void {
+    if (this.destroyed) return;
+    const previous = this.lastTiming;
+    this.lastTiming = timing;
+    if (previous && previous.intervalMs === timing.intervalMs) {
+      const elapsed = timing.nextTickAtMs - previous.nextTickAtMs;
+      const phaseShift = Math.abs(elapsed - Math.round(elapsed / timing.intervalMs) * timing.intervalMs);
+      if (phaseShift <= 3) return;
+    }
+    const message = encodeMessage({ type: 'timing', timing });
+    for (const peer of this.peers.values()) {
+      if (peer.controlChannel?.readyState === 'open') { peer.controlChannel.send(message); this.bytesSent += message.length; }
+    }
   }
 
   private heartbeat(): void {
@@ -295,6 +330,7 @@ export class HostSession {
     if (channel.label === SNAPSHOT_CHANNEL_LABEL) {
       peer.snapshotChannel = channel;
     }
+    if (channel.label === KEYFRAME_CHANNEL_LABEL) peer.keyframeChannel = channel;
 
     channel.onopen = () => {
       peer.lastHeardAt = Date.now();
@@ -325,7 +361,7 @@ export class HostSession {
     peer.disconnectedAt = undefined;
     if (message.type === 'hello') {
       if (message.snapshotProtocol === 1 && !peer.snapshotEncoder) {
-        peer.snapshotEncoder = new SnapshotEncoder(this.options.ruleset.arena, this.options.ruleset.tickRate * 2);
+        peer.snapshotEncoder = new SnapshotEncoder(this.options.ruleset.arena, this.options.ruleset.tickRate * 2, message.snapshotCodecVersion ?? 1);
       }
       this.handleHello(peerId, peer, channel, message.displayName);
       return;
@@ -345,7 +381,10 @@ export class HostSession {
       return;
     }
     if (message.type === 'snapshot-ack' && channel === peer.controlChannel) {
-      peer.snapshotEncoder?.acknowledge(message.tick);
+      if (peer.snapshotEncoder?.acknowledge(message.tick)) {
+        peer.keyframeReady = true;
+        if (message.tick === -1 || (peer.keyframeTick !== undefined && message.tick >= peer.keyframeTick)) peer.keyframeTick = undefined;
+      }
       return;
     }
     if (message.type === 'input' && peer.playerId) {
@@ -475,7 +514,7 @@ export class HostSession {
         // The channel may already be closing.
       }
     }
-    for (const channel of [peer.controlChannel, peer.inputChannel, peer.snapshotChannel]) {
+    for (const channel of [peer.controlChannel, peer.inputChannel, peer.snapshotChannel, peer.keyframeChannel]) {
       if (channel) {
         channel.onclose = null;
         channel.onerror = null;
@@ -487,6 +526,7 @@ export class HostSession {
     peer.controlChannel = undefined;
     peer.inputChannel = undefined;
     peer.snapshotChannel = undefined;
+    peer.keyframeChannel = undefined;
     peer.connection.onconnectionstatechange = null;
     peer.connection.onicecandidate = null;
     peer.connection.onicecandidateerror = null;
@@ -532,7 +572,7 @@ export class HostSession {
     const peers = Array.from(this.peers.values()).filter((peer) => peer.disconnectedAt === undefined);
     const candidateType = peers.find((peer) => peer.candidateType === 'relay')?.candidateType ?? peers.find((peer) => peer.candidateType)?.candidateType ?? 'unknown';
     const rttMs = average(peers.map((peer) => peer.rttMs).filter((value): value is number => value !== undefined));
-    const backlogBytes = Math.max(this.backlogBytes, ...peers.map((peer) => peer.snapshotChannel?.bufferedAmount ?? 0));
+    const backlogBytes = Math.max(this.backlogBytes, ...peers.map((peer) => Math.max(peer.snapshotChannel?.bufferedAmount ?? 0, peer.keyframeChannel?.bufferedAmount ?? 0)));
     const stats: NetDiagnostics = {
       role: 'host',
       peers: peers.length,
@@ -575,6 +615,7 @@ export class ClientSession {
   private controlChannel?: RTCDataChannel;
   private inputChannel?: RTCDataChannel;
   private snapshotChannel?: RTCDataChannel;
+  private keyframeChannel?: RTCDataChannel;
   private unsubscribeSignals?: () => void;
   private unsubscribeRooms?: () => void;
   private hostSilenceHandle?: number;
@@ -638,6 +679,7 @@ export class ClientSession {
     this.controlChannel = this.connection.createDataChannel(CONTROL_CHANNEL_LABEL);
     this.inputChannel = this.connection.createDataChannel(INPUT_CHANNEL_LABEL, { ordered: false, maxRetransmits: 1 });
     this.snapshotChannel = this.connection.createDataChannel(SNAPSHOT_CHANNEL_LABEL, { ordered: false, maxRetransmits: 0 });
+    this.keyframeChannel = this.connection.createDataChannel(KEYFRAME_CHANNEL_LABEL, { ordered: true });
     this.bindConnectionLogs(this.connection, `client->${shortPeer(room.hostPeerId)}`);
     this.configureClientChannels();
     this.unsubscribeRooms = this.options.directory.subscribeRooms((rooms) => this.handleRooms(rooms));
@@ -805,6 +847,7 @@ export class ClientSession {
     this.configureClientControlChannel();
     this.configureClientInputChannel();
     this.configureClientSnapshotChannel();
+    this.configureClientSnapshotChannel(true);
     if (!this.connection) {
       return;
     }
@@ -828,7 +871,7 @@ export class ClientSession {
       return;
     }
     channel.onopen = () => {
-      channel.send(encodeMessage({ type: 'hello', displayName: this.options.displayName, snapshotProtocol: 1 }));
+      channel.send(encodeMessage({ type: 'hello', displayName: this.options.displayName, snapshotProtocol: 1, snapshotCodecVersion: 2 }));
       this.sendPing();
       this.log('control channel open');
     };
@@ -851,20 +894,20 @@ export class ClientSession {
     channel.onerror = () => this.log('input channel error');
   }
 
-  private configureClientSnapshotChannel(): void {
-    const channel = this.snapshotChannel;
+  private configureClientSnapshotChannel(reliable = false): void {
+    const channel = reliable ? this.keyframeChannel : this.snapshotChannel;
     if (!channel) {
       return;
     }
     channel.binaryType = 'arraybuffer';
-    channel.onopen = () => this.log('snapshot channel open');
-    channel.onerror = () => this.log('snapshot channel error');
+    channel.onopen = () => this.log(`${channel.label} channel open`);
+    channel.onerror = () => this.log(`${channel.label} channel error`);
     channel.onmessage = (event: MessageEvent<unknown>) => {
-      if (channel !== this.snapshotChannel) return;
+      if (channel !== (reliable ? this.keyframeChannel : this.snapshotChannel)) return;
       if (typeof event.data === 'string') { this.handleHostMessage(event.data, new TextEncoder().encode(event.data).byteLength); return; }
       if (!(event.data instanceof ArrayBuffer) || !this.snapshotDecoder) return;
       this.bytesReceived += event.data.byteLength;
-      const result = this.snapshotDecoder.receive(event.data);
+      const result = this.snapshotDecoder.receive(event.data, performance.now(), reliable);
       if (result.needsKeyframe && performance.now() - this.lastKeyframeRequestAt > 1_000) {
         this.sendSnapshotAck(-1);
         this.lastKeyframeRequestAt = performance.now();
@@ -894,6 +937,9 @@ export class ClientSession {
     if (message.type === 'welcome') {
       this.localPlayerId = message.playerId;
       this.snapshotDecoder = new SnapshotDecoder(message.ruleset.arena);
+      // Reliable streams have independent ordering; don't send a keyframe until
+      // this confirms welcome processing and decoder initialization completed.
+      this.sendSnapshotAck(-1);
       for (const listener of this.welcomeListeners) {
         listener(message.playerId, message.room, message.ruleset);
       }
@@ -905,6 +951,14 @@ export class ClientSession {
     }
     if (message.type === 'notice') {
       this.log(message.message);
+      return;
+    }
+    if (message.type === 'timing') {
+      if (this.clock.updateTiming(message.timing)) {
+        if (this.inputSendHandle !== undefined) window.clearTimeout(this.inputSendHandle);
+        this.inputSendHandle = undefined;
+        this.scheduleInputSend();
+      }
       return;
     }
     if (message.type === 'pong') {
@@ -1047,6 +1101,7 @@ export class ClientSession {
       this.controlChannel?.bufferedAmount ?? 0,
       this.inputChannel?.bufferedAmount ?? 0,
       this.snapshotChannel?.bufferedAmount ?? 0,
+      this.keyframeChannel?.bufferedAmount ?? 0,
     );
     this.backlogBytes = 0;
     const stats: NetDiagnostics = {
@@ -1109,7 +1164,7 @@ export class ClientSession {
       window.clearInterval(this.statsHandle);
       this.statsHandle = undefined;
     }
-    for (const channel of [this.controlChannel, this.inputChannel, this.snapshotChannel]) {
+    for (const channel of [this.controlChannel, this.inputChannel, this.snapshotChannel, this.keyframeChannel]) {
       if (channel) {
         channel.onclose = null;
         channel.onerror = null;
@@ -1127,6 +1182,7 @@ export class ClientSession {
     this.controlChannel = undefined;
     this.inputChannel = undefined;
     this.snapshotChannel = undefined;
+    this.keyframeChannel = undefined;
     this.connection = undefined;
   }
 }

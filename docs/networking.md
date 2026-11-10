@@ -48,11 +48,12 @@ The host:
 2. sends periodic heartbeat updates.
 3. listens for `RoomSignal` events addressed to the host peer ID.
 4. accepts `offer` signals, creates an RTCPeerConnection, and returns an `answer`.
-5. opens three data channels for each client:
+5. accepts data channels opened by each client:
    - a control channel for `hello`, `welcome`, `ping`, `pong`, and session-level notices
    - an input channel for client-to-host input messages (unordered, limited retransmit)
    - a snapshot channel for host-to-client gameplay state (unordered, no retransmit)
-   - labels are `beat-control`, `beat-input`, `beat-snapshot`, with legacy support for `beat`
+   - a separate reliable, ordered keyframe channel when codec v2 is negotiated
+   - labels are `beat-control`, `beat-input`, `beat-snapshot`, `beat-keyframe`, with legacy support for `beat`
 6. on `hello`, assigns a player ID and adds the remote player to the engine.
    - if room capacity has been reached, the host sends `notice: room is full` and immediately closes that peer session.
 7. on `input`, forwards the player input to `engine.submitInput()`.
@@ -73,7 +74,7 @@ Clients without binary negotiation receive the legacy JSON `snapshot` message. N
 The client:
 
 1. optionally records a join request via the directory when the backend supports it.
-2. creates an RTCPeerConnection and three data channels (`beat-control`, `beat-input`, `beat-snapshot`).
+2. creates an RTCPeerConnection and four data channels (`beat-control`, `beat-input`, `beat-snapshot`, `beat-keyframe`). Older hosts ignore the extra channel.
 3. sends `offer` to the host through the directory.
 4. receives `answer` and ICE candidates through directory signals.
 5. on open channel, sends `hello` with display name.
@@ -142,7 +143,7 @@ It stores rooms and signals in `localStorage`, broadcasts changes over `Broadcas
 
 Client-to-host:
 
-- `{ type: 'hello', displayName, snapshotProtocol?: 1 }`
+- `{ type: 'hello', displayName, snapshotProtocol?: 1, snapshotCodecVersion?: 2 }`
 - `{ type: 'input'; input, redundantInputs?: PlayerInput[] }`
 - `{ type: 'ping'; sentAtMs }`
 - `{ type: 'snapshot-ack'; tick }` (completed binary snapshot, or `-1` to request a keyframe)
@@ -153,6 +154,7 @@ Host-to-client:
 - `{ type: 'snapshot'; snapshot }`
 - `{ type: 'notice'; message }`
 - `{ type: 'host-closed' }`
+- `{ type: 'timing'; timing }`
 - `{ type: 'pong'; sentAtMs, receivedAtMs, serverSentAtMs?, timing? }`
 
 Practical note:
@@ -175,6 +177,8 @@ Practical note:
 
 RTT excludes host processing time: `(T4 - T1) - (T3 - T2)`. Midpoint samples near the minimum RTT form a centered least-squares fit over at most 64 samples and 60 seconds. Drift is bounded to 1,000 ppm. Invalid samples are rejected. A long sample gap resets the fit. Each pong can carry the worker's tick, interval, and next deadline. The worker publishes its actual accumulator deadline after catch-up or discarded backlog.
 
+`EngineClient.onTiming()` also feeds the host's phase detector. When the worker deadline shifts by more than 3 ms modulo the tick interval, the host pushes an unsolicited `timing` notice over control. The client cancels and reschedules a pending input send against the new phase immediately. A phase notice does not refresh the age of the NTP fit or permit an older worker timeline to replace a newer one. Normal tick advances do not produce control notices. Session teardown removes the timing subscription.
+
 `ClientSession` paces sends from its bounded `PendingInputQueue` to estimate arrival **20 ms before a worker deadline**, using half the filtered RTT for one-way transit. A paced send takes the newest movement state and redundant unacknowledged skill events. Canonical `PlayerInput` stays unchanged. Timers and clock state reset on reconnect or teardown. Until timing is available, or after five seconds without a fresh sample, inputs send immediately.
 
 The 15–25 ms arrival window is a target under stable, approximately symmetric paths. RTT asymmetry, browser timer stalls, and host suspension can move actual arrival outside that window. `NetDiagnostics` exposes the fitted rate, offset, and sample count.
@@ -183,9 +187,15 @@ The 15–25 ms arrival window is a target under stable, approximately symmetric 
 
 `src/net/snapshotCodec.ts` owns one encoder per host peer and one decoder per client transport. `snapshotBinary.ts` encodes typed binary values and recursive object/array changes with a fixed field-name dictionary. Arena coordinates (`x`, `y`, `anchorX`, `anchorY`) map from centered arena bounds to unsigned 16-bit integers. Values outside the arena clamp to its bounds. Maximum in-bounds error is half a cell (`extent / 131070`). Velocities and other non-integer numeric state retain float64 precision. Mechanic and AI traces remain local.
 
-Every frame names its tick and baseline tick. The host references only a frame that this client completed and acknowledged, never the previous send. Both ends keep at most 64 baseline states. Clients publish strictly increasing, fully reconstructed and validated snapshots. Lost, duplicate, reordered, corrupt, and incomplete packets cannot regress published state. Missing baselines request a keyframe over reliable control. The host also sends a keyframe every two seconds of simulation time and whenever its acknowledged baseline is unavailable.
+The host prepares one immutable quantized tree per broadcast, lazily when a peer actually encodes it. All peers share that current state while retaining independent acknowledged baselines. Each encoder reuses a bounded `Uint8Array` writer and its `DataView`, rewinding unchanged subtrees instead of allocating a writer per node. Final packet buffers are independent copies. Preparation, packets, strings, and decoding still allocate. The repeatable encoding benchmark is `npx vitest bench --run src/net/snapshot.bench.ts`.
 
-Each `beat-snapshot` message is at most **1,000 bytes**, including a 24-byte versioned header. Routine movement deltas fit a single message. Larger keyframes or busy frames split into independently unordered fragments without dropping gameplay entities. The header carries tick, baseline, total length, fragment index/count, and a frame checksum. A frame is published and acknowledged only after all fragments arrive. There is no snapshot retransmission. Reassembly allows four pending frames, a one-second assembly window, and a 256 KiB maximum frame. The channel remains `{ ordered: false, maxRetransmits: 0 }`. Legacy JSON snapshots retain their original size behavior.
+Clients advertise `snapshotProtocol: 1` plus optional `snapshotCodecVersion: 2`. Keeping the original opt-in field lets older hosts accept hello and reply with codec v1. Hosts send v1 to peers without the v2 field. Packet header byte 2 identifies the codec version. V2 matches entity arrays by stable IDs and encodes contiguous runs of baseline indices plus changed entries, preserving exact order across insertion, removal, and reordering. A head despawn therefore does not rewrite the surviving tail. V1 retains positional array changes. Both versions keep a single acknowledged frame baseline per peer.
+
+Every frame names its tick and baseline tick. The host references only a frame that this client completed and acknowledged, never the previous send. Both ends keep at most 64 baseline states, retaining the currently acknowledged/referenced baseline within that budget during delayed ACKs. Clients publish strictly increasing, fully reconstructed and validated snapshots. Lost, duplicate, reordered, corrupt, and incomplete packets cannot regress published state. Missing baselines request a keyframe over reliable control. The host also sends a keyframe every two seconds of simulation time and whenever its acknowledged baseline is unavailable, subject to channel backpressure and an in-flight recovery frame.
+
+Each binary message is at most **1,000 bytes**, including a 24-byte versioned header. This leaves transport overhead headroom without guaranteeing fragmentation behavior for every path. Routine movement deltas fit a single message. Larger frames split without dropping gameplay entities. The header carries tick, baseline, total length, fragment index/count, and a frame checksum. A frame is published and acknowledged only after all fragments arrive. `beat-snapshot` remains `{ ordered: false, maxRetransmits: 0 }`, with four pending datagram frames, a one-second assembly window, and a 256 KiB maximum frame.
+
+V2 keyframes use `beat-keyframe`, a reliable ordered channel separate from control and ordinary deltas. After processing welcome and creating its decoder, the client sends `snapshot-ack: -1` to enable initial keyframe delivery, preventing cross-channel ordering from delivering the keyframe before welcome. Each peer has at most one outstanding keyframe. Deltas continue against a usable acknowledged baseline while a periodic keyframe is in flight. With no usable baseline, the host waits for recovery rather than queuing full frames every snapshot interval. A keyframe may retry after five seconds only when its channel queue has drained. Its single reassembly slot allows 15 seconds and cannot be evicted by incomplete datagrams. All channels still share the peer connection's congestion and bandwidth limits. V1 retains unreliable keyframes; legacy JSON snapshots retain their original size behavior.
 
 ## Collision-constrained remote dead reckoning
 

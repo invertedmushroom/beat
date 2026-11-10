@@ -8,6 +8,7 @@ export class EngineClient {
   private readonly snapshotListeners = new Set<SnapshotListener>();
   private readonly noticeListeners = new Set<NoticeListener>();
   private timing?: EngineTickTiming;
+  private readonly timingListeners = new Set<(timing: EngineTickTiming) => void>();
   private readyResolver?: () => void;
   private readyRejecter?: (error: Error) => void;
   private readyPromise = new Promise<void>((resolve, reject) => {
@@ -29,6 +30,11 @@ export class EngineClient {
 
   tickTiming(): EngineTickTiming | undefined {
     return this.timing;
+  }
+
+  onTiming(listener: (timing: EngineTickTiming) => void): () => void {
+    this.timingListeners.add(listener);
+    return () => { this.timingListeners.delete(listener); };
   }
 
   addPlayer(player: PlayerSpawn): void {
@@ -66,6 +72,7 @@ export class EngineClient {
   }
 
   destroy(): void {
+    this.timingListeners.clear();
     this.post({ type: 'stop' });
     this.worker.terminate();
   }
@@ -73,6 +80,7 @@ export class EngineClient {
   private handleEvent(event: EngineEvent): void {
     if (event.type === 'timing') {
       this.timing = event.timing;
+      for (const listener of this.timingListeners) listener(event.timing);
       return;
     }
     if (event.type === 'ready') {

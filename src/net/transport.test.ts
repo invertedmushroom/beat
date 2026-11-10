@@ -3,7 +3,8 @@ import { createDefaultRuleset } from '../engine/defaultRules';
 import type { EngineSnapshot, PlayerSnapshot } from '../engine/protocol';
 import { AffineClockSync, INPUT_ARRIVAL_LEAD_MS } from './clockSync';
 import { CollisionPrediction } from './collisionPrediction';
-import { SnapshotDecoder, SnapshotEncoder, SNAPSHOT_PACKET_BYTES, quantizePosition, dequantizePosition } from './snapshotCodec';
+import { prepareSnapshot, SnapshotDecoder, SnapshotEncoder, SNAPSHOT_PACKET_BYTES, quantizePosition, dequantizePosition } from './snapshotCodec';
+import { decodeSnapshotPatch, SnapshotPatchWriter } from './snapshotBinary';
 import { SnapshotSmoother } from './snapshotSmoothing';
 import { decodeClientMessage, decodeHostMessage } from './messages';
 
@@ -109,6 +110,21 @@ describe('quantized acknowledged snapshot transport', () => {
     expect(receive(receiver, sender.encode(next))?.players[0].hp).toBe(42);
   });
 
+  it('encodes a head despawn without rewriting the surviving entity tail', () => {
+    const sender = new SnapshotEncoder(arena, 60);
+    const receiver = new SnapshotDecoder(arena);
+    const first = snapshot(1);
+    first.projectiles = Array.from({ length: 100 }, (_, i) => ({ projectileId: `shot_${i}`, ownerId: 'p0', abilityId: 'shot', x: 1, y: 2, radius: 0.2, color: '#ff0000' }));
+    receive(receiver, sender.encode(first));
+    sender.acknowledge(1);
+    const next = structuredClone(first);
+    next.tick = 2;
+    next.projectiles.shift();
+    const packets = sender.encode(next);
+    expect(packets.reduce((sum, packet) => sum + packet.byteLength, 0)).toBeLessThan(128);
+    expect(receive(receiver, packets)?.projectiles.map((entry) => entry.projectileId)).toEqual(next.projectiles.map((entry) => entry.projectileId));
+  });
+
   it('requests a keyframe after a baseline miss and recovers without acknowledging partial frames', () => {
     const sender = new SnapshotEncoder(arena, 60);
     sender.encode(snapshot(1));
@@ -153,6 +169,88 @@ describe('quantized acknowledged snapshot transport', () => {
     expect(receive(receiver, sender.encode(invalid))).toBeUndefined();
     expect(receive(receiver, sender.encode(snapshot(3)))?.tick).toBe(3);
   });
+
+  it('shares immutable preparation across peers without reusing emitted packet buffers', () => {
+    const first = snapshot(1);
+    const prepared = prepareSnapshot(first, arena);
+    const a = new SnapshotEncoder(arena, 60), b = new SnapshotEncoder(arena, 60);
+    const oldPackets = a.encodePrepared(prepared)!.packets;
+    const savedBytes = oldPackets[0].slice();
+    expect(b.encodePrepared(prepared)!.packets).toEqual(oldPackets);
+    expect(prepared.value).toBe(prepared.value);
+    a.acknowledge(1);
+    a.encodePrepared(prepareSnapshot(snapshot(2), arena));
+    expect(oldPackets[0]).toEqual(savedBytes);
+    expect(receive(new SnapshotDecoder(arena), oldPackets)?.tick).toBe(1);
+  });
+
+  it.each([1, 2] as const)('round-trips entity changes with negotiated codec version %s', (version) => {
+    const sender = new SnapshotEncoder(arena, 60, version);
+    const receiver = new SnapshotDecoder(arena);
+    let current = snapshot(1);
+    current.projectiles = Array.from({ length: 25 }, (_, i) => ({ projectileId: `shot_${i}`, ownerId: 'p0', abilityId: 'shot', x: i / 10, y: 2, radius: 0.2, color: '#abc' }));
+    for (let tick = 1; tick <= 35; tick++) {
+      current = structuredClone(current);
+      current.tick = tick;
+      if (tick % 2 === 0) current.projectiles.reverse();
+      if (tick % 3 === 0) current.projectiles.shift();
+      if (tick % 5 === 0) current.projectiles.splice(1, 0, { projectileId: `new_${tick}`, ownerId: 'p1', abilityId: 'new', x: 3, y: 4, radius: 0.3, color: '#def' });
+      const packets = sender.encode(current);
+      expect(packets[0][2]).toBe(version);
+      if (tick % 4 === 0) continue; // Later deltas must still match the older ACK.
+      const decoded = receive(receiver, packets)!;
+      expect(decoded.projectiles.map((entry) => entry.projectileId)).toEqual(current.projectiles.map((entry) => entry.projectileId));
+      sender.acknowledge(tick);
+    }
+  });
+
+  it('allows slow reliable keyframe assembly independently of newer incomplete datagrams', () => {
+    const sender = new SnapshotEncoder(arena, 60);
+    const busy = snapshot(1);
+    busy.projectiles = Array.from({ length: 120 }, (_, i) => ({ projectileId: `shot_${i}`, ownerId: 'p0', abilityId: 'shot', x: 1, y: 2, radius: 0.2, color: '#abc' }));
+    const packets = sender.encode(busy);
+    const receiver = new SnapshotDecoder(arena);
+    expect(receiver.receive(packets[0].buffer as ArrayBuffer, 0, true)).toEqual({});
+    for (let tick = 2; tick <= 8; tick++) {
+      busy.tick = tick;
+      receiver.receive(sender.encode(busy)[0].buffer as ArrayBuffer, 2_000);
+    }
+    let decoded: EngineSnapshot | undefined;
+    for (const packet of packets.slice(1)) decoded = receiver.receive(packet.buffer as ArrayBuffer, 2_100, true).snapshot ?? decoded;
+    expect(decoded?.projectiles).toHaveLength(120);
+    expect(decoded?.tick).toBe(1);
+  });
+
+  it.each([Infinity, 10])('pins a referenced baseline through a long ACK delay with keyframe interval %s', (interval) => {
+    const sender = new SnapshotEncoder(arena, interval);
+    const receiver = new SnapshotDecoder(arena);
+    receive(receiver, sender.encode(snapshot(1)));
+    sender.acknowledge(1);
+    for (let tick = 2; tick < 90; tick++) expect(receive(receiver, sender.encode(snapshot(tick)))?.tick).toBe(tick);
+    sender.acknowledge(89);
+    expect(receive(receiver, sender.encode(snapshot(90)))?.tick).toBe(90);
+  });
+});
+
+it('does not let phase notices refresh NTP sample age or regress the worker timeline', () => {
+  const clock = new AffineClockSync();
+  clock.observe(1_000, 51_020, 51_025, 1_045, { tick: 30, nextTickAtMs: 51_100, intervalMs: 1_000 / 30 });
+  expect(clock.updateTiming({ tick: 31, nextTickAtMs: 51_140, intervalMs: 1_000 / 30 })).toBe(true);
+  expect(clock.updateTiming({ tick: 29, nextTickAtMs: 51_200, intervalMs: 1_000 / 30 })).toBe(false);
+  expect(clock.stats().samples).toBe(1);
+  expect(clock.inputDelayMs(7_000)).toBe(0);
+  expect(decodeHostMessage('{"type":"timing","timing":{"tick":1,"nextTickAtMs":20,"intervalMs":0}}')).toBeUndefined();
+});
+
+it('bounds and validates the keyed entity patch decoder and reuses its float buffer', () => {
+  expect(() => decodeSnapshotPatch(Uint8Array.of(13, 1, 1, 2, 1, 0), [])).toThrow();
+  expect(() => decodeSnapshotPatch(Uint8Array.of(13, 2, 2, 1, 1, 1, 1, 0), [{ id: 'a' }])).toThrow();
+  expect(() => decodeSnapshotPatch(Uint8Array.of(13, 1, 1, 0, 1, 0), [])).toThrow();
+  expect(() => decodeSnapshotPatch(Uint8Array.of(13, 0, 0, 0), [], 1)).toThrow();
+  const writer = new SnapshotPatchWriter();
+  for (const value of [1.125, -3.75, 1e100, 'unknown 🚀 field é']) {
+    expect(decodeSnapshotPatch(writer.encode(value))).toBe(value);
+  }
 });
 
 describe('collision constrained remote prediction', () => {

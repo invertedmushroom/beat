@@ -880,6 +880,48 @@ test('multiplayer movement survives dropped snapshot packets', async ({ context,
   await expect.poll(async () => client.evaluate(() => window.__BEAT_NET_STATS__?.clockSamples ?? 0)).toBeGreaterThanOrEqual(2);
 });
 
+test('busy join recovers fragmented keyframes despite repeatable snapshot loss', async ({ context, page: host }) => {
+  await host.addInitScript(() => {
+    const counters = { dropped: 0, reliable: 0, snapshots: 0 };
+    (window as unknown as { __BEAT_LOSS__: typeof counters }).__BEAT_LOSS__ = counters;
+    const originalSend = RTCDataChannel.prototype.send;
+    RTCDataChannel.prototype.send = function (data: string | Blob | ArrayBuffer | ArrayBufferView) {
+      if (this.label === 'beat-keyframe') counters.reliable++;
+      if (this.label === 'beat-snapshot' && typeof data !== 'string' && !(data instanceof Blob)) {
+        const view = data instanceof ArrayBuffer ? new DataView(data) : new DataView(data.buffer, data.byteOffset, data.byteLength);
+        counters.snapshots++;
+        if ((view.byteLength >= 24 && view.getUint32(8) === 0xffffffff && view.getUint16(18) > 1 && view.getUint16(16) === 1) || counters.snapshots % 2 === 0) {
+          counters.dropped++;
+          return;
+        }
+      }
+      return originalSend.call(this, data);
+    };
+  });
+  const roomName = `Fragment Loss ${Date.now()}`;
+  await host.goto('/');
+  await host.locator('#display-name').fill('Host');
+  await host.locator('#room-name').fill(roomName);
+  await openAdvancedJson(host);
+  const rulesJson = await host.locator('#rules-json').evaluate((node) => {
+    const rules = JSON.parse((node as HTMLTextAreaElement).value);
+    rules.npcs.sessionSpawns = Array.from({ length: 12 }, (_, i) => ({ id: `dummy-${i}`, archetypeId: 'training-dummy', x: (i % 6) * 2 - 5, y: 4 + Math.floor(i / 6) * 2 }));
+    return JSON.stringify(rules);
+  });
+  await host.locator('#rules-json').fill(rulesJson);
+  await applyAndCloseWorkbench(host);
+  await host.getByRole('button', { name: 'Host' }).click();
+  await expect.poll(() => host.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length)).toBe(13);
+  const client = await context.newPage();
+  await client.goto('/');
+  await client.locator('.room-row').filter({ hasText: roomName }).click();
+  await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length)).toBe(14);
+  await expect.poll(() => host.evaluate(() => (window as unknown as { __BEAT_LOSS__: { reliable: number } }).__BEAT_LOSS__.reliable)).toBeGreaterThan(1);
+  const initialTick = await client.evaluate(() => window.__BEAT_SNAPSHOT__!.tick);
+  await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.tick ?? 0)).toBeGreaterThan(initialTick + 10);
+  await expect.poll(() => host.evaluate(() => (window as unknown as { __BEAT_LOSS__: { dropped: number } }).__BEAT_LOSS__.dropped)).toBeGreaterThan(0);
+});
+
 async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
   const canvas = await page.locator('#arena').boundingBox();
   if (!canvas) {

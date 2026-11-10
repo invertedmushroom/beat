@@ -47,7 +47,13 @@ export class AffineClockSync {
       ? Math.max(0.999, Math.min(1.001, covariance / variance)) : 1;
     this.origin = { client: clientMean, server: serverMean, rtt: minRtt };
     this.offset = serverMean - this.rate * clientMean;
-    if (timing) this.timing = timing;
+    if (timing) this.updateTiming(timing);
+    return true;
+  }
+
+  updateTiming(timing: EngineTickTiming): boolean {
+    if (this.timing && (timing.tick < this.timing.tick || timing.nextTickAtMs < this.timing.nextTickAtMs)) return false;
+    this.timing = timing;
     return true;
   }
 
