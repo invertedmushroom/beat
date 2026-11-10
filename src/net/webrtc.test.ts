@@ -52,6 +52,9 @@ it('paces the actual input channel, preserves coalesced skill events, and cancel
     const inputChannel = channels.get('beat-input')!;
     control.onopen!();
     inputChannel.onopen!();
+    expect(control.sent.filter((message) => typeof message === 'string' && JSON.parse(message).type === 'hello')
+      .map((message) => JSON.parse(message as string))).toContainEqual({ type: 'hello', displayName: 'Client',
+        snapshotProtocol: 1, snapshotCodecVersion: 2 });
     const ruleset = createDefaultRuleset();
     control.onmessage!({ data: JSON.stringify({ type: 'welcome', playerId: 'local', room, ruleset }) });
     now = 1_045;
@@ -84,7 +87,7 @@ it('paces the actual input channel, preserves coalesced skill events, and cancel
   } finally { session.destroy(); }
 });
 
-it('shares host preparation, bounds reliable keyframes, negotiates v1, and pushes only phase changes', async () => {
+it('shares host preparation, bounds reliable keyframes, negotiates v1/v2, and pushes only phase changes', async () => {
   vi.useFakeTimers();
   let now = 100;
   vi.spyOn(performance, 'now').mockImplementation(() => now);
@@ -127,7 +130,8 @@ it('shares host preparation, bounds reliable keyframes, negotiates v1, and pushe
       const peer = { control: new Channel('beat-control'), snapshots: new Channel('beat-snapshot'), keyframes: new Channel('beat-keyframe') };
       peers.push(peer);
       for (const channel of Object.values(peer)) connection.ondatachannel!({ channel });
-      peer.control.onmessage!({ data: JSON.stringify({ type: 'hello', displayName: `Client-${i}`, snapshotProtocol: 1, ...(i < 2 ? { snapshotCodecVersion: 2 } : {}) }) });
+      peer.control.onmessage!({ data: JSON.stringify({ type: 'hello', displayName: `Client-${i}`, snapshotProtocol: 1,
+        ...(i < 2 ? { snapshotCodecVersion: 2 } : {}) }) });
       peer.control.onmessage!({ data: '{"type":"snapshot-ack","tick":-1}' });
     }
     let reads = 0;
@@ -138,6 +142,8 @@ it('shares host preparation, bounds reliable keyframes, negotiates v1, and pushe
     expect(reads).toBe(1);
     expect(peers[0].keyframes.sent).toHaveLength(1);
     expect(peers[0].snapshots.sent).toHaveLength(0);
+    expect((peers[0].keyframes.sent[0] as Uint8Array)[2]).toBe(2);
+    expect((peers[1].keyframes.sent[0] as Uint8Array)[2]).toBe(2);
     expect((peers[2].snapshots.sent[0] as Uint8Array)[2]).toBe(1);
     now = 200;
     host.broadcastSnapshot({ ...frame, tick: 2 });

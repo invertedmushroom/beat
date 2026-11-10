@@ -192,6 +192,7 @@ describe('quantized acknowledged snapshot transport', () => {
     for (let tick = 1; tick <= 35; tick++) {
       current = structuredClone(current);
       current.tick = tick;
+      current.players[0].jumpHeld = tick % 2 === 0;
       if (tick % 2 === 0) current.projectiles.reverse();
       if (tick % 3 === 0) current.projectiles.shift();
       if (tick % 5 === 0) current.projectiles.splice(1, 0, { projectileId: `new_${tick}`, ownerId: 'p1', abilityId: 'new', x: 3, y: 4, radius: 0.3, color: '#def' });
@@ -200,6 +201,7 @@ describe('quantized acknowledged snapshot transport', () => {
       if (tick % 4 === 0) continue; // Later deltas must still match the older ACK.
       const decoded = receive(receiver, packets)!;
       expect(decoded.projectiles.map((entry) => entry.projectileId)).toEqual(current.projectiles.map((entry) => entry.projectileId));
+      expect(decoded.players[0].jumpHeld).toBe(current.players[0].jumpHeld);
       sender.acknowledge(tick);
     }
   });
@@ -230,6 +232,21 @@ describe('quantized acknowledged snapshot transport', () => {
     sender.acknowledge(89);
     expect(receive(receiver, sender.encode(snapshot(90)))?.tick).toBe(90);
   });
+});
+
+it('uses the jump dictionary in v2 and preserves literal fields for v1 readers', () => {
+  const writer = new SnapshotPatchWriter();
+  // These bytes are also understood by the original 87-key readers.
+  const literalTrue = Uint8Array.of(8, 1, 0, 8, ...new TextEncoder().encode('jumpHeld'), 3);
+  expect(writer.encode({ jumpHeld: true }, undefined, 1)).toEqual(literalTrue);
+  expect(decodeSnapshotPatch(literalTrue, undefined, 1)).toEqual({ jumpHeld: true });
+  const compactTrue = writer.encode({ jumpHeld: true }).slice();
+  expect(compactTrue).toEqual(Uint8Array.of(8, 1, 88, 3));
+  expect(decodeSnapshotPatch(compactTrue)).toEqual({ jumpHeld: true });
+  expect(() => decodeSnapshotPatch(compactTrue, undefined, 1)).toThrow(/field/);
+  const compactFalse = writer.encode({ jumpHeld: false }, { jumpHeld: true }).slice();
+  expect(compactFalse).toEqual(Uint8Array.of(11, 1, 88, 2));
+  expect(decodeSnapshotPatch(compactFalse, { jumpHeld: true })).toEqual({ jumpHeld: false });
 });
 
 it('does not let phase notices refresh NTP sample age or regress the worker timeline', () => {

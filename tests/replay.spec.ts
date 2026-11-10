@@ -1,4 +1,33 @@
 import { expect, test } from '@playwright/test';
+import { createDefaultRuleset } from '../src/engine/defaultRules';
+import type { EngineSnapshot } from '../src/engine/protocol';
+import { ReplayRecorder, serializeReplay } from '../src/replay/archive';
+
+for (const tickRate of [60, 120]) {
+  test(`replay buttons step between recorded samples at ${tickRate} Hz`, async ({ page }) => {
+    const ruleset = createDefaultRuleset();
+    ruleset.tickRate = tickRate;
+    const recorder = new ReplayRecorder({ version: 1, source: 'solo', ruleset, recordedAt: 123 });
+    for (let tick = 1; tick <= 17; tick++) {
+      const snapshot: EngineSnapshot = { tick, nowMs: tick * 1000 / tickRate, rulesetId: ruleset.id,
+        match: { elapsedTicks: tick, remainingTicks: 100, durationTicks: 100, scoreLimit: 1, finished: false, teams: [] },
+        players: [], objectives: [], projectiles: [], physicsBodies: [], constraints: [], effects: [], combatTexts: [], mechanicTraces: [], aiTraces: [] };
+      recorder.record(snapshot);
+    }
+    const clip = recorder.clip()!;
+    await page.goto('/');
+    await page.locator('#replay-file').setInputFiles({ name: 'high-rate.beat', mimeType: 'application/octet-stream', buffer: Buffer.from(serializeReplay(clip)) });
+    await expect(page.getByRole('region', { name: 'Replay controls' })).toBeVisible();
+    for (const tick of clip.frames.slice(1).map((frame) => frame.tick)) {
+      await page.getByRole('button', { name: 'Next replay frame', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.__BEAT_SNAPSHOT__?.tick)).toBe(tick);
+    }
+    for (const tick of clip.frames.slice(0, -1).reverse().map((frame) => frame.tick)) {
+      await page.getByRole('button', { name: 'Previous replay frame', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.__BEAT_SNAPSHOT__?.tick)).toBe(tick);
+    }
+  });
+}
 
 test('records, exports, imports, and seeks a replay without starting a live simulation', async ({ page }, testInfo) => {
   const errors: string[] = [];

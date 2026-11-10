@@ -1,12 +1,14 @@
 // The fixed dictionary keeps field names out of routine snapshots. Unknown keys
 // are still encoded as strings so adding a snapshot field cannot silently drop it.
-const KEYS = ('tick nowMs rulesetId match objectives players projectiles physicsBodies constraints effects combatTexts ' +
+const LEGACY_KEYS = ('tick nowMs rulesetId match objectives players projectiles physicsBodies constraints effects combatTexts ' +
   'elapsedTicks remainingTicks durationTicks scoreLimit finished winnerTeamId teams id name color score objectiveId kind bodyId ' +
   'x y vx vy radius activeZoneId lastScoredTeamId scoreCooldownTicks zones controllingTeamId contestProgress zoneId team points ' +
   'playerId displayName hue hp maxHp alive respawnTick slotCooldownTicks lastUsedSlot aimDx aimDy facingDx facingDy role status statuses resources charging lastInputSequence ' +
   'slowMultiplier slowTicks slowColor tags stacks movementMultiplier damageDealtMultiplier damageTakenMultiplier value max ' +
   'slot abilityId chargeTicks maxTicks ratio projectileId ownerId effectId ageTicks lifetimeTicks sourceAbilityId constraintId targetId ' +
   'anchorBodyId anchorX anchorY length textId amount').split(' ');
+// V2 appends jumpHeld as ID 88. V1 keeps the literal field name.
+const KEYS = [...LEGACY_KEYS, 'jumpHeld'];
 const KEY_IDS = new Map(KEYS.map((key, index) => [key, index + 1]));
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -92,7 +94,8 @@ export class SnapshotPatchWriter {
     this.finishCount(at, written);
   }
   private key(value: string): void {
-    const id = KEY_IDS.get(value);
+    const candidate = KEY_IDS.get(value);
+    const id = candidate !== undefined && (candidate <= LEGACY_KEYS.length || this.version >= 2) ? candidate : 0;
     this.uint(id ?? 0);
     if (!id) this.string(value);
   }
@@ -244,6 +247,7 @@ class Reader {
   }
   private key(): string {
     const id = this.uint();
+    if (id > LEGACY_KEYS.length && this.version < 2) throw new Error('Invalid snapshot field');
     const key = id === 0 ? this.string() : KEYS[id - 1];
     if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') throw new Error('Invalid snapshot field');
     return key;

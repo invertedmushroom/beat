@@ -25,6 +25,13 @@ export class ReplayPlayer {
     this.positionMs = Math.max(0, Math.min(this.clip.durationMs, positionMs));
     this.lastNow = undefined;
   }
+  step(direction: -1 | 1): void {
+    const index = lowerFrame(this.clip, this.positionMs);
+    const destination = direction > 0 ? Math.min(index + 1, this.clip.frames.length - 1)
+      : this.positionMs > frameTimeMs(this.clip, index) ? index : Math.max(0, index - 1);
+    this.setPlaying(false);
+    this.seek(frameTimeMs(this.clip, destination));
+  }
   setPlaying(playing: boolean): void {
     if (playing && this.positionMs >= this.clip.durationMs) this.seek(0);
     this.playing = playing;
@@ -41,7 +48,7 @@ export class ReplayPlayer {
     this.lastNow = nowMs;
     if (this.positionMs >= this.clip.durationMs) this.playing = false;
     const targetTick = this.clip.frames[0].tick + this.positionMs / 1000 * this.clip.metadata.ruleset.tickRate;
-    const index = lowerFrame(this.clip.frames, targetTick);
+    const index = lowerFrame(this.clip, this.positionMs);
     const nextIndex = Math.min(index + 1, this.clip.frames.length - 1);
     if (!this.recent.has(index) && (index <= this.decodedIndex || index - this.decodedIndex > 60)) {
       let checkpoint = 0;
@@ -65,26 +72,50 @@ export class ReplayPlayer {
   }
 }
 
-function lowerFrame(frames: ReplayClip['frames'], tick: number): number {
-  let low = 0, high = frames.length - 1;
+function frameTimeMs(clip: ReplayClip, index: number): number {
+  return (clip.frames[index].tick - clip.frames[0].tick) / clip.metadata.ruleset.tickRate * 1000;
+}
+function lowerFrame(clip: ReplayClip, positionMs: number): number {
+  let low = 0, high = clip.frames.length - 1;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    if (frames[middle].tick <= tick) low = middle;
+    if (frameTimeMs(clip, middle) <= positionMs) low = middle;
     else high = middle - 1;
   }
   return low;
 }
 function interpolate(before: EngineSnapshot, after: EngineSnapshot, alpha: number): EngineSnapshot {
+  if (alpha === 0) return before;
   const players = new Map(after.players.map((player) => [player.playerId, player]));
   const projectiles = new Map(after.projectiles.map((projectile) => [projectile.projectileId, projectile]));
   const bodies = new Map(after.physicsBodies.map((body) => [body.bodyId, body]));
+  const objectives = new Map(after.objectives.map((objective) => [objective.objectiveId, objective]));
   const position = <T extends { x: number; y: number }>(a: T, b: T | undefined): T => b ? { ...a, x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha } : { ...a };
   return { ...before,
     players: before.players.map((player) => {
       const next = players.get(player.playerId);
-      return position(player, next?.alive === player.alive && next?.respawnTick === player.respawnTick ? next : undefined);
+      if (!next || next.alive !== player.alive || next.respawnTick !== player.respawnTick) return player;
+      const facing = direction(player.facingDx, player.facingDy, next.facingDx, next.facingDy, alpha);
+      const aim = direction(player.aimDx, player.aimDy, next.aimDx, next.aimDy, alpha);
+      return { ...position(player, next), facingDx: facing.x, facingDy: facing.y, aimDx: aim.x, aimDy: aim.y };
     }),
     projectiles: before.projectiles.map((projectile) => position(projectile, projectiles.get(projectile.projectileId))),
     physicsBodies: before.physicsBodies.map((body) => position(body, bodies.get(body.bodyId))),
+    objectives: before.objectives.map((objective) => {
+      const next = objectives.get(objective.objectiveId);
+      return position(objective, next?.kind === objective.kind && next?.bodyId === objective.bodyId ? next : undefined);
+    }),
   };
+}
+
+/** Rotate on the shortest 2D arc; an exact half-turn consistently rotates positive. */
+function direction(ax: number, ay: number, bx: number, by: number, alpha: number): { x: number; y: number } {
+  const lengthA = Math.hypot(ax, ay), lengthB = Math.hypot(bx, by);
+  if (lengthA < 0.000001) return lengthB < 0.000001 ? { x: ax, y: ay } : { x: bx / lengthB, y: by / lengthB };
+  if (lengthB < 0.000001) return { x: ax / lengthA, y: ay / lengthA };
+  ax /= lengthA; ay /= lengthA; bx /= lengthB; by /= lengthB;
+  const cross = ax * by - ay * bx, dot = ax * bx + ay * by;
+  const angle = (Math.abs(cross) < 1e-12 && dot < 0 ? Math.PI : Math.atan2(cross, dot)) * alpha;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  return { x: ax * cos - ay * sin, y: ax * sin + ay * cos };
 }

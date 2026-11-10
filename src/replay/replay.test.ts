@@ -10,6 +10,18 @@ const metadata = { version: 1 as const, ruleset: rules, source: 'client' as cons
 const diagnostics = { pendingInputs: 3, predictionError: 0.12, snapCorrections: 2 };
 
 describe('bounded replay archives', () => {
+  it.each([1, 2] as const)('imports archives containing codec v%s snapshots', (version) => {
+    const encoder = new SnapshotEncoder(rules.arena, 60, version);
+    const frames = [1, 2].map((tick) => {
+      const packets = encoder.encode(snapshot(tick));
+      encoder.acknowledge(tick);
+      return { tick, packets, keyframe: tick === 1 };
+    });
+    const player = new ReplayPlayer(parseReplay(serializeReplay({ metadata, frames, bytes: 0, durationMs: 1000 / rules.tickRate }).buffer));
+    player.step(1);
+    expect(player.frame(0).snapshot.players[0].jumpHeld).toBe(true);
+    expect(player.frame(0).snapshot.tick).toBe(2);
+  });
   it('round-trips rules, quantized snapshots, and client diagnostics on an independent baseline chain', () => {
     const recorder = new ReplayRecorder(metadata);
     for (let tick = 1; tick <= 65; tick++) recorder.record(snapshot(tick), diagnostics);
@@ -107,6 +119,79 @@ describe('bounded replay archives', () => {
 });
 
 describe('visual replay playback', () => {
+  it.each([30, 60, 120])('steps between recorded samples at %sHz, including gaps and interpolated positions', (tickRate) => {
+    const custom = structuredClone(metadata);
+    custom.ruleset.tickRate = tickRate;
+    const spacing = Math.ceil(tickRate / 30);
+    const ticks = [1, 1 + spacing, 1 + spacing * 4];
+    const recorder = new ReplayRecorder(custom);
+    for (const tick of ticks) recorder.record(snapshot(tick));
+    const player = new ReplayPlayer(recorder.clip()!);
+    player.step(-1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[0]);
+    player.setPlaying(true);
+    player.step(1);
+    expect(player.frame(0).playing).toBe(false);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[1]);
+    player.step(1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[2]);
+    player.step(1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[2]);
+    player.step(-1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[1]);
+    player.seek((ticks[1] - 1 + spacing * 0.5) * 1000 / tickRate);
+    player.step(-1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[1]);
+    player.seek((ticks[1] - 1 + spacing * 0.5) * 1000 / tickRate);
+    player.step(1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[2]);
+    player.step(-1); player.step(-1);
+    expect(player.frame(0).snapshot.tick).toBe(ticks[0]);
+  });
+
+  it('interpolates moving objectives by identity and keeps scoring and creation discrete', () => {
+    const recorder = new ReplayRecorder(metadata);
+    const before = snapshot(1), after = snapshot(2);
+    const objective: EngineSnapshot['objectives'][number] = { objectiveId: 'ball', name: 'Ball', kind: 'relicPush', bodyId: 'ball-body',
+      x: 0, y: 0, vx: 3, vy: 0, radius: 0.5, color: '#fff', scoreCooldownTicks: 0, zones: [] };
+    before.objectives = [objective, { ...objective, objectiveId: 'removed', x: -5 }];
+    after.objectives = [{ ...objective, objectiveId: 'new', x: 12 }, { ...objective, x: 4, y: 2, lastScoredTeamId: 'players' }];
+    recorder.record(before); recorder.record(after);
+    const player = new ReplayPlayer(recorder.clip()!);
+    player.seek(500 / rules.tickRate);
+    const objectives = player.frame(0).snapshot.objectives;
+    expect(objectives.map((entity) => entity.objectiveId)).toEqual(['ball', 'removed']);
+    expect(objectives[0].x).toBeCloseTo(2, 2);
+    expect(objectives[0].y).toBeCloseTo(1, 2);
+    expect(objectives[0].lastScoredTeamId).toBeUndefined();
+    expect(objectives[1].x).toBeCloseTo(-5, 2);
+    player.step(1);
+    expect(player.frame(0).snapshot.objectives[1].lastScoredTeamId).toBe('players');
+  });
+
+  it.each([[170, -170, 180], [0, 180, 90], [0, 90, 45], [15, 15, 15]])(
+    'interpolates facing and aim along the shortest arc from %s to %s degrees', (from, to, midpoint) => {
+      const recorder = new ReplayRecorder(metadata);
+      const before = snapshot(1), after = snapshot(2);
+      for (const [state, degrees] of [[before, from], [after, to]] as const) {
+        const radians = degrees * Math.PI / 180;
+        Object.assign(state.players[0], { facingDx: Math.cos(radians) * 2, facingDy: Math.sin(radians) * 2,
+          aimDx: Math.cos(radians) * 3, aimDy: Math.sin(radians) * 3 });
+      }
+      recorder.record(before); recorder.record(after);
+      const player = new ReplayPlayer(recorder.clip()!);
+      player.seek(500 / rules.tickRate);
+      const rendered = player.frame(0).snapshot.players[0];
+      const expected = midpoint * Math.PI / 180;
+      expect(rendered.facingDx).toBeCloseTo(Math.cos(expected), 6);
+      expect(rendered.facingDy).toBeCloseTo(Math.sin(expected), 6);
+      expect(rendered.aimDx).toBeCloseTo(Math.cos(expected), 6);
+      expect(rendered.aimDy).toBeCloseTo(Math.sin(expected), 6);
+      // Seeking must not mutate a decoded baseline or change its recorded direction.
+      player.seek(0);
+      expect(player.frame(0).snapshot.players[0].facingDx).toBe(before.players[0].facingDx);
+    });
+
   it('seeks across checkpoints in either direction and interpolates only matching entities', () => {
     const recorder = new ReplayRecorder(metadata);
     for (let tick = 1; tick <= 150; tick++) recorder.record(snapshot(tick), diagnostics);
@@ -124,6 +209,7 @@ describe('visual replay playback', () => {
     const recorder = new ReplayRecorder(metadata);
     recorder.record(snapshot(1));
     const dead = snapshot(2); dead.players[0].alive = false; dead.players[0].x = 10;
+    dead.players[0].facingDx = -1; dead.players[0].aimDx = -1;
     dead.players.push({ ...dead.players[0], playerId: 'new' });
     recorder.record(dead);
     const player = new ReplayPlayer(recorder.clip()!);
@@ -131,6 +217,8 @@ describe('visual replay playback', () => {
     expect(player.frame(0).snapshot.players).toHaveLength(1);
     expect(player.frame(0).snapshot.players[0].x).toBeCloseTo(0.1, 2);
     expect(player.frame(0).snapshot.players[0].alive).toBe(true);
+    expect(player.frame(0).snapshot.players[0].facingDx).toBe(1);
+    expect(player.frame(0).snapshot.players[0].aimDx).toBe(1);
     player.seek(1_000 / rules.tickRate);
     expect(player.frame(0).snapshot.players).toHaveLength(2);
     expect(player.frame(0).snapshot.players[0].alive).toBe(false);
@@ -155,6 +243,24 @@ describe('visual replay playback', () => {
     expect(player.frame(800).positionMs).toBe(0);
     player.setSpeed(17);
     expect(player.frame(800).speed).toBe(2);
+  });
+
+  it('keeps a changed respawn identity discrete and handles zero direction vectors', () => {
+    const recorder = new ReplayRecorder(metadata);
+    const before = snapshot(1), after = snapshot(2);
+    Object.assign(after.players[0], { respawnTick: 2, x: 10, facingDx: -1, aimDx: -1 });
+    before.players.push({ ...before.players[0], playerId: 'zero', facingDx: 0, aimDx: 0 });
+    after.players.push({ ...before.players[1], facingDy: 2 });
+    recorder.record(before); recorder.record(after);
+    const player = new ReplayPlayer(recorder.clip()!);
+    player.seek(500 / rules.tickRate);
+    const players = player.frame(0).snapshot.players;
+    expect(players[0].x).toBeCloseTo(0.1, 2);
+    expect(players[0].facingDx).toBe(1);
+    expect(players[1].facingDx).toBe(0);
+    expect(players[1].facingDy).toBe(1);
+    expect(players[1].aimDx).toBe(0);
+    expect(players[1].aimDy).toBe(0);
   });
 });
 

@@ -64,9 +64,8 @@ export class ReplayFeature {
     for (const [selector, direction] of [['#replay-back', -1], ['#replay-forward', 1]] as const) {
       node(selector).addEventListener('click', () => {
         if (!this.player) return;
-        const current = this.player.frame(performance.now());
-        this.player.setPlaying(false);
-        this.player.seek(current.positionMs + direction * 1000 / this.player.clip.metadata.ruleset.tickRate);
+        this.player.frame(performance.now());
+        this.player.step(direction);
       }, options);
     }
     this.syncButtons();

@@ -1,6 +1,6 @@
 # Snapshot replays
 
-Solo, Lab, Host, and Client sessions record received authoritative snapshots in memory. Use **Save replay** during a session, or return to **Menu** and select **Watch last replay** or **Export replay**. **Import replay** opens an exported `.beat` file. Playback starts paused and provides a timeline, previous/next simulation tick, and 0.5×, 1×, and 2× speed. Imported rules configure the arena renderer.
+Solo, Lab, Host, and Client sessions record received authoritative snapshots in memory. Use **Save replay** during a session, or return to **Menu** and select **Watch last replay** or **Export replay**. **Import replay** opens an exported `.beat` file. Playback starts paused and provides a timeline, previous/next recorded sample, and 0.5×, 1×, and 2× speed. Imported rules configure the arena renderer. Step buttons pause playback and seek to adjacent recorded samples, including at ruleset tick rates above 30 Hz. From an interpolated position, stepping backward selects the preceding sample and stepping forward selects the following sample.
 
 The latest recording survives returning to the menu. A new session replaces that recording. A page reload discards in-memory recordings. Export a file to retain a clip across reloads. An invalid import leaves the previous clip available.
 
@@ -8,7 +8,7 @@ The latest recording survives returning to the menu. A new session replaces that
 
 The replay shows authoritative state with position interpolation between samples. Client recordings also show the recorded pending input count, prediction error EWMA, and correction count. These diagnostics describe the live session. Playback does not reconstruct the original predicted render, execute inputs, or resimulate physics. Recorded snapshots exclude mechanic and AI traces, as network snapshots do.
 
-`ReplayRecorder` owns its own encoder and acknowledges each recorded tick immediately. Recording cannot advance a transport encoder's baseline. `ReplayPlayer` owns an independent decoder and restores from the nearest checkpoint when seeking backward or across a large interval. Interpolation matches entity IDs and keeps player death and respawn transitions discrete.
+`ReplayRecorder` owns its own encoder and acknowledges each recorded tick immediately. Recording cannot advance a transport encoder's baseline. `ReplayPlayer` owns an independent decoder and restores from the nearest checkpoint when seeking backward or across a large interval. Position interpolation matches players, projectiles, physics bodies, and objectives by ID. Player facing and aim rotate along the shortest arc with unit-length directions. Exact half-turns rotate in the positive direction. Player death and respawn transitions, objective scoring, and entity creation remain discrete. A changed objective kind or body ID also keeps the objective position discrete.
 
 `ReplayFeature` owns one recording and one retained clip. Its abort controller removes event listeners on destruction. It revokes download URLs after use or destruction. A session generation invalidates file reads that finish after leaving the menu or starting a session. Recording errors stop recording for that session and retain any completed clip. Gameplay continues.
 
@@ -34,7 +34,7 @@ All archive integers use little-endian order. Embedded snapshot packets retain t
 | Optional diagnostics | Pending inputs `u16`, prediction error `f64`, correction count `u32` |
 | Packets | Repeated `u16` byte length followed by snapshot packet bytes |
 
-Frames continue to end of file. Each packet is at most 1,000 bytes and uses the existing checksummed snapshot codec. Every delta names the preceding recorded tick as its baseline. The first frame is a checkpoint. Fragment indices must match the frame record. These rules let seeking restore a checkpoint without depending on evicted state.
+Frames continue to end of file. Each packet is at most 1,000 bytes and uses the existing checksummed snapshot codec. Recordings use codec v2, including its `jumpHeld` dictionary entry. Every delta names the preceding recorded tick as its baseline. The first frame is a checkpoint. Fragment indices must match the frame record. These rules let seeking restore a checkpoint without depending on evicted state.
 
 Import validates the complete file before publishing a clip: file size, metadata and rules, increasing ticks, frame count, retention span, fragment indices, baseline chain, packet checksums, snapshot shape, diagnostics, and drawing geometry. The file cap is 16 MiB plus 1 MiB of metadata plus the 12-byte archive header. A checksum detects corruption and does not establish who created a file.
 
