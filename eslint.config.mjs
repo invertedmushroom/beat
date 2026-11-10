@@ -5,6 +5,7 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   {
     ignores: [
+      '.agents/**',
       'dist/**',
       'graphify-out/**',
       'node_modules/**',

@@ -464,6 +464,7 @@ export class BeatApp {
       this.localPlayerId = playerId;
       this.ruleset = ruleset;
       this.applyUiPreferences();
+      this.snapshotSmoother?.destroy();
       this.snapshotSmoother = new SnapshotSmoother(ruleset, playerId);
       this.renderer.setSnapshotProvider(() => {
         const renderSnapshot = this.snapshotSmoother?.render(performance.now(), this.clientSession?.pendingInputs() ?? []);
@@ -731,6 +732,7 @@ export class BeatApp {
     this.localPlayerId = undefined;
     this.ruleset = undefined;
     this.lastSnapshot = undefined;
+    this.snapshotSmoother?.destroy();
     this.snapshotSmoother = undefined;
     this.networkStats = undefined;
     this.smoothingStats = undefined;

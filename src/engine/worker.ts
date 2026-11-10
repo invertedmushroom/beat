@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier2d-compat';
+import { initializeRapier as prepareRapier } from './rapier';
 import { chargeRatio, scaleAbilityForCharge } from './charge';
 import { spawnPointForIndex } from './defaultRules';
 import { nextPlatformVelocity } from './platformMovement';
@@ -293,19 +294,7 @@ async function dispatchCommand(command: EngineCommand): Promise<void> {
 }
 
 async function initializeRapier(): Promise<void> {
-  const warn = console.warn;
-  console.warn = (...args: unknown[]) => {
-    const [first] = args;
-    if (typeof first === 'string' && first.includes('deprecated parameters for the initialization function')) {
-      return;
-    }
-    warn(...args);
-  };
-  try {
-    await RAPIER.init();
-  } finally {
-    console.warn = warn;
-  }
+  await prepareRapier();
   port.postMessage({ type: 'notice', message: 'Rapier2D ready' });
 }
 
@@ -416,7 +405,10 @@ function runTickLoop(): void {
     tickAccumulator = 0;
   }
   const delay = Math.max(0, stepIntervalMs - tickAccumulator);
-  tickHandle = setTimeout(runTickLoop, delay) as unknown as number;
+  port.postMessage({ type: 'timing', timing: {
+    tick, intervalMs: stepIntervalMs, nextTickAtMs: performance.timeOrigin + now + delay,
+  } });
+  tickHandle = setTimeout(runTickLoop, Math.max(0, now + delay - performance.now())) as unknown as number;
 }
 
 function addArenaWalls(activeRuleset: Ruleset): void {

@@ -15,7 +15,6 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
   private readonly signalListeners = new Map<string, Set<(signal: RoomSignal) => void>>();
   private readonly signalSubscriptions = new Map<string, SubscriptionHandle>();
   private readonly hostedRooms = new Map<string, RoomInfo>();
-  private readonly advertisedRooms = new Set<string>();
   private readonly rooms = new Map<string, RoomInfo>();
   private readonly seenSignals = new Set<string>();
   private ready: Promise<DbConnection>;
@@ -35,36 +34,29 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
 
   async advertiseRoom(room: RoomInfo): Promise<void> {
     this.hostedRooms.set(room.roomId, room);
-    await this.withConnection(async (connection) => {
-      if (this.advertisedRooms.has(room.roomId)) {
-        await connection.reducers.heartbeatHostedRoom({
-          roomId: room.roomId,
-          playerCount: room.playerCount,
-          status: room.status,
-        });
-        return;
-      }
+    await this.withConnection((connection) => this.publishRoom(connection, room));
+  }
 
-      await connection.reducers.createHostedRoom({
-        roomId: room.roomId,
-        hostPeerId: room.hostPeerId,
-        name: room.name,
-        rulesetId: room.rulesetId,
-        rulesetHash: room.rulesetHash,
-        contentHash: room.contentHash,
-        mapBundleId: room.mapBundleId,
-        playerCount: room.playerCount,
-        maxPlayers: room.maxPlayers,
-        transport: room.transport,
-        status: room.status,
-      });
-      this.advertisedRooms.add(room.roomId);
+  private async publishRoom(connection: DbConnection, room: RoomInfo): Promise<void> {
+    // This reducer is an owner-checked upsert. It also restores a lease swept
+    // while this tab was suspended, even if the STDB transport stayed connected.
+    await connection.reducers.createHostedRoom({
+      roomId: room.roomId,
+      hostPeerId: room.hostPeerId,
+      name: room.name,
+      rulesetId: room.rulesetId,
+      rulesetHash: room.rulesetHash,
+      contentHash: room.contentHash,
+      mapBundleId: room.mapBundleId,
+      playerCount: room.playerCount,
+      maxPlayers: room.maxPlayers,
+      transport: room.transport,
+      status: room.status,
     });
   }
 
   async closeRoom(roomId: string): Promise<void> {
     this.hostedRooms.delete(roomId);
-    this.advertisedRooms.delete(roomId);
     this.rooms.delete(roomId);
     this.emitRooms();
     await this.withConnection((connection) => connection.reducers.closeHostedRoom({ roomId }));
@@ -195,7 +187,6 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
         window.localStorage.setItem(tokenKey, nextToken);
         this.connection = connection;
         this.connectionActive = true;
-        this.advertisedRooms.clear();
         this.installRoomCallbacks(connection);
         this.installSignalCallbacks(connection);
         this.roomSubscription = connection
@@ -244,7 +235,6 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
     }
     this.connection = undefined;
     this.connectionActive = false;
-    this.advertisedRooms.clear();
     this.ready = this.connect();
     this.ready.catch((error: unknown) => console.warn('SpacetimeDB directory reconnect failed', error));
   }
@@ -252,28 +242,7 @@ export class SpacetimeRoomDirectory implements RoomDirectory {
   private async reAdvertiseHostedRooms(connection: DbConnection): Promise<void> {
     for (const room of this.hostedRooms.values()) {
       try {
-        if (this.advertisedRooms.has(room.roomId)) {
-          await connection.reducers.heartbeatHostedRoom({
-            roomId: room.roomId,
-            playerCount: room.playerCount,
-            status: room.status,
-          });
-        } else {
-          await connection.reducers.createHostedRoom({
-            roomId: room.roomId,
-            hostPeerId: room.hostPeerId,
-            name: room.name,
-            rulesetId: room.rulesetId,
-            rulesetHash: room.rulesetHash,
-            contentHash: room.contentHash,
-            mapBundleId: room.mapBundleId,
-            playerCount: room.playerCount,
-            maxPlayers: room.maxPlayers,
-            transport: room.transport,
-            status: room.status,
-          });
-          this.advertisedRooms.add(room.roomId);
-        }
+        await this.publishRoom(connection, room);
       } catch (error) {
         console.warn('Re-advertise hosted room failed', room.roomId, error);
       }

@@ -1,8 +1,9 @@
-import type { Identity } from 'spacetimedb';
+import { ScheduleAt, type Identity } from 'spacetimedb';
 import { schema, table, t, SenderError, type ReducerCtx } from 'spacetimedb/server';
 
 const ROOM_TTL_MS = 8_000;
 const SIGNAL_TTL_MS = 120_000;
+const PENDING_JOIN_TTL_MS = 60_000;
 const MAX_NAME_LENGTH = 36;
 const MAX_DISPLAY_NAME_LENGTH = 24;
 const MAX_HASH_LENGTH = 128;
@@ -55,16 +56,37 @@ const hostedRoomSignal = table(
   }
 );
 
+// SDK 2.1 binds schedules on the table. The explicit callback type breaks the
+// table/schema/reducer inference cycle without changing the installed SDK.
+type ScheduledFunction = ReturnType<NonNullable<Parameters<typeof table>[0]['scheduled']>>;
+const scheduledSweep = (): ScheduledFunction => sweepHostedRooms as unknown as ScheduledFunction;
+const hostedRoomSweep = table(
+  { name: 'hosted_room_sweep', scheduled: scheduledSweep },
+  { sweepId: t.u64().primaryKey(), scheduledAt: t.scheduleAt() },
+);
+
 const spacetimedb = schema({
   hostedRoom,
   hostedRoomPeer,
   hostedRoomSignal,
+  hostedRoomSweep,
 });
 export default spacetimedb;
 
-export const init = spacetimedb.init(() => {
+export const init = spacetimedb.init((ctx) => {
+  ensureDirectorySweep(ctx);
   console.info('Beat room directory ready');
 });
+
+// init does not run on an ordinary module update. Seed an existing database
+// idempotently on its first connection after the upgrade as well.
+export const onConnect = spacetimedb.clientConnected((ctx) => ensureDirectorySweep(ctx));
+
+function ensureDirectorySweep(ctx: ReducerContext): void {
+  if (!ctx.db.hostedRoomSweep.sweepId.find(1n)) {
+    ctx.db.hostedRoomSweep.insert({ sweepId: 1n, scheduledAt: ScheduleAt.interval(5_000_000n) });
+  }
+}
 
 export const createHostedRoom = spacetimedb.reducer(
   {
@@ -82,6 +104,7 @@ export const createHostedRoom = spacetimedb.reducer(
   },
   (ctx, args) => {
     assertRoomShape(args);
+    ensureDirectorySweep(ctx);
     const existing = ctx.db.hostedRoom.roomId.find(args.roomId);
     if (existing && !sameIdentity(existing.hostIdentity, ctx.sender)) {
       throw new SenderError('Only the room host may replace this room');
@@ -235,11 +258,24 @@ export const sendHostedRoomSignal = spacetimedb.reducer(
   }
 );
 
-export const pruneHostedRooms = spacetimedb.reducer(ctx => {
+export const pruneHostedRooms = spacetimedb.reducer(ctx => pruneDirectoryRows(ctx));
+
+export const sweepHostedRooms = spacetimedb.reducer(
+  { sweep: hostedRoomSweep.rowType },
+  (ctx) => pruneDirectoryRows(ctx),
+);
+
+function pruneDirectoryRows(ctx: ReducerContext): void {
   const nowMs = Number(ctx.timestamp.toMillis());
   for (const room of ctx.db.hostedRoom.iter()) {
     if (room.status === 'closed' || nowMs - Number(room.lastHeartbeat.toMillis()) > ROOM_TTL_MS) {
       removeRoom(ctx, room.roomId);
+    }
+  }
+  for (const peer of ctx.db.hostedRoomPeer.iter()) {
+    if (!ctx.db.hostedRoom.roomId.find(peer.roomId) ||
+        (peer.state === 'pending' && nowMs - Number(peer.updatedAt.toMillis()) > PENDING_JOIN_TTL_MS)) {
+      ctx.db.hostedRoomPeer.membershipId.delete(peer.membershipId);
     }
   }
   for (const signal of ctx.db.hostedRoomSignal.iter()) {
@@ -247,7 +283,7 @@ export const pruneHostedRooms = spacetimedb.reducer(ctx => {
       ctx.db.hostedRoomSignal.signalId.delete(signal.signalId);
     }
   }
-});
+}
 
 function assertRoomShape(room: {
   roomId: string;
@@ -299,8 +335,8 @@ function requireOpenRoom(ctx: ReducerContext, roomId: string): HostedRoomRow {
 
 function requireRoom(ctx: ReducerContext, roomId: string): HostedRoomRow {
   const room = ctx.db.hostedRoom.roomId.find(assertId(roomId, 'roomId'));
-  if (!room) {
-    throw new Error('Room not found');
+  if (!room || Number(ctx.timestamp.toMillis() - room.lastHeartbeat.toMillis()) > ROOM_TTL_MS) {
+    throw new Error('Room not found or expired');
   }
   return room;
 }

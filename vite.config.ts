@@ -15,6 +15,6 @@ export default defineConfig({
     sourcemap: true,
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'spacetimedb/src/**/*.test.ts'],
   },
 });

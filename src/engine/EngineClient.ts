@@ -1,4 +1,4 @@
-import type { EngineCommand, EngineEvent, EngineSnapshot, PlayerInput, PlayerSpawn, Ruleset } from './protocol';
+import type { EngineCommand, EngineEvent, EngineSnapshot, EngineTickTiming, PlayerInput, PlayerSpawn, Ruleset } from './protocol';
 
 type SnapshotListener = (snapshot: EngineSnapshot) => void;
 type NoticeListener = (message: string) => void;
@@ -7,6 +7,7 @@ export class EngineClient {
   private readonly worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
   private readonly snapshotListeners = new Set<SnapshotListener>();
   private readonly noticeListeners = new Set<NoticeListener>();
+  private timing?: EngineTickTiming;
   private readyResolver?: () => void;
   private readyRejecter?: (error: Error) => void;
   private readyPromise = new Promise<void>((resolve, reject) => {
@@ -21,8 +22,13 @@ export class EngineClient {
   }
 
   init(ruleset: Ruleset, seed = 1): Promise<void> {
+    this.timing = undefined;
     this.post({ type: 'init', ruleset, seed });
     return this.readyPromise;
+  }
+
+  tickTiming(): EngineTickTiming | undefined {
+    return this.timing;
   }
 
   addPlayer(player: PlayerSpawn): void {
@@ -65,6 +71,10 @@ export class EngineClient {
   }
 
   private handleEvent(event: EngineEvent): void {
+    if (event.type === 'timing') {
+      this.timing = event.timing;
+      return;
+    }
     if (event.type === 'ready') {
       this.readyResolver?.();
       this.readyResolver = undefined;

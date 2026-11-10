@@ -49,6 +49,10 @@
 - The host uses STDB/local directory signals to exchange offers/answers/ICE.
 - Once established, the host uses separate data channels: reliable control, partially reliable input, and best-effort snapshot traffic.
 - The host remains authoritative for simulation and broadcasts snapshots to clients.
+- `src/net/clockSync.ts` estimates the affine host clock from control-channel NTP timestamps. `ClientSession` paces the input ring against worker tick deadlines.
+- `src/net/snapshotCodec.ts` owns quantization, per-peer acknowledged baselines, bounded fragmentation, and atomic reconstruction. `snapshotBinary.ts` owns the binary patch representation.
+- `src/net/collisionPrediction.ts` owns the visual Rapier world used by `SnapshotSmoother` during short remote packet gaps. The smoother disposes that world with the client session.
+- See [networking.md](networking.md) for wire formats, recovery limits, and timing assumptions.
 
 ## Engine runtime
 
@@ -57,6 +61,7 @@
 - `src/engine/worker.ts` defines the simulation world and runtime state.
 - `EngineClient` on the main thread communicates with the worker.
 - The worker keeps all game state and publishes snapshots.
+- The worker publishes its next accumulator deadline in the absolute monotonic host clock. `EngineClient` caches that timing for control-channel pongs.
 
 ### Players and NPCs
 

@@ -1,15 +1,18 @@
-import type { PlayerInput, Ruleset } from '../engine/protocol';
+import type { EngineTickTiming, PlayerInput, Ruleset } from '../engine/protocol';
 import type { RoomInfo } from '../rooms/directory';
 import type { NetworkSnapshot } from './compactSnapshot';
+import { isNetworkSnapshot } from './compactSnapshot';
+import { validateRuleset } from '../engine/rulesValidation';
 
 const MAX_DISPLAY_NAME_LENGTH = 24;
 const MAX_REDUNDANT_INPUTS = 64;
 const MAX_INPUT_EVENTS = 16;
 
 export type ClientToHostMessage =
-  | { type: 'hello'; displayName: string }
+  | { type: 'hello'; displayName: string; snapshotProtocol?: 1 }
   | { type: 'input'; input: PlayerInput; redundantInputs?: PlayerInput[] }
   | { type: 'ping'; sentAtMs: number }
+  | { type: 'snapshot-ack'; tick: number }
   | { type: 'leave' };
 
 export type HostToClientMessage =
@@ -17,7 +20,7 @@ export type HostToClientMessage =
   | { type: 'snapshot'; snapshot: NetworkSnapshot }
   | { type: 'notice'; message: string }
   | { type: 'host-closed' }
-  | { type: 'pong'; sentAtMs: number; receivedAtMs: number };
+  | { type: 'pong'; sentAtMs: number; receivedAtMs: number; serverSentAtMs?: number; timing?: EngineTickTiming };
 
 export function encodeMessage(message: ClientToHostMessage | HostToClientMessage): string {
   return JSON.stringify(message);
@@ -28,7 +31,13 @@ export function decodeClientMessage(raw: string): ClientToHostMessage | undefine
 }
 
 export function decodeHostMessage(raw: string): HostToClientMessage | undefined {
-  return decodeMessage<HostToClientMessage>(raw, isHostMessage);
+  const message = decodeMessage<HostToClientMessage>(raw, isHostMessage);
+  if (message?.type !== 'welcome') return message;
+  try {
+    return { ...message, ruleset: validateRuleset(message.ruleset) };
+  } catch {
+    return undefined;
+  }
 }
 
 function decodeMessage<T>(raw: string, validate: (value: unknown) => value is T): T | undefined {
@@ -46,11 +55,14 @@ function isClientMessage(value: unknown): value is ClientToHostMessage {
   }
   switch (value.type) {
     case 'hello':
-      return typeof value.displayName === 'string' && value.displayName.trim().length > 0 && value.displayName.length <= MAX_DISPLAY_NAME_LENGTH;
+      return typeof value.displayName === 'string' && value.displayName.trim().length > 0 && value.displayName.length <= MAX_DISPLAY_NAME_LENGTH &&
+        (value.snapshotProtocol === undefined || value.snapshotProtocol === 1);
     case 'ping':
       return isFiniteNumber(value.sentAtMs);
     case 'leave':
       return true;
+    case 'snapshot-ack':
+      return Number.isSafeInteger(value.tick) && (value.tick as number) >= -1 && (value.tick as number) < 0xffffffff;
     case 'input':
       if (!isPlayerInput(value.input)) {
         return false;
@@ -76,13 +88,15 @@ function isHostMessage(value: unknown): value is HostToClientMessage {
     case 'welcome':
       return typeof value.playerId === 'string' && value.playerId.length > 0 && isRoomInfoLike(value.room) && isRecord(value.ruleset);
     case 'snapshot':
-      return isRecord(value.snapshot);
+      return isNetworkSnapshot(value.snapshot);
     case 'notice':
       return typeof value.message === 'string';
     case 'host-closed':
       return true;
     case 'pong':
-      return isFiniteNumber(value.sentAtMs) && isFiniteNumber(value.receivedAtMs);
+      return isFiniteNumber(value.sentAtMs) && isFiniteNumber(value.receivedAtMs) &&
+        (value.serverSentAtMs === undefined || (isFiniteNumber(value.serverSentAtMs) && value.serverSentAtMs >= value.receivedAtMs)) &&
+        (value.timing === undefined || isTickTiming(value.timing));
     default:
       return false;
   }
@@ -140,5 +154,10 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function isSafeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value);
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
+function isTickTiming(value: unknown): value is EngineTickTiming {
+  return isRecord(value) && isSafeInteger(value.tick) && value.tick >= 0 && isFiniteNumber(value.nextTickAtMs) &&
+    isFiniteNumber(value.intervalMs) && value.intervalMs >= 1 && value.intervalMs <= 1_000;
 }

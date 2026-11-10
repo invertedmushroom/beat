@@ -807,6 +807,7 @@ test('mobile client returns to menu when host leaves', async ({ context, page: h
   await host.getByRole('button', { name: 'Menu' }).click();
   await expect(client.locator('#menu-view')).toBeVisible();
   await expect.poll(async () => client.evaluate(() => window.__BEAT_SNAPSHOT__ === undefined)).toBeTruthy();
+  await expect(roomRow).toHaveCount(0);
 });
 
 test('client reload rejoins the reserved player slot', async ({ context, page: host }) => {
@@ -842,7 +843,7 @@ test('multiplayer movement survives dropped snapshot packets', async ({ context,
     const originalSend = RTCDataChannel.prototype.send;
     let snapshotSends = 0;
     RTCDataChannel.prototype.send = function patchedSend(this: RTCDataChannel, data: string | Blob | ArrayBuffer | ArrayBufferView) {
-      if (this.label === 'beat-snapshot' && typeof data === 'string' && data.includes('"type":"snapshot"')) {
+      if (this.label === 'beat-snapshot') {
         snapshotSends += 1;
         if (snapshotSends % 2 === 0) {
           return;
@@ -875,6 +876,8 @@ test('multiplayer movement survives dropped snapshot packets', async ({ context,
     .toBeGreaterThan(startX + 0.8);
   await host.keyboard.up('KeyD');
   await expect.poll(async () => client.evaluate(() => window.__BEAT_NET_STATS__?.lastSnapshotBytes ?? 0)).toBeGreaterThan(0);
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_NET_STATS__?.lastSnapshotBytes ?? Infinity)).toBeLessThanOrEqual(1_000);
+  await expect.poll(async () => client.evaluate(() => window.__BEAT_NET_STATS__?.clockSamples ?? 0)).toBeGreaterThanOrEqual(2);
 });
 
 async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {

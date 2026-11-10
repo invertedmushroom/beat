@@ -677,6 +677,10 @@ export type EngineCommand =
 
 export type EngineEvent =
   | { type: 'ready'; ruleset: Ruleset }
+  | { type: 'timing'; timing: EngineTickTiming }
   | { type: 'snapshot'; snapshot: EngineSnapshot }
   | { type: 'notice'; message: string }
   | { type: 'error'; message: string };
+
+/** Absolute monotonic host clock, shared by main thread and worker via timeOrigin. */
+export type EngineTickTiming = { tick: number; nextTickAtMs: number; intervalMs: number };

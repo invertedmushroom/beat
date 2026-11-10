@@ -1,5 +1,6 @@
 import type { EngineSnapshot, PlayerInput, Ruleset } from '../engine/protocol';
 import { applyPlatformGravity, nextPlatformVelocity } from '../engine/platformMovement';
+import type { CollisionPrediction } from './collisionPrediction';
 
 export const REMOTE_BUFFER_TICKS = 2;
 export const MAX_EXTRAPOLATION_SECONDS = 0.15;
@@ -42,11 +43,25 @@ export class SnapshotSmoother {
   private snapshotGapMax = 0;
   private measuredPredictionTick = -1;
   private pendingInputCount = 0;
+  private collisionPrediction?: CollisionPrediction;
+  private destroyed = false;
+  readonly ready: Promise<void>;
 
   constructor(
     private readonly ruleset: Ruleset,
     private localPlayerId?: string,
-  ) {}
+  ) {
+    this.ready = import('./collisionPrediction').then(({ CollisionPrediction }) => CollisionPrediction.create(ruleset)).then((prediction) => {
+      if (this.destroyed) prediction.destroy();
+      else this.collisionPrediction = prediction;
+    }).catch((error: unknown) => console.warn('Remote collision prediction unavailable', error));
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.collisionPrediction?.destroy();
+    this.collisionPrediction = undefined;
+  }
 
   setLocalPlayer(playerId: string | undefined): void {
     this.localPlayerId = playerId;
@@ -54,6 +69,7 @@ export class SnapshotSmoother {
   }
 
   pushAuthoritative(snapshot: EngineSnapshot, receivedAtMs = performance.now()): void {
+    if (this.latest && snapshot.tick <= this.latest.tick) return;
     if (this.latest && snapshot.tick > this.latest.tick) {
       const gap = (snapshot.tick - this.latest.tick) / this.ruleset.tickRate;
       this.snapshotGapEwma = this.snapshotGapEwma * 0.9 + gap * 0.1;
@@ -191,13 +207,14 @@ export class SnapshotSmoother {
       const isFacingAim = this.ruleset.player.aim.mode === 'facing';
       const aimDx = isFacingAim ? facingDx : normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).x;
       const aimDy = isFacingAim ? facingDy : normalizeOr(newer.aimDx, newer.aimDy, { x: newer.aimDx, y: newer.aimDy }).y;
+      const predicted = extrapolateSeconds === undefined ? undefined : this.collisionPrediction?.predict(newer, extrapolateSeconds);
 
       return {
         ...newer,
-        x: extrapolateSeconds === undefined ? lerp(older.x, newer.x, t) : newer.x + newer.vx * extrapolateSeconds,
-        y: extrapolateSeconds === undefined ? lerp(older.y, newer.y, t) : newer.y + newer.vy * extrapolateSeconds,
-        vx: newer.vx,
-        vy: newer.vy,
+        x: extrapolateSeconds === undefined ? lerp(older.x, newer.x, t) : predicted?.x ?? newer.x,
+        y: extrapolateSeconds === undefined ? lerp(older.y, newer.y, t) : predicted?.y ?? newer.y,
+        vx: predicted?.vx ?? newer.vx,
+        vy: predicted?.vy ?? newer.vy,
         aimDx,
         aimDy,
         facingDx,

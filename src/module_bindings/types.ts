@@ -51,3 +51,9 @@ export const HostedRoomSignal = __t.object("HostedRoomSignal", {
 });
 export type HostedRoomSignal = __Infer<typeof HostedRoomSignal>;
 
+export const HostedRoomSweep = __t.object("HostedRoomSweep", {
+  sweepId: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type HostedRoomSweep = __Infer<typeof HostedRoomSweep>;
+

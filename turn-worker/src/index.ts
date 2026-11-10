@@ -18,8 +18,19 @@ interface Env {
   RATE_LIMITER: { limit(input: { key: string }): Promise<{ success: boolean }> };
 }
 
-interface CloudflareTurnResponse {
-  iceServers: { urls: string[] | string; username?: string; credential?: string };
+type IceServer = { urls: string[] | string; username?: string; credential?: string };
+
+function parseIceServers(value: unknown): IceServer[] | undefined {
+  if (!value || typeof value !== 'object' || !('iceServers' in value)) return undefined;
+  const servers: unknown[] = Array.isArray(value.iceServers) ? value.iceServers : [value.iceServers];
+  if (!servers.length || !servers.every((server) => {
+    if (!server || typeof server !== 'object' || !('urls' in server)) return false;
+    const urls: unknown[] = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.length > 0 && urls.every((url) => typeof url === 'string' && /^(stun|stuns|turn|turns):\S+$/.test(url)) &&
+      (!('username' in server) || typeof server.username === 'string') &&
+      (!('credential' in server) || typeof server.credential === 'string');
+  })) return undefined;
+  return servers as IceServer[];
 }
 
 function corsHeaders(origin: string | null, allowed: string[]): Record<string, string> {
@@ -35,7 +46,7 @@ function corsHeaders(origin: string | null, allowed: string[]): Record<string, s
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get('Origin');
-    const allowed = env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
+    const allowed = (typeof env.ALLOWED_ORIGINS === 'string' ? env.ALLOWED_ORIGINS : '').split(',').map((o) => o.trim()).filter(Boolean);
     const cors = corsHeaders(origin, allowed);
 
     if (request.method === 'OPTIONS') {
@@ -49,7 +60,17 @@ export default {
     }
 
     const clientIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-    const { success } = await env.RATE_LIMITER.limit({ key: clientIp });
+    const fail = (status: number, message: string) => new Response(message, { status, headers: { ...cors, 'Cache-Control': 'no-store' } });
+    const ttl = Number(env.TURN_TTL_SECONDS?.trim() || '86400');
+    if (!env.TURN_TOKEN_ID?.trim() || !env.TURN_API_TOKEN?.trim() || !Number.isSafeInteger(ttl) || ttl < 60 || ttl > 86_400) {
+      return fail(503, 'service unavailable');
+    }
+    let success: boolean;
+    try {
+      ({ success } = await env.RATE_LIMITER.limit({ key: clientIp }));
+    } catch {
+      return fail(503, 'service unavailable');
+    }
     if (!success) {
       return new Response('rate limit exceeded', {
         status: 429,
@@ -57,9 +78,10 @@ export default {
       });
     }
 
-    const ttl = Number.parseInt(env.TURN_TTL_SECONDS || '86400', 10);
-    const upstream = await fetch(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_TOKEN_ID}/credentials/generate-ice-servers`,
+    let upstream: Response;
+    try {
+      upstream = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.TURN_TOKEN_ID)}/credentials/generate-ice-servers`,
       {
         method: 'POST',
         headers: {
@@ -67,19 +89,21 @@ export default {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ ttl }),
+        signal: AbortSignal.timeout(10_000),
       },
-    );
-
-    if (!upstream.ok) {
-      const detail = await upstream.text();
-      return new Response(`turn upstream failed: ${upstream.status} ${detail}`, {
-        status: 502,
-        headers: cors,
-      });
+      );
+    } catch {
+      return fail(502, 'TURN provider unavailable');
     }
 
-    const data = (await upstream.json()) as CloudflareTurnResponse;
-    const ice = Array.isArray(data.iceServers) ? data.iceServers : [data.iceServers];
+    if (!upstream.ok) {
+      return fail(502, 'TURN provider unavailable');
+    }
+
+    let data: unknown;
+    try { data = await upstream.json(); } catch { return fail(502, 'TURN provider returned an invalid response'); }
+    const ice = parseIceServers(data);
+    if (!ice) return fail(502, 'TURN provider returned an invalid response');
     return new Response(JSON.stringify(ice), {
       status: 200,
       headers: {

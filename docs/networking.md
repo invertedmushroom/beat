@@ -56,15 +56,16 @@ The host:
 6. on `hello`, assigns a player ID and adds the remote player to the engine.
    - if room capacity has been reached, the host sends `notice: room is full` and immediately closes that peer session.
 7. on `input`, forwards the player input to `engine.submitInput()`.
-8. broadcasts `snapshot` messages over each client's dedicated snapshot channel.
+8. broadcasts binary snapshots over each client's dedicated snapshot channel when the client negotiates `snapshotProtocol: 1` in `hello`.
 
-Host to client messages are JSON-serialized and include:
+Control messages are JSON-serialized and include:
 
 - `welcome` with assigned playerId, room info, and ruleset
-- `snapshot` updates (a compact `NetworkSnapshot` payload omitting mechanic and AI traces)
 - `notice` text messages
 - `host-closed`
 - `pong` responses to client latency checks
+
+Clients without binary negotiation receive the legacy JSON `snapshot` message. New clients also accept legacy JSON snapshots from older hosts.
 
 ### Client side
 
@@ -126,7 +127,9 @@ The host and client each subscribe to signals addressed to their peer ID.
 The host periodically re-advertises the room to keep it alive.
 When player count reaches capacity, room status is advertised as `full` and new joins are rejected.
 If the host closes the room, the directory removes it and notifies subscribers.
-The STDB reducer `pruneHostedRooms` also removes stale rooms.
+The private STDB `hosted_room_sweep` schedule runs every five seconds without a connected browser. It removes rooms after eight seconds without a heartbeat, cascades their peers and signals, removes orphan peers, expires pending joins after 60 seconds, and expires signals after 120 seconds. Accepted peers remain while their host's lease is live because the host owns their admission and player count.
+
+The schedule is seeded idempotently on init, connection, and room advertisement so existing databases acquire it after a module update. The public `pruneHostedRooms` reducer remains available for refreshes. Expired rooms reject joins and signaling before the next sweep. Advertisements use the owner-checked `createHostedRoom` upsert so a host can restore a swept lease after suspension. Session shutdown suppresses further advertisements.
 
 ## Local directory fallback
 
@@ -139,9 +142,10 @@ It stores rooms and signals in `localStorage`, broadcasts changes over `Broadcas
 
 Client-to-host:
 
-- `{ type: 'hello', displayName }`
+- `{ type: 'hello', displayName, snapshotProtocol?: 1 }`
 - `{ type: 'input'; input, redundantInputs?: PlayerInput[] }`
 - `{ type: 'ping'; sentAtMs }`
+- `{ type: 'snapshot-ack'; tick }` (completed binary snapshot, or `-1` to request a keyframe)
 
 Host-to-client:
 
@@ -149,18 +153,42 @@ Host-to-client:
 - `{ type: 'snapshot'; snapshot }`
 - `{ type: 'notice'; message }`
 - `{ type: 'host-closed' }`
-- `{ type: 'pong'; sentAtMs, receivedAtMs }`
+- `{ type: 'pong'; sentAtMs, receivedAtMs, serverSentAtMs?, timing? }`
 
 Practical note:
 
 - The host accepts optional `redundantInputs` to help repair out-of-order or dropped client input sequences.
-- The `ping`/`pong` handshake is used for latency diagnostics and RTT measurement.
+- The `ping`/`pong` handshake also synchronizes clocks and the input send phase.
 - The network snapshot payload is intentionally compact and excludes trace arrays for smaller messages.
 
 ## Practical notes
 
-- The host is authoritative; the client only renders received snapshots.
+- The host is authoritative. Clients predict local input and smooth remote state for rendering.
 - Hosts and clients both rely on the directory only for discovery and signaling.
 - The live gameplay data channel is separate from STDB room metadata.
 - STDB adds a join ledger; local and HTTP backends only need room discovery plus offer/answer/ICE delivery.
 - If STDB is unavailable, `localDirectory` remains a valid same-origin test mode, and `httpDirectory` remains available for a remote edge-backed deployment.
+
+## Affine clock sync and input pacing
+
+`src/net/clockSync.ts` fits `T_server = a * T_client + b` from four timestamps: client send (`sentAtMs`, T1), host receive (`receivedAtMs`, T2), host send (`serverSentAtMs`, T3), and client receive (T4). Host timestamps and worker deadlines use `performance.timeOrigin + performance.now()` to bridge worker and main-thread clock origins. Client timestamps use local `performance.now()`.
+
+RTT excludes host processing time: `(T4 - T1) - (T3 - T2)`. Midpoint samples near the minimum RTT form a centered least-squares fit over at most 64 samples and 60 seconds. Drift is bounded to 1,000 ppm. Invalid samples are rejected. A long sample gap resets the fit. Each pong can carry the worker's tick, interval, and next deadline. The worker publishes its actual accumulator deadline after catch-up or discarded backlog.
+
+`ClientSession` paces sends from its bounded `PendingInputQueue` to estimate arrival **20 ms before a worker deadline**, using half the filtered RTT for one-way transit. A paced send takes the newest movement state and redundant unacknowledged skill events. Canonical `PlayerInput` stays unchanged. Timers and clock state reset on reconnect or teardown. Until timing is available, or after five seconds without a fresh sample, inputs send immediately.
+
+The 15–25 ms arrival window is a target under stable, approximately symmetric paths. RTT asymmetry, browser timer stalls, and host suspension can move actual arrival outside that window. `NetDiagnostics` exposes the fitted rate, offset, and sample count.
+
+## Quantized snapshots and acknowledged baselines
+
+`src/net/snapshotCodec.ts` owns one encoder per host peer and one decoder per client transport. `snapshotBinary.ts` encodes typed binary values and recursive object/array changes with a fixed field-name dictionary. Arena coordinates (`x`, `y`, `anchorX`, `anchorY`) map from centered arena bounds to unsigned 16-bit integers. Values outside the arena clamp to its bounds. Maximum in-bounds error is half a cell (`extent / 131070`). Velocities and other non-integer numeric state retain float64 precision. Mechanic and AI traces remain local.
+
+Every frame names its tick and baseline tick. The host references only a frame that this client completed and acknowledged, never the previous send. Both ends keep at most 64 baseline states. Clients publish strictly increasing, fully reconstructed and validated snapshots. Lost, duplicate, reordered, corrupt, and incomplete packets cannot regress published state. Missing baselines request a keyframe over reliable control. The host also sends a keyframe every two seconds of simulation time and whenever its acknowledged baseline is unavailable.
+
+Each `beat-snapshot` message is at most **1,000 bytes**, including a 24-byte versioned header. Routine movement deltas fit a single message. Larger keyframes or busy frames split into independently unordered fragments without dropping gameplay entities. The header carries tick, baseline, total length, fragment index/count, and a frame checksum. A frame is published and acknowledged only after all fragments arrive. There is no snapshot retransmission. Reassembly allows four pending frames, a one-second assembly window, and a 256 KiB maximum frame. The channel remains `{ ordered: false, maxRetransmits: 0 }`. Legacy JSON snapshots retain their original size behavior.
+
+## Collision-constrained remote dead reckoning
+
+`src/net/collisionPrediction.ts` owns an isolated browser Rapier world with the same arena walls, rectangular obstacles, and player radius as the authoritative worker. `SnapshotSmoother` retains its two-tick interpolation buffer. During a short gap it replays a remote player's authoritative position and velocity through at most three fixed physics ticks, with a fractional final step, CCD, wall sliding, and platform gravity when configured. Each render starts from the authoritative anchor so repeated renders do not accumulate prediction twice. Beyond that horizon the predicted position freezes.
+
+The predictor handles static arena collisions. Player-to-player collisions, dynamic bodies, abilities, and combat remain authoritative and correct on the next snapshot. Until WASM initialization completes, remote extrapolation holds the authoritative position. Replacing a smoother or leaving the session frees its Rapier world, including initialization that resolves after disposal.

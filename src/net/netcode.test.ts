@@ -54,11 +54,13 @@ describe('responsive netcode helpers', () => {
     expect(local?.x).toBeGreaterThan(5);
     expect(smoother.stats().snapCorrections).toBe(1);
     expect(smoother.stats().predictionErrorMax).toBeGreaterThan(5);
+    smoother.destroy();
   });
 
-  it('interpolates remote players and extrapolates briefly when the stream stalls', () => {
+  it('interpolates remote players and extrapolates briefly when the stream stalls', async () => {
     const ruleset = createDefaultRuleset();
     const smoother = new SnapshotSmoother(ruleset, 'local');
+    await smoother.ready;
     smoother.pushAuthoritative(snapshotAt(1, [playerAt('remote', 0, 0, 3)]), 0);
     smoother.pushAuthoritative(snapshotAt(2, [playerAt('remote', 1, 0, 3)]), 33);
 
@@ -68,6 +70,7 @@ describe('responsive netcode helpers', () => {
     expect(remote?.x).toBeGreaterThan(1.25);
     expect(smoother.stats().remoteExtrapolationEvents).toBe(1);
     expect(smoother.stats().remoteExtrapolationSeconds).toBeGreaterThan(0);
+    smoother.destroy();
   });
 });
 

@@ -60,7 +60,7 @@ Table names and reducer names are shown here using the module's snake_case schem
 `src/rooms/spacetimeDirectory.ts` connects with generated `DbConnection` bindings:
 
 - subscribes to `hosted_room` for the server selector
-- calls the generated `createHostedRoom` accessor once per hosted room, then `heartbeatHostedRoom`
+- calls the owner-checked `createHostedRoom` upsert on advertisements, including lease renewal and restoration after suspension
 - calls `requestJoinHostedRoom` before a client sends an offer when the backend supports join recording
 - calls `acceptJoinHostedRoom` when the host answers
 - subscribes to `hosted_room_signal` rows addressed to the local peer id
@@ -95,4 +95,4 @@ Those env vars only configure the directory and signaling mailbox. They do not p
 - Room listings include `ruleset_hash` and `content_hash` so clients can decide whether to trust the host before opening a peer connection.
 - STDB does not store live snapshots or full rules JSON; WebRTC data channels carry host rules, inputs, and snapshots.
 - STDB carries SDP/ICE signaling only; it does not relay gameplay traffic. Network traversal still depends on the configured ICE servers.
-- Signaling payloads should never contain gameplay secrets. They are short-lived SDP/ICE messages and are pruned by `prune_hosted_rooms`.
+- Signaling payloads should never contain gameplay secrets. They are short-lived SDP/ICE messages. A private `hosted_room_sweep` schedule prunes expired rooms, pending joins, orphan peers, and signals without a browser. `prune_hosted_rooms` remains available for refreshes. See [networking.md](networking.md#room-lifecycle) for lease and expiry semantics.

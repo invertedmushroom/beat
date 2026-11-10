@@ -5,6 +5,8 @@ import { createId } from '../utils/ids';
 import { fromNetworkSnapshot, toNetworkSnapshot } from './compactSnapshot';
 import { decodeClientMessage, decodeHostMessage, encodeMessage, type ClientToHostMessage } from './messages';
 import { PendingInputQueue } from './pendingInputs';
+import { AffineClockSync } from './clockSync';
+import { SnapshotDecoder, SnapshotEncoder } from './snapshotCodec';
 import { describeRtcConfig, getRtcConfig } from './rtcConfig';
 
 const CONTROL_CHANNEL_LABEL = 'beat-control';
@@ -43,6 +45,7 @@ type PeerState = {
   maxBacklogBytes: number;
   candidateType?: string;
   rttMs?: number;
+  snapshotEncoder?: SnapshotEncoder;
 };
 
 export type NetDiagnostics = {
@@ -57,6 +60,9 @@ export type NetDiagnostics = {
   coalescedSnapshots: number;
   backlogBytes: number;
   pendingInputs?: number;
+  clockRate?: number;
+  clockOffsetMs?: number;
+  clockSamples?: number;
 };
 
 export class HostSession {
@@ -76,6 +82,7 @@ export class HostSession {
   private coalescedSnapshots = 0;
   private backlogBytes = 0;
   private lastPeerTimeoutCheckAt = Date.now();
+  private destroyed = false;
 
   constructor(
     private readonly options: {
@@ -89,10 +96,15 @@ export class HostSession {
 
   async start(): Promise<void> {
     this.log(describeRtcConfig(await getRtcConfig()));
+    if (this.destroyed) return;
     try {
       await this.options.directory.advertiseRoom(this.currentRoomInfo());
     } catch (error: unknown) {
       this.log(`room advertise failed: ${readError(error)}`);
+    }
+    if (this.destroyed) {
+      await this.options.directory.closeRoom(this.options.room.roomId);
+      return;
     }
     this.lastPeerTimeoutCheckAt = Date.now();
     this.heartbeatHandle = window.setInterval(() => this.heartbeat(), 2_000);
@@ -103,12 +115,10 @@ export class HostSession {
   }
 
   broadcastSnapshot(snapshot: EngineSnapshot): void {
-    const message = encodeMessage({ type: 'snapshot', snapshot: toNetworkSnapshot(snapshot) });
-    const bytes = message.length;
+    if (this.destroyed) return;
     const now = performance.now();
-    this.lastSnapshotBytes = bytes;
     for (const peer of this.peers.values()) {
-      this.sendPeerSnapshot(peer, message, bytes, now);
+      this.sendPeerSnapshot(peer, snapshot, now);
     }
   }
 
@@ -123,6 +133,8 @@ export class HostSession {
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
     if (this.heartbeatHandle !== undefined) {
       window.clearInterval(this.heartbeatHandle);
     }
@@ -136,8 +148,8 @@ export class HostSession {
     }
   }
 
-  private sendPeerSnapshot(peer: PeerState, message: string, bytes: number, now: number): void {
-    if (peer.disconnectedAt !== undefined) {
+  private sendPeerSnapshot(peer: PeerState, snapshot: EngineSnapshot, now: number): void {
+    if (peer.disconnectedAt !== undefined || !peer.playerId) {
       return;
     }
     const channel = peer.snapshotChannel;
@@ -156,10 +168,27 @@ export class HostSession {
       this.droppedSnapshots += 1;
       return;
     }
-    channel.send(message);
+    try {
+      const packets = peer.snapshotEncoder?.encode(snapshot);
+      if (packets) {
+        if (packets.length === 0) return;
+        for (const packet of packets) channel.send(packet as Uint8Array<ArrayBuffer>);
+        this.bytesSent += packets.reduce((sum, packet) => sum + packet.byteLength, 0);
+        peer.lastSnapshotBytes = Math.max(...packets.map((packet) => packet.byteLength));
+      } else {
+        const message = encodeMessage({ type: 'snapshot', snapshot: toNetworkSnapshot(snapshot) });
+        channel.send(message);
+        peer.lastSnapshotBytes = new TextEncoder().encode(message).byteLength;
+        this.bytesSent += peer.lastSnapshotBytes;
+      }
+    } catch (error: unknown) {
+      peer.droppedSnapshots += 1;
+      this.droppedSnapshots += 1;
+      this.log(`snapshot send failed: ${readError(error)}`);
+      return;
+    }
     peer.lastSnapshotSentAt = now;
-    peer.lastSnapshotBytes = bytes;
-    this.bytesSent += bytes;
+    this.lastSnapshotBytes = peer.lastSnapshotBytes;
   }
 
   private heartbeat(): void {
@@ -177,6 +206,7 @@ export class HostSession {
   }
 
   private publishRoomState(errorPrefix: string): void {
+    if (this.destroyed) return;
     void Promise.resolve(this.options.directory.advertiseRoom(this.currentRoomInfo())).catch((error: unknown) => this.log(`${errorPrefix}: ${readError(error)}`));
   }
 
@@ -273,11 +303,13 @@ export class HostSession {
     };
     channel.onerror = () => this.log(`${channel.label} error: ${peerId}`);
     channel.onmessage = (event: MessageEvent<string>) => {
+      if (this.peers.get(peerId) !== peer || typeof event.data !== 'string') return;
+      const receivedAtMs = performance.timeOrigin + performance.now();
       const message = decodeClientMessage(event.data);
       if (!message) {
         return;
       }
-      this.handlePeerMessage(peerId, peer, channel, message);
+      this.handlePeerMessage(peerId, peer, channel, message, receivedAtMs);
     };
     channel.onclose = () => {
       if (this.peers.get(peerId) !== peer || channel !== peer.controlChannel) {
@@ -288,10 +320,13 @@ export class HostSession {
     };
   }
 
-  private handlePeerMessage(peerId: string, peer: PeerState, channel: RTCDataChannel, message: ClientToHostMessage): void {
+  private handlePeerMessage(peerId: string, peer: PeerState, channel: RTCDataChannel, message: ClientToHostMessage, receivedAtMs: number): void {
     peer.lastHeardAt = Date.now();
     peer.disconnectedAt = undefined;
     if (message.type === 'hello') {
+      if (message.snapshotProtocol === 1 && !peer.snapshotEncoder) {
+        peer.snapshotEncoder = new SnapshotEncoder(this.options.ruleset.arena, this.options.ruleset.tickRate * 2);
+      }
       this.handleHello(peerId, peer, channel, message.displayName);
       return;
     }
@@ -301,11 +336,16 @@ export class HostSession {
       return;
     }
     if (message.type === 'ping') {
-      const response = encodeMessage({ type: 'pong', sentAtMs: message.sentAtMs, receivedAtMs: performance.now() });
       if (peer.controlChannel?.readyState === 'open') {
+        const response = encodeMessage({ type: 'pong', sentAtMs: message.sentAtMs, receivedAtMs,
+          serverSentAtMs: performance.timeOrigin + performance.now(), timing: this.options.engine.tickTiming() });
         peer.controlChannel.send(response);
         this.bytesSent += response.length;
       }
+      return;
+    }
+    if (message.type === 'snapshot-ack' && channel === peer.controlChannel) {
+      peer.snapshotEncoder?.acknowledge(message.tick);
       return;
     }
     if (message.type === 'input' && peer.playerId) {
@@ -563,6 +603,13 @@ export class ClientSession {
   private backlogBytes = 0;
   private candidateType = 'unknown';
   private rttMs: number | undefined;
+  private readonly clock = new AffineClockSync();
+  private readonly outstandingPings = new Set<number>();
+  private snapshotDecoder?: SnapshotDecoder;
+  private inputSendHandle?: number;
+  private lastSentInputSequence = -1;
+  private latestSnapshotTick = -1;
+  private lastKeyframeRequestAt = -Infinity;
 
   constructor(
     private readonly options: {
@@ -622,10 +669,27 @@ export class ClientSession {
 
   submitInput(input: PlayerInput): void {
     this.pendingInputQueue.push(input);
+    this.scheduleInputSend();
+  }
+
+  private scheduleInputSend(): void {
+    if (this.inputSendHandle !== undefined || this.inputChannel?.readyState !== 'open') return;
+    const delay = this.clock.inputDelayMs(performance.now());
+    if (delay < 1) { this.flushInput(); return; }
+    this.inputSendHandle = window.setTimeout(() => {
+      this.inputSendHandle = undefined;
+      this.flushInput();
+    }, delay);
+  }
+
+  private flushInput(): void {
     const channel = this.inputChannel;
+    const input = this.pendingInputQueue.snapshot().at(-1);
+    if (!input || input.sequence <= this.lastSentInputSequence) return;
     if (channel?.readyState === 'open') {
       const message = encodeMessage({ type: 'input', input, redundantInputs: this.pendingInputQueue.redundantEventInputs() });
       channel.send(message);
+      this.lastSentInputSequence = input.sequence;
       this.backlogBytes = Math.max(this.backlogBytes, channel.bufferedAmount);
     }
   }
@@ -764,7 +828,8 @@ export class ClientSession {
       return;
     }
     channel.onopen = () => {
-      channel.send(encodeMessage({ type: 'hello', displayName: this.options.displayName }));
+      channel.send(encodeMessage({ type: 'hello', displayName: this.options.displayName, snapshotProtocol: 1 }));
+      this.sendPing();
       this.log('control channel open');
     };
     channel.onerror = () => this.log('control channel error');
@@ -782,7 +847,7 @@ export class ClientSession {
     if (!channel) {
       return;
     }
-    channel.onopen = () => this.log('input channel open');
+    channel.onopen = () => { this.log('input channel open'); this.scheduleInputSend(); };
     channel.onerror = () => this.log('input channel error');
   }
 
@@ -791,12 +856,30 @@ export class ClientSession {
     if (!channel) {
       return;
     }
+    channel.binaryType = 'arraybuffer';
     channel.onopen = () => this.log('snapshot channel open');
     channel.onerror = () => this.log('snapshot channel error');
-    channel.onmessage = (event: MessageEvent<string>) => this.handleHostMessage(event.data, event.data.length);
+    channel.onmessage = (event: MessageEvent<unknown>) => {
+      if (channel !== this.snapshotChannel) return;
+      if (typeof event.data === 'string') { this.handleHostMessage(event.data, new TextEncoder().encode(event.data).byteLength); return; }
+      if (!(event.data instanceof ArrayBuffer) || !this.snapshotDecoder) return;
+      this.bytesReceived += event.data.byteLength;
+      const result = this.snapshotDecoder.receive(event.data);
+      if (result.needsKeyframe && performance.now() - this.lastKeyframeRequestAt > 1_000) {
+        this.sendSnapshotAck(-1);
+        this.lastKeyframeRequestAt = performance.now();
+      }
+      if (result.ackTick !== undefined) this.sendSnapshotAck(result.ackTick);
+      if (result.snapshot) this.acceptSnapshot(result.snapshot, event.data.byteLength);
+    };
+  }
+
+  private sendSnapshotAck(tick: number): void {
+    if (this.controlChannel?.readyState === 'open') this.controlChannel.send(encodeMessage({ type: 'snapshot-ack', tick }));
   }
 
   private handleHostMessage(raw: string, bytes: number): void {
+    const receivedAt = performance.now();
     const message = decodeHostMessage(raw);
     if (!message) {
       return;
@@ -810,22 +893,14 @@ export class ClientSession {
     }
     if (message.type === 'welcome') {
       this.localPlayerId = message.playerId;
+      this.snapshotDecoder = new SnapshotDecoder(message.ruleset.arena);
       for (const listener of this.welcomeListeners) {
         listener(message.playerId, message.room, message.ruleset);
       }
       return;
     }
     if (message.type === 'snapshot') {
-      this.receivedFirstSnapshot = true;
-      this.lastSnapshotBytes = bytes;
-      const snapshot = fromNetworkSnapshot(message.snapshot);
-      const local = this.localPlayerId ? snapshot.players.find((player) => player.playerId === this.localPlayerId) : undefined;
-      if (local) {
-        this.pendingInputQueue.ackUpTo(local.lastInputSequence);
-      }
-      for (const listener of this.snapshotListeners) {
-        listener(snapshot);
-      }
+      this.acceptSnapshot(fromNetworkSnapshot(message.snapshot), bytes);
       return;
     }
     if (message.type === 'notice') {
@@ -833,8 +908,31 @@ export class ClientSession {
       return;
     }
     if (message.type === 'pong') {
-      this.rttMs = Math.max(0, performance.now() - message.sentAtMs);
+      if (!this.outstandingPings.delete(message.sentAtMs)) return;
+      this.rttMs = Math.max(0, receivedAt - message.sentAtMs);
+      if (message.serverSentAtMs !== undefined) {
+        this.clock.observe(message.sentAtMs, message.receivedAtMs, message.serverSentAtMs, receivedAt, message.timing);
+      }
     }
+  }
+
+  private acceptSnapshot(snapshot: EngineSnapshot, bytes: number): void {
+    if (snapshot.tick <= this.latestSnapshotTick) return;
+    this.latestSnapshotTick = snapshot.tick;
+    this.receivedFirstSnapshot = true;
+    this.lastHostMessageAt = Date.now();
+    this.lastSnapshotBytes = bytes;
+    const local = snapshot.players.find((player) => player.playerId === this.localPlayerId);
+    if (local) this.pendingInputQueue.ackUpTo(local.lastInputSequence);
+    for (const listener of this.snapshotListeners) listener(snapshot);
+  }
+
+  private sendPing(): void {
+    if (this.controlChannel?.readyState !== 'open') return;
+    const sentAtMs = performance.now();
+    this.outstandingPings.add(sentAtMs);
+    for (const timestamp of this.outstandingPings) if (sentAtMs - timestamp > 5_000) this.outstandingPings.delete(timestamp);
+    this.controlChannel.send(encodeMessage({ type: 'ping', sentAtMs }));
   }
 
   private checkHostSilence(): void {
@@ -932,9 +1030,7 @@ export class ClientSession {
   }
 
   private async reportStats(): Promise<void> {
-    if (this.controlChannel?.readyState === 'open') {
-      this.controlChannel.send(encodeMessage({ type: 'ping', sentAtMs: performance.now() }));
-    }
+    this.sendPing();
     if (this.connection) {
       await refreshPeerConnectionStats(this.connection, (stats) => {
         this.candidateType = stats.candidateType ?? this.candidateType;
@@ -965,6 +1061,9 @@ export class ClientSession {
       coalescedSnapshots: 0,
       backlogBytes,
       pendingInputs: this.pendingInputQueue.size(),
+      clockRate: this.clock.stats().rate,
+      clockOffsetMs: this.clock.stats().offsetMs,
+      clockSamples: this.clock.stats().samples,
     };
     for (const listener of this.statsListeners) {
       listener(stats);
@@ -990,6 +1089,14 @@ export class ClientSession {
   }
 
   private cleanupTransport(): void {
+    if (this.inputSendHandle !== undefined) window.clearTimeout(this.inputSendHandle);
+    this.inputSendHandle = undefined;
+    this.lastSentInputSequence = -1;
+    this.latestSnapshotTick = -1;
+    this.lastKeyframeRequestAt = -Infinity;
+    this.clock.reset();
+    this.outstandingPings.clear();
+    this.snapshotDecoder = undefined;
     this.unsubscribeSignals?.();
     this.unsubscribeSignals = undefined;
     this.unsubscribeRooms?.();
