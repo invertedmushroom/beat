@@ -167,10 +167,11 @@ export class SnapshotSmoother {
   }
 
   private ingestDynamics(snapshot: EngineSnapshot): void {
+    const elapsedTicks = snapshot.tick - (this.latest?.tick ?? snapshot.tick);
     for (const objective of snapshot.objectives) {
       const previous = this.latest?.objectives.find((entry) => entry.objectiveId === objective.objectiveId);
       if (!previous) continue;
-      if (objective.scoreCooldownTicks > previous.scoreCooldownTicks || objective.bodyId !== previous.bodyId) {
+      if (objective.bodyId !== previous.bodyId || this.hasRelicReset(previous, objective, elapsedTicks)) {
         this.objectiveHistory.delete(objective.objectiveId);
         if (previous.bodyId) this.bodyHistory.delete(previous.bodyId);
         if (objective.bodyId) this.bodyHistory.delete(objective.bodyId);
@@ -178,6 +179,13 @@ export class SnapshotSmoother {
     }
     ingestHistory(this.bodyHistory, snapshot.tick, snapshot.physicsBodies, (body) => body.bodyId);
     ingestHistory(this.objectiveHistory, snapshot.tick, snapshot.objectives, (objective) => objective.objectiveId);
+  }
+
+  private hasRelicReset(previous: ObjectiveSnapshot, current: ObjectiveSnapshot, elapsedTicks: number): boolean {
+    const definition = this.ruleset.objectives.find((objective) => objective.id === current.objectiveId);
+    if (definition?.kind !== 'relicPush' || !definition.resetOnScore) return false;
+    const expectedCooldown = Math.max(0, previous.scoreCooldownTicks - elapsedTicks);
+    return current.scoreCooldownTicks > expectedCooldown;
   }
 
   private interpolateCircle<T extends MovingCircle>(current: T, history: Array<Timed<T>> | undefined, renderTick: number): T {

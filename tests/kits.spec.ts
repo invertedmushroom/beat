@@ -93,6 +93,9 @@ test('mobile bouncy relic kit hosts shared rules and a moving ball', async ({ pa
     };
     requestAnimationFrame(sample);
   }));
+  const tickGaps = motion.slice(1).map((sample, index) => sample.tick - motion[index].tick).filter((gap) => gap > 0);
+  expect(tickGaps.length).toBeGreaterThan(5);
+  expect(tickGaps.filter((gap) => gap === 1).length).toBeGreaterThan(tickGaps.length / 2);
   expect(motion.some((sample, index) => index > 0 && motion[index - 1].tick === sample.tick && Math.abs(motion[index - 1].x - sample.x) > 0.00001)).toBe(true);
   expect(motion.every((sample) => sample.x === sample.objectiveX)).toBe(true);
   await host.getByRole('button', { name: 'Menu', exact: true }).click();

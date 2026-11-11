@@ -303,6 +303,61 @@ describe('responsive netcode helpers', () => {
     } finally { smoother.destroy(); }
   });
 
+  it('recognizes a goal reset across lost snapshots even when its cooldown is lower', async () => {
+    const smoother = new SnapshotSmoother(createDefaultRuleset());
+    await smoother.ready;
+    try {
+      const before = ballSnapshot(10, 8, 0);
+      before.objectives[0].scoreCooldownTicks = 30;
+      smoother.pushAuthoritative(before, 1);
+      const after = ballSnapshot(60, 0, 0);
+      after.objectives[0].scoreCooldownTicks = 20;
+      smoother.pushAuthoritative(after, 100);
+      const rendered = smoother.render(100)!;
+      expect(rendered.physicsBodies[0].x).toBe(0);
+      expect(rendered.objectives[0].x).toBe(0);
+    } finally { smoother.destroy(); }
+  });
+
+  it('keeps a non-resetting relic on the delayed timeline when it scores', async () => {
+    const rules = createDefaultRuleset();
+    const relic = rules.objectives[0];
+    if (relic.kind !== 'relicPush') throw new Error('Expected a relic objective');
+    relic.resetOnScore = false;
+    const smoother = new SnapshotSmoother(rules);
+    await smoother.ready;
+    try {
+      smoother.pushAuthoritative(ballSnapshot(10, 8, 0), 1);
+      const scored = ballSnapshot(14, 9, 0);
+      scored.objectives[0].scoreCooldownTicks = 30;
+      smoother.pushAuthoritative(scored, 100);
+      const rendered = smoother.render(100)!;
+      expect(rendered.physicsBodies[0].x).toBeCloseTo(8.5);
+      expect(rendered.objectives[0].x).toBe(rendered.physicsBodies[0].x);
+    } finally { smoother.destroy(); }
+  });
+
+  it('preserves interpolation while a goal cooldown counts down normally', async () => {
+    const smoother = new SnapshotSmoother(createDefaultRuleset());
+    await smoother.ready;
+    try {
+      const older = ballSnapshot(10, 8, 0);
+      older.objectives[0].scoreCooldownTicks = 30;
+      const newer = ballSnapshot(14, 9, 0);
+      newer.objectives[0].scoreCooldownTicks = 26;
+      smoother.pushAuthoritative(older, 1);
+      smoother.pushAuthoritative(newer, 100);
+      expect(smoother.render(100)!.physicsBodies[0].x).toBeCloseTo(8.5);
+      const replacement = ballSnapshot(15, 9, 0);
+      replacement.objectives[0].bodyId = 'replacement';
+      replacement.physicsBodies[0].bodyId = 'replacement';
+      smoother.pushAuthoritative(replacement, 133);
+      const replaced = smoother.render(133)!;
+      expect(replaced.physicsBodies[0].x).toBe(9);
+      expect(replaced.objectives[0].x).toBe(9);
+    } finally { smoother.destroy(); }
+  });
+
   it('rejects Hermite overshoot into static walls and smooths bodyless relic snapshots', async () => {
     const rules = createDefaultRuleset();
     rules.obstacles = [];
@@ -326,7 +381,7 @@ describe('responsive netcode helpers', () => {
 function ballSnapshot(tick: number, x: number, vx: number): EngineSnapshot {
   const snapshot = snapshotAt(tick, []);
   snapshot.physicsBodies = [{ bodyId: 'ball', x, y: 0, vx, vy: 0, radius: 0.5, color: '#ffffff', remainingTicks: 100 }];
-  snapshot.objectives = [{ objectiveId: 'relic', name: 'Relic', kind: 'relicPush', bodyId: 'ball', x, y: 0, vx, vy: 0,
+  snapshot.objectives = [{ objectiveId: 'center-relic', name: 'Relic', kind: 'relicPush', bodyId: 'ball', x, y: 0, vx, vy: 0,
     radius: 0.5, color: '#ffffff', scoreCooldownTicks: 0, zones: [] }];
   return snapshot;
 }

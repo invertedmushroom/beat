@@ -234,7 +234,10 @@ as remote players. Relic objectives with a body ID copy the rendered body's posi
 and velocity so the objective ring and ball remain aligned. Other gameplay fields
 retain their latest authoritative values.
 
-Goal cooldown increases or changed body IDs clear the affected interpolation history.
+For relics configured to reset on score, a cooldown above its expected remaining
+value clears the affected interpolation history. The comparison subtracts elapsed
+simulation ticks, so skipped snapshots cannot hide a renewed cooldown. Scoring a
+non-resetting relic preserves its timeline. Changed body IDs also clear history.
 Despawns remove history. A Hermite point inside static geometry falls back to linear
 interpolation, then to a bracketing anchor if needed. During gaps beyond available
 samples, dynamic bodies hold their newest authoritative anchor. This rendering layer
