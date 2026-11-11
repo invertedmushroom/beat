@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="68" viewBox="0 0 320 68" role="img" aria-labelledby="title">
+  <title id="title">Play Beat — open in your browser</title>
+  <rect x="1" y="1" width="318" height="66" rx="12" fill="#2fd17c" stroke="#78edaf" stroke-width="2"/>
+  <path d="M26 22v24l20-12Z" fill="#102519"/>
+  <g fill="#102519" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="62" y="32" font-size="22" font-weight="800" letter-spacing="1">PLAY BEAT</text>
+    <text x="62" y="51" font-size="13" font-weight="500">Open in your browser</text>
+    <path d="M277 26h17v17m-18 0 18-17" fill="none" stroke="#102519" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

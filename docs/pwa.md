@@ -50,23 +50,67 @@ cross-origin traffic and `cache: 'no-store'` requests are not runtime cached. Mi
 assets and remote failures retain their network error/status; the worker never substitutes
 application HTML. Cached shell readiness says nothing about remote service availability.
 
-## Phone testing and wake lock
+## HTTPS on a same-Wi-Fi phone
 
-Use certificates trusted by the phone, with the laptop's LAN address in their subject
-alternative names. Set paths in the shell (do not put private keys in the repository):
+Beat's service worker and screen wake lock need a secure context. The localhost
+exception on your laptop does not extend to its LAN address on a phone.
+`npm run dev:https` and `npm run preview:https` read a PEM key and certificate from
+`BEAT_HTTPS_KEY_PATH` and `BEAT_HTTPS_CERT_PATH`. These are server-only settings;
+the key and certificate are never bundled into the client.
+
+One local approach is [mkcert](https://github.com/FiloSottile/mkcert). Install it using
+its Windows instructions, connect both devices to the same Wi-Fi, then run these
+commands from the Beat repository. Replace `YOUR_LAN_IPV4` with the laptop's Wi-Fi
+IPv4 address before generating the certificate (`ipconfig` lists your adapters):
 
 ```powershell
-$env:BEAT_HTTPS_KEY_PATH = 'E:/certs/beat-key.pem'
-$env:BEAT_HTTPS_CERT_PATH = 'E:/certs/beat-cert.pem'
+New-Item -ItemType Directory -Force .certs
+mkcert -install
+mkcert -key-file .certs/beat-key.pem -cert-file .certs/beat-cert.pem localhost 127.0.0.1 YOUR_LAN_IPV4
+$env:BEAT_HTTPS_KEY_PATH = (Resolve-Path .certs/beat-key.pem).Path
+$env:BEAT_HTTPS_CERT_PATH = (Resolve-Path .certs/beat-cert.pem).Path
 npm run dev:https
-# For installation, offline operation and updates:
+```
+
+Allow inbound TCP port **5177** on the laptop's private-network firewall, then open
+`https://YOUR_LAN_IPV4:5177/` on the phone. Guest Wi-Fi or client isolation can prevent
+devices from reaching each other even when they use the same access point.
+
+For **installation, offline use and service-worker updates**, stop the dev server and
+run the built preview in the same shell, retaining those environment variables:
+
+```powershell
 npm run preview:https
 ```
 
-Open `https://YOUR_LAN_IP:4177/` for the built preview (development uses port 5177).
-Installation and storage belong to that exact origin, including address and port. A
-stable public HTTPS deployment avoids changing phone origins when the laptop IP changes.
-TLS paths are server-only configuration and are never bundled into the client.
+Allow port **4177** and open `https://YOUR_LAN_IPV4:4177/`. The dev server provides hot
+reload; it does not register Beat's offline worker. If Vite selects a different port
+because the default is occupied, use the URL it prints and allow that port instead.
+
+### Trust the development certificate on the phone
+
+`mkcert -install` trusts its CA on the laptop. The phone needs that CA too. Run
+`mkcert -CAROOT` to locate **`rootCA.pem`**, transfer that public certificate to the
+phone and install it using the device's certificate settings. On iOS, also enable
+full trust for the installed root under Certificate Trust Settings. Consult
+[mkcert's mobile instructions](https://github.com/FiloSottile/mkcert#mobile-devices)
+for platform details. Merely bypassing a browser certificate warning does not
+establish the trusted HTTPS context needed by browser capabilities.
+
+Installing a root CA changes the device's trust store. Use a development CA you
+control and remove its trust when finished. **Never transfer or commit
+`rootCA-key.pem` or the server's private key.** The included `.certs/.gitignore` keeps
+generated certificates and keys out of Git. A trusted reverse proxy or development
+tunnel is another option.
+
+Installation and storage belong to the exact origin, including address and port.
+Changing the laptop IP requires a certificate covering the new address and creates
+a different browser origin. For cross-phone rooms, configure SpacetimeDB discovery
+as described in the [README](../README.md#rooms-across-devices); the default browser-local
+directory cannot connect different phones. A stable public HTTPS deployment avoids
+changing origins when the laptop IP changes.
+
+## Screen wake lock
 
 **Keep screen awake** is an opt-in session control in the menu and arena. It reports
 actual acquisition, releases while hidden, restores opted-in intent on return, and
