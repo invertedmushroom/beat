@@ -30,11 +30,70 @@
 
 ## Rules pipeline
 
-1. User edits JSON in the menu textarea.
+1. User selects a match kit or edits rules through the workbench and Advanced JSON.
 2. `applyRulesJson()` parses `parseRulesetJson()` and validates via `validateRuleset()`.
 3. If valid, `hashRuleset()` computes the ruleset hash, and the app updates the inspector.
 4. Starting `Solo`, `Lab`, or `Host` works only with a validated ruleset.
 5. The host advertises `rulesetHash`, `contentHash`, and `mapBundleId` from the selected ruleset.
+
+### Library and current configuration
+
+`src/ui/workbench/kits.ts` owns the authored catalog and `compileKit(selection)`.
+The compiler rebuilds a complete `Ruleset` from either a match kit or an experiment
+preset, combining movement chassis (`twinStick`, `tank`, `orthogonal`, `platform`),
+four ability IDs, mutators, an optional bouncy relic, and optional mechanic addons
+(`combos`, `bleed-dot`, `execute`). It validates the result through the existing rules
+validator and applies each mutator once to fresh catalog values. Match kits start
+without combo triggers or resources unless explicitly toggled on; experiment presets
+retain their baseline mechanics and allow the same movement, ability, mutator, and
+bouncy relic overrides.
+
+`src/ui/workbench/kitsView.ts` owns the card markup, control translation, and UI
+synchronization. `BeatApp` retains the selection with its compiled rules fingerprint
+and passes the output through `commitWorkbenchRules()`. When accepted rules differ
+from that fingerprint, the app detaches the selection and preserves the custom rules.
+Typing JSON detaches the selection immediately, including invalid drafts. Selecting
+a new match or complete experiment card explicitly replaces the draft; selecting an
+addon experiment card (`bleed-dot`, `execute`) composes onto the active kit or clones
+and extends custom rules. Kit selections are session state; exports and hosted peers
+receive ordinary compiled rules without kit metadata.
+
+Library is the initial workbench tab and the lobby's single configuration entrypoint.
+Matches contains complete match kits. Experiments contains complete arena/mechanic
+presets. The separate Add mechanics section contains composable mechanic packages.
+`experiments.ts` owns those builders and the
+toggleable mechanic packages (`MECHANIC_PRESETS`: Combo Mechanics, Bleed Over Time,
+Low HP Execute) exposed both in the Library and in the Mechanics tab.
+
+`configurationView.ts` derives the current arena, movement summary, and four ability
+cards from accepted rules. Custom edits detach recipe controls but keep these cards
+available for inspection and editing. The lobby derives its summary from the same rules.
+When JSON is invalid, both views identify the displayed configuration as the last valid
+one. Starting play routes the user to the invalid draft instead of starting a worker.
+
+`movementView.ts` owns the single movement-package picker in the Player tab, beside
+the detailed movement fields. Attached recipes recompile through `compileKit()`.
+Custom rules use `withMovementPackage()`, which changes only movement tuning and aim.
+
+The Abilities tab inspects one selected ability at a time (`#workbench-ability-select`).
+`abilityView.ts` derives its schematic, timings, effect nodes, and potential trigger
+links from accepted rules. It holds no separate graph state. Effect links reach the
+existing field editor. Trigger links select the existing Mechanics editor. The Lab
+action starts the current loadout without equipping the inspected ability. The Library
+retains ownership of the four loadout pickers. The Mechanics tab provides 1-click mechanic package
+toggles alongside trigger add/remove controls (`#workbench-add-trigger`,
+`#workbench-remove-trigger`), hiding the trigger detail editor when a ruleset has no
+triggers. Library and Mechanics package controls use the same renderer and toggle
+operation. Invalid JSON disables package changes until the draft is repaired or replaced.
+
+Structured input commits skip unchanged values, so a subsequent blur/change event does
+not rebuild the next focused field. Existing delegated workbench listeners own library
+and editor actions.
+
+Library play buttons use the existing Solo and Host entrypoints. The Bouncy Relic option
+is available on any Relic Push ruleset and changes only relic body tuning. Players
+push the ball through existing Rapier contacts, and existing objective logic owns
+goals, scoring, and resets. Player movement and network formats are unchanged.
 
 ## Networking
 

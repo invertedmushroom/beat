@@ -1,5 +1,70 @@
 # Room Configuration Guide
 
+## Match and experiment library
+
+Press **Choose match / experiment** in the lobby. The **Library** has two categories:
+**Matches** for complete games and **Experiments** for mechanics examples. Browsing
+categories preserves your current rules. Selecting a match replaces them with that kit.
+
+| Card | Arena and win condition |
+| --- | --- |
+| Duel | Three pillars, two players, first to five kills. |
+| King of the Hill | An open central zone with side cover, first team to 30 points. |
+| Relic Push | A clear central court, first team to push the ball into its colored goal three times. |
+
+Each card supplies movement and a shared four-ability deck. **Change / tune movement**
+opens the Player tab's single movement-package picker: Twin Stick, Heavy Tank, Four-Way,
+or Platform. Detailed values sit below those cards. **Swap ability cards** in the Library
+changes the four loadout slots using six existing abilities.
+The three mutator chips multiply cooldowns by 0.4, projectile hit radii by 1.5, or ability
+knockback by 2.5. Toggling a chip off restores the original value. Chip order does
+not change the result. Selecting a different match or complete experiment resets its swaps and chips.
+
+Relic Push modes also offer **Bouncy Relic**, a lighter ball with stronger rebounds and
+less damping. Push the ball with your player body. Weapons retain their existing
+player-target behavior. **Play solo** opens a practice arena; **Host room** uses the
+lobby name and room title so friends can join. Swaps and chips affect the whole room.
+
+The **Current configuration** card shows your actual arena, movement, and four abilities.
+Use **Change / tune movement**, **Inspect / customize ability**, or **Customize / JSON** for
+the detailed editor. Editing low-level rules or JSON detaches the kit and preserves those custom values.
+The current cards remain available. Ability swaps and match modifiers become disabled so they
+cannot overwrite custom edits. Movement packages and mechanic packages still work on custom
+rules and preserve the remaining configuration. The lobby shows the same configuration when you return.
+Pick another match or experiment card to replace them with a fresh kit. Invalid JSON still blocks
+play. **Copy** exports the compiled Ruleset, which can be imported through Advanced
+JSON. The kit selection itself is not saved across reloads.
+
+**Experiments** keeps the original Combo Mechanics, Physics Playground, Platform Arena,
+Deathmatch + Combos, Duel + Combos, and Hill + Combos presets. Selecting a complete
+experiment keeps movement packages, ability swaps, match modifiers, and Bouncy Relic
+available. Every experiment card is a complete starting point that replaces the current
+configuration. **Add mechanics** is a separate section below the current configuration.
+Its Combo Mechanics, Bleed Over Time, and Low HP Execute checkboxes modify the current
+match or experiment. They also work on custom rules. The Mechanics tab exposes the same
+packages beside the detailed trigger editor.
+
+## Customize abilities and mechanics
+
+Open an ability from its current-configuration card or switch to the **Abilities** tab to
+inspect one ability at a time (`Edit ability`). The overview draws a hit-shape schematic,
+timings in seconds and ticks, caster effects, hit effects, and potentially matching
+cast/hit/kill triggers. Effect nodes link to the detailed effect editor below. Trigger
+nodes open that trigger in Mechanics. Runtime conditions can still prevent a trigger
+from firing. The overview derives from accepted rules, including custom edits.
+**Try this loadout in Lab** tests the current four slots with the configured lab actors
+and traces. Selecting an ability in the inspector does not equip it.
+
+Damage, cooldown, range, radius, targeting, and effect fields remain below the overview.
+The four-slot loadout is configured in the Library under **Swap ability cards**.
+
+Switch to the **Mechanics** tab to toggle mechanic packages (**Combo Mechanics**, **Bleed
+Over Time**, **Low HP Execute**) on any match or experiment, or use **Add trigger** /
+**Remove trigger** to author custom event-condition-action chains. Invalid JSON blocks
+play and opens Advanced JSON for correction. While a draft is invalid, configuration
+cards explicitly show the last valid rules, and movement/mechanic package controls are
+disabled to preserve the draft.
+
 The Menu
 
 | Setting | Where | What it affects | Notes |
@@ -13,14 +78,7 @@ The Menu
 | `Apply` | Rules editor | Re-parse and validate the Rules JSON | Invalid JSON or invalid rule values block start. |
 | `Copy` | Rules editor | Normalizes and copies the current Rules JSON | Good for exporting a clean, validated version. |
 | `Reset` | Rules editor | Resets to the current default preset | The default preset is created by `createDefaultRuleset()`. |
-| `Combo Preset` | Rules examples | Resets to the shipped default preset | This is effectively the baseline preset. |
-| `Bleed DOT` | Rules examples | Adds a bleeding status and makes `arc-slash` apply it | Useful for trigger/status testing. |
-| `Execute` | Rules examples | Adds a low-HP execute trigger | Useful for conditional trigger testing. |
-| `Physics` | Rules examples | Keeps the default ruleset but swaps the player loadout to the physics abilities | Sets the loadout to `anchor-orb`, `wrecking-weight`, `seeker-spark`, `ion-lance`. |
-| `Platform` | Rules examples | Switches to platform movement and adds a basic ledge map | Useful for jump-and-move testing. |
-| `Deathmatch` | Rules examples | Switches to kill scoring instead of relic push | Useful for free-for-all combat testing. |
-| `Duel` | Rules examples | Switches to two-player deathmatch with a lower score limit | Useful for small-team competitive testing. |
-| `King Zone` | Rules examples | Switches to zone control scoring with per-second points | Useful for contested-area gameplay testing. |
+| `Choose match / experiment` | Lobby button | Opens the Library | Shows the current configuration and detailed editing entrypoints. |
 
 ## What A Hosted Room Advertises
 
@@ -85,7 +143,7 @@ These are the fields at the top of the Rules JSON.
 | `player.damping` | Movement damping | Number `0..30` |
 | `player.maxHp` | Maximum HP | Integer `1..10000` |
 | `player.respawnTicks` | Respawn delay | Integer `0..600` |
-| `player.movement.mode` | Movement style | `twinStick` or `tank` |
+| `player.movement.mode` | Movement style | `twinStick`, `tank`, `orthogonal`, or `platform` |
 | `player.movement.turnSpeedDegrees` | Tank steering turn rate | Number `30..1440` |
 | `player.movement.reverseMultiplier` | Tank reverse speed multiplier | Number `0..1` |
 | `player.aim.mode` | Aim style | `free` or `facing` |

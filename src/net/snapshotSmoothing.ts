@@ -15,6 +15,9 @@ type PredictionStep = { steps: number; sequence: number; x: number; y: number };
 
 type PlayerSnapshot = EngineSnapshot['players'][number];
 type ProjectileSnapshot = EngineSnapshot['projectiles'][number];
+type BodySnapshot = EngineSnapshot['physicsBodies'][number];
+type ObjectiveSnapshot = EngineSnapshot['objectives'][number];
+type MovingCircle = { x: number; y: number; vx: number; vy: number; radius: number };
 type Timed<T> = {
   tick: number;
   value: T;
@@ -36,6 +39,8 @@ export class SnapshotSmoother {
   private latestReceivedAtMs = 0;
   private readonly playerHistory = new Map<string, Array<Timed<PlayerSnapshot>>>();
   private readonly projectileHistory = new Map<string, Array<Timed<ProjectileSnapshot>>>();
+  private readonly bodyHistory = new Map<string, Array<Timed<BodySnapshot>>>();
+  private readonly objectiveHistory = new Map<string, Array<Timed<ObjectiveSnapshot>>>();
   private readonly extrapolatingIds = new Set<string>();
   private readonly predictionHistory = new Map<number, { x: number; y: number; sequence: number; respawnTick: number }>();
   private alignedPrediction?: AlignedPrediction;
@@ -69,6 +74,8 @@ export class SnapshotSmoother {
     this.collisionPrediction?.destroy();
     this.collisionPrediction = undefined;
     this.predictionHistory.clear();
+    this.bodyHistory.clear();
+    this.objectiveHistory.clear();
     this.alignedPrediction = undefined;
   }
 
@@ -112,6 +119,7 @@ export class SnapshotSmoother {
       this.snapshotGapMax = Math.max(this.snapshotGapMax, gap);
     }
 
+    this.ingestDynamics(snapshot);
     this.latest = snapshot;
     this.latestReceivedAtMs = receivedAtMs;
     this.ingestPlayers(snapshot);
@@ -147,7 +155,52 @@ export class SnapshotSmoother {
       return this.interpolatePlayer(player, renderTick, dt);
     });
     snapshot.projectiles = snapshot.projectiles.map((projectile) => this.interpolateProjectile(projectile, renderTick, dt));
+    snapshot.physicsBodies = snapshot.physicsBodies.map((body) => this.interpolateCircle(body, this.bodyHistory.get(body.bodyId), renderTick));
+    const bodies = new Map(snapshot.physicsBodies.map((body) => [body.bodyId, body]));
+    snapshot.objectives = snapshot.objectives.map((objective) => {
+      if (objective.kind !== 'relicPush') return objective;
+      const body = objective.bodyId ? bodies.get(objective.bodyId) : undefined;
+      const position = body ?? this.interpolateCircle(objective, this.objectiveHistory.get(objective.objectiveId), renderTick);
+      return { ...objective, x: position.x, y: position.y, vx: position.vx, vy: position.vy };
+    });
     return snapshot;
+  }
+
+  private ingestDynamics(snapshot: EngineSnapshot): void {
+    for (const objective of snapshot.objectives) {
+      const previous = this.latest?.objectives.find((entry) => entry.objectiveId === objective.objectiveId);
+      if (!previous) continue;
+      if (objective.scoreCooldownTicks > previous.scoreCooldownTicks || objective.bodyId !== previous.bodyId) {
+        this.objectiveHistory.delete(objective.objectiveId);
+        if (previous.bodyId) this.bodyHistory.delete(previous.bodyId);
+        if (objective.bodyId) this.bodyHistory.delete(objective.bodyId);
+      }
+    }
+    ingestHistory(this.bodyHistory, snapshot.tick, snapshot.physicsBodies, (body) => body.bodyId);
+    ingestHistory(this.objectiveHistory, snapshot.tick, snapshot.objectives, (objective) => objective.objectiveId);
+  }
+
+  private interpolateCircle<T extends MovingCircle>(current: T, history: Array<Timed<T>> | undefined, renderTick: number): T {
+    if (!history?.length) return current;
+    const result = interpolateTimed(history, renderTick, this.ruleset.tickRate, (older, newer, t, extrapolateSeconds, spanSeconds = 0) => {
+      // Dynamic contacts are authoritative. Hold at the newest anchor during a gap.
+      if (extrapolateSeconds !== undefined) return newer;
+      const point = {
+        x: hermite(older.x, newer.x, older.vx, newer.vx, spanSeconds, t),
+        y: hermite(older.y, newer.y, older.vy, newer.vy, spanSeconds, t),
+      };
+      const position = this.safeCirclePosition(point, older, newer, t);
+      return { ...newer, ...position, vx: lerp(older.vx, newer.vx, t), vy: lerp(older.vy, newer.vy, t) };
+    });
+    // Keep lifetime and other gameplay fields at the latest authoritative state.
+    return { ...current, x: result.value.x, y: result.value.y, vx: result.value.vx, vy: result.value.vy };
+  }
+
+  private safeCirclePosition(point: { x: number; y: number }, older: MovingCircle, newer: MovingCircle, t: number): { x: number; y: number } {
+    if (!isArenaPositionBlocked(point, newer.radius, this.ruleset)) return point;
+    const linear = { x: lerp(older.x, newer.x, t), y: lerp(older.y, newer.y, t) };
+    if (!isArenaPositionBlocked(linear, newer.radius, this.ruleset)) return linear;
+    return t < 0.5 ? { x: older.x, y: older.y } : { x: newer.x, y: newer.y };
   }
 
   stats(): SnapshotSmoothingStats {
@@ -387,7 +440,7 @@ function interpolateTimed<T>(
   history: Array<Timed<T>>,
   renderTick: number,
   tickRate: number,
-  build: (older: T, newer: T, t: number, extrapolateSeconds?: number) => T,
+  build: (older: T, newer: T, t: number, extrapolateSeconds?: number, spanSeconds?: number) => T,
 ): { value: T; extrapolating: boolean; extrapolatedSeconds: number } {
   const oldest = history[0];
   const newest = history[history.length - 1];
@@ -416,7 +469,26 @@ function interpolateTimed<T>(
     }
   }
   const span = Math.max(1, newer.tick - older.tick);
-  return { value: build(older.value, newer.value, (renderTick - older.tick) / span), extrapolating: false, extrapolatedSeconds: 0 };
+  return { value: build(older.value, newer.value, (renderTick - older.tick) / span, undefined, span / tickRate), extrapolating: false, extrapolatedSeconds: 0 };
+}
+
+function ingestHistory<T>(history: Map<string, Array<Timed<T>>>, tick: number, values: T[], id: (value: T) => string): void {
+  const live = new Set<string>();
+  for (const value of values) {
+    const key = id(value);
+    live.add(key);
+    const samples = history.get(key) ?? [];
+    samples.push({ tick, value: { ...value } });
+    trimHistory(samples);
+    history.set(key, samples);
+  }
+  for (const key of history.keys()) if (!live.has(key)) history.delete(key);
+}
+
+function hermite(start: number, end: number, startVelocity: number, endVelocity: number, seconds: number, t: number): number {
+  const s2 = t * t, s3 = s2 * t;
+  return (2 * s3 - 3 * s2 + 1) * start + (s3 - 2 * s2 + t) * startVelocity * seconds +
+    (-2 * s3 + 3 * s2) * end + (s3 - s2) * endVelocity * seconds;
 }
 
 function cloneSnapshot(snapshot: EngineSnapshot): EngineSnapshot {

@@ -158,6 +158,21 @@ it('shares host preparation, bounds reliable keyframes, negotiates v1/v2, and pu
     now = 500;
     host.broadcastSnapshot({ ...frame, tick: 65 });
     expect(peers[0].snapshots.sent).toHaveLength(2); // Deltas continue during periodic keyframe delivery.
+    // Every simulation tick is eligible, including high-rate rulesets. A repeat
+    // of the same tick is coalesced and backpressure never advances the sent tick.
+    for (const [tick, at] of [[66, 533.3], [67, 566.6], [68, 574.9], [69, 583.2]]) {
+      now = at;
+      host.broadcastSnapshot({ ...frame, tick });
+    }
+    expect(peers[0].snapshots.sent).toHaveLength(6);
+    host.broadcastSnapshot({ ...frame, tick: 69 });
+    expect(peers[0].snapshots.sent).toHaveLength(6);
+    peers[0].snapshots.bufferedAmount = 64_001;
+    host.broadcastSnapshot({ ...frame, tick: 70 });
+    expect(peers[0].snapshots.sent).toHaveLength(6);
+    peers[0].snapshots.bufferedAmount = 0;
+    host.broadcastSnapshot({ ...frame, tick: 70 });
+    expect(peers[0].snapshots.sent).toHaveLength(7);
     const notices = () => peers[0].control.sent.filter((message) => typeof message === 'string' && JSON.parse(message).type === 'timing');
     deliverTiming!({ tick: 2, nextTickAtMs: 1_000 + 1_000 / 30, intervalMs: 1_000 / 30 });
     expect(notices()).toHaveLength(0);

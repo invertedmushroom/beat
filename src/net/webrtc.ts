@@ -14,7 +14,6 @@ const INPUT_CHANNEL_LABEL = 'beat-input';
 const SNAPSHOT_CHANNEL_LABEL = 'beat-snapshot';
 const KEYFRAME_CHANNEL_LABEL = 'beat-keyframe';
 const LEGACY_CHANNEL_LABEL = 'beat';
-const HOST_SNAPSHOT_INTERVAL_MS = 50;
 const MAX_SNAPSHOT_BUFFERED_AMOUNT = 64_000;
 const CLIENT_CONNECT_TIMEOUT_MS = 15_000;
 const HOST_PEER_TIMEOUT_MS = 60_000;
@@ -43,7 +42,7 @@ type PeerState = {
   lastHeardAt: number;
   disconnectedAt?: number;
   lastReceivedInputSequence: number;
-  lastSnapshotSentAt: number;
+  lastSnapshotTick: number;
   droppedSnapshots: number;
   coalescedSnapshots: number;
   lastSnapshotBytes: number;
@@ -169,7 +168,7 @@ export class HostSession {
     }
     peer.maxBacklogBytes = Math.max(peer.maxBacklogBytes, channel.bufferedAmount);
     this.backlogBytes = Math.max(this.backlogBytes, channel.bufferedAmount);
-    if (now - peer.lastSnapshotSentAt < HOST_SNAPSHOT_INTERVAL_MS) {
+    if (snapshot.tick <= peer.lastSnapshotTick) {
       peer.coalescedSnapshots += 1;
       this.coalescedSnapshots += 1;
       return;
@@ -207,7 +206,7 @@ export class HostSession {
       this.log(`snapshot send failed: ${readError(error)}`);
       return;
     }
-    peer.lastSnapshotSentAt = now;
+    peer.lastSnapshotTick = snapshot.tick;
     this.lastSnapshotBytes = peer.lastSnapshotBytes;
   }
 
@@ -282,7 +281,7 @@ export class HostSession {
       pendingIce: [],
       lastHeardAt: Date.now(),
       lastReceivedInputSequence: existing?.lastReceivedInputSequence ?? 0,
-      lastSnapshotSentAt: 0,
+      lastSnapshotTick: -1,
       droppedSnapshots: 0,
       coalescedSnapshots: 0,
       lastSnapshotBytes: 0,

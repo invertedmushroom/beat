@@ -59,6 +59,9 @@ export function workbenchCommandPath(command: WorkbenchCommand, state: Workbench
   if (command.kind === 'abilityEffect') {
     return `abilities[${state.selectedAbilityId || 'selected'}].effects`;
   }
+  if (command.kind === 'mechanicTrigger') {
+    return 'mechanics.triggers';
+  }
   if (command.kind === 'mechanicCondition') {
     return `mechanics.triggers[${state.selectedTriggerId || 'selected'}].conditions`;
   }
@@ -144,6 +147,13 @@ export function workbenchCommandFromButton(button: HTMLButtonElement): Workbench
       effectKind: isAbilityEffectKind(button.dataset.effectKindValue) ? button.dataset.effectKindValue : undefined,
     };
   }
+  const triggerCommand = button.dataset.triggerCommand;
+  if (triggerCommand === 'add' || triggerCommand === 'remove') {
+    return {
+      kind: 'mechanicTrigger',
+      command: triggerCommand,
+    };
+  }
   const conditionCommand = button.dataset.conditionCommand;
   if (conditionCommand === 'add' || conditionCommand === 'remove' || conditionCommand === 'moveUp' || conditionCommand === 'moveDown') {
     return {
@@ -212,6 +222,9 @@ export function applyWorkbenchFieldEdit(ruleset: Ruleset, state: WorkbenchState,
 export function applyWorkbenchCommand(ruleset: Ruleset, state: WorkbenchState, command: WorkbenchCommand): boolean {
   if (command.kind === 'abilityEffect') {
     return applyAbilityEffectCommand(ruleset, state, command);
+  }
+  if (command.kind === 'mechanicTrigger') {
+    return applyMechanicTriggerCommand(ruleset, state, command);
   }
   if (command.kind === 'mechanicCondition') {
     return applyMechanicConditionCommand(ruleset, state, command);
@@ -471,6 +484,50 @@ function applyTriggerField(ruleset: Ruleset, state: WorkbenchState, edit: Extrac
     return true;
   }
   return false;
+}
+
+function applyMechanicTriggerCommand(
+  ruleset: Ruleset,
+  state: WorkbenchState,
+  command: Extract<WorkbenchCommand, { kind: 'mechanicTrigger' }>,
+): boolean {
+  if (command.command === 'add') {
+    const id = uniqueTriggerId(ruleset);
+    const count = ruleset.mechanics.triggers.length + 1;
+    ruleset.mechanics.triggers.push({
+      id,
+      name: `Custom Trigger ${count}`,
+      event: 'onHit',
+      actions: [defaultMechanicAction('flashEffect', ruleset)],
+    });
+    state.selectedTriggerId = id;
+    state.selectedTriggerConditionIndex = 0;
+    state.selectedTriggerActionIndex = 0;
+    return true;
+  }
+  const triggers = ruleset.mechanics.triggers;
+  const trigger = selectedTrigger(ruleset, state);
+  if (!trigger) {
+    return false;
+  }
+  const index = triggers.findIndex((candidate) => candidate.id === trigger.id);
+  if (index < 0) {
+    return false;
+  }
+  triggers.splice(index, 1);
+  state.selectedTriggerId = triggers[Math.max(0, index - 1)]?.id ?? '';
+  state.selectedTriggerConditionIndex = 0;
+  state.selectedTriggerActionIndex = 0;
+  return true;
+}
+
+function uniqueTriggerId(ruleset: Ruleset): string {
+  const ids = new Set(ruleset.mechanics.triggers.map((trigger) => trigger.id));
+  let index = 1;
+  while (ids.has(`custom-trigger-${index}`)) {
+    index += 1;
+  }
+  return `custom-trigger-${index}`;
 }
 
 function applyMechanicConditionEdit(
@@ -974,11 +1031,33 @@ function isMechanicActionKind(value: string | undefined): value is MechanicActio
 }
 
 function firstStatusId(ruleset: Ruleset): string {
-  return ruleset.mechanics.statuses[0]?.id ?? 'chilled';
+  if (ruleset.mechanics.statuses.length === 0) {
+    ruleset.mechanics.statuses.push({
+      id: 'chilled',
+      name: 'Chilled',
+      color: '#62d2ff',
+      durationTicks: 78,
+      tags: ['frost'],
+      stacking: 'stack',
+      maxStacks: 2,
+      movementMultiplier: 0.68,
+    });
+  }
+  return ruleset.mechanics.statuses[0].id;
 }
 
 function firstResourceId(ruleset: Ruleset): string {
-  return ruleset.mechanics.resources[0]?.id ?? 'shield';
+  if (ruleset.mechanics.resources.length === 0) {
+    ruleset.mechanics.resources.push({
+      id: 'shield',
+      name: 'Shield',
+      color: '#2fd17c',
+      max: 36,
+      start: 18,
+      regenPerTick: 0.08,
+    });
+  }
+  return ruleset.mechanics.resources[0].id;
 }
 
 function firstObjectiveId(ruleset: Ruleset): string {

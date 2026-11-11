@@ -201,6 +201,12 @@ V2 keyframes use `beat-keyframe`, a reliable ordered channel separate from contr
 
 ## Local input prediction
 
+The host attempts a snapshot for every worker tick. Per-peer tick guards coalesce
+duplicate or older ticks, and channel backpressure skips congested sends. There is
+no fixed 50 ms send gate, which previously reduced steady 30 Hz simulation updates
+to roughly 15 snapshots per second. Higher tick rates increase snapshot traffic;
+the existing channel queue and keyframe limits remain in effect.
+
 `src/engine/playerMovement.ts` supplies the worker and local input replay with the same movement modes, facing, aim fallback, and strongest-slow calculation. Input sampling follows the active ruleset's tick rate. Replay skips acknowledged sequences and advances each remaining input by one tick from the authoritative anchor.
 
 `replayPendingInputs()` expires slows by remaining ticks and applies charge presses before movement. Charge releases and automatic releases take effect after movement, matching worker order. Cooldowns prevent invalid charge starts. Optional `PlayerSnapshot.jumpHeld` preserves the held jump edge in platform mode. The canonical `PlayerInput` format is unchanged.
@@ -218,3 +224,18 @@ Predicted movement and dashes render immediately. Reconciliation adjusts a separ
 `src/net/collisionPrediction.ts` owns an isolated browser Rapier world with the same arena walls, rectangular obstacles, and player radius as the authoritative worker. `SnapshotSmoother` retains its two-tick interpolation buffer. During a short gap it replays a remote player's authoritative position and velocity through at most three fixed physics ticks, with a fractional final step, CCD, wall sliding, and platform gravity when configured. Each render starts from the authoritative anchor so repeated renders do not accumulate prediction twice. Beyond that horizon the predicted position freezes.
 
 The predictor handles static arena collisions. Player-to-player collisions, dynamic bodies, abilities, and combat remain authoritative and correct on the next snapshot. Until WASM initialization completes, remote extrapolation holds the authoritative position. Replacing a smoother or leaving the session frees its Rapier world, including initialization that resolves after disposal.
+
+## Dynamic body rendering
+
+`SnapshotSmoother` retains at most 12 samples per live physics body and objective.
+Dynamic positions use cubic Hermite interpolation with authoritative velocity tangents
+and the actual time between the bracketing ticks, on the same two-tick delayed timeline
+as remote players. Relic objectives with a body ID copy the rendered body's position
+and velocity so the objective ring and ball remain aligned. Other gameplay fields
+retain their latest authoritative values.
+
+Goal cooldown increases or changed body IDs clear the affected interpolation history.
+Despawns remove history. A Hermite point inside static geometry falls back to linear
+interpolation, then to a bracketing anchor if needed. During gaps beyond available
+samples, dynamic bodies hold their newest authoritative anchor. This rendering layer
+does not predict player-ball impulses or replay dynamic contacts locally.

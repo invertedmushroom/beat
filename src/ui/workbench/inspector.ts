@@ -240,7 +240,7 @@ function triggerDetail(trigger: Ruleset['mechanics']['triggers'][number]): strin
   return `${conditions} -> ${actions}`;
 }
 
-function conditionLabel(condition: MechanicCondition): string {
+export function conditionLabel(condition: MechanicCondition): string {
   if (condition.kind === 'hasStatus' || condition.kind === 'missingStatus') {
     return `${condition.target} ${condition.kind} ${condition.statusId}`;
   }
@@ -262,7 +262,7 @@ function conditionLabel(condition: MechanicCondition): string {
   return `tag ${condition.tag}`;
 }
 
-function actionLabel(action: MechanicAction): string {
+export function actionLabel(action: MechanicAction): string {
   if (action.kind === 'applyStatus' || action.kind === 'removeStatus') {
     return `${action.kind} ${action.statusId}`;
   }

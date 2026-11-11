@@ -47,7 +47,12 @@ The main menu exposes the active rules as JSON. Hosts can edit, paste, copy, or 
 
 Rules are locked once solo, host, or client play starts. The host remains authoritative for live simulation; clients receive the host rules in the WebRTC welcome message.
 
-The workbench currently exposes Physics, Platform, Deathmatch, Duel, and King Zone presets.
+Choose **Choose match / experiment** to browse visual match kits and mechanics experiments.
+The Library keeps your current configuration visible as you edit. Open an ability card
+to inspect its shape, timing, effects, and related triggers, then use **Try this loadout
+in Lab** to test the equipped abilities. Movement cards and tuning share the Player tab.
+**Add mechanics** packages modify the current configuration; complete match and experiment
+cards replace it.
 
 ## Documentation
 

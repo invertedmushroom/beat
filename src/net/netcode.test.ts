@@ -268,7 +268,68 @@ describe('responsive netcode helpers', () => {
     expect(smoother.stats().remoteExtrapolationSeconds).toBeGreaterThan(0);
     smoother.destroy();
   });
+
+  it('uses velocity tangents over the actual snapshot gap and keeps relic/body views aligned', async () => {
+    const smoother = new SnapshotSmoother(createDefaultRuleset());
+    await smoother.ready;
+    try {
+      smoother.pushAuthoritative(ballSnapshot(10, 0, 0), 1);
+      smoother.pushAuthoritative(ballSnapshot(14, 1, 1), 100);
+      const rendered = smoother.render(100)!; // Tick 12, halfway across a four-tick gap.
+      const expected = 0.5 - 0.125 * 4 / 30;
+      expect(rendered.physicsBodies[0].x).toBeCloseTo(expected);
+      expect(rendered.objectives[0].x).toBe(rendered.physicsBodies[0].x);
+      expect(smoother.render(110)!.physicsBodies[0].x).toBeGreaterThan(expected);
+      // A long stall holds the last anchor instead of driving a dynamic ball through walls.
+      expect(smoother.render(1000)!.physicsBodies[0].x).toBe(1);
+    } finally { smoother.destroy(); }
+  });
+
+  it('snaps goal resets and prunes despawned body history before an ID is seen again', async () => {
+    const smoother = new SnapshotSmoother(createDefaultRuleset());
+    await smoother.ready;
+    try {
+      smoother.pushAuthoritative(ballSnapshot(10, 8, 1), 1);
+      const reset = ballSnapshot(11, 0, 0);
+      reset.objectives[0].scoreCooldownTicks = 30;
+      smoother.pushAuthoritative(reset, 33);
+      expect(smoother.render(33)!.physicsBodies[0].x).toBe(0);
+      expect(smoother.render(33)!.objectives[0].x).toBe(0);
+      smoother.pushAuthoritative(snapshotAt(12, []), 66);
+      smoother.pushAuthoritative(ballSnapshot(13, -4, 0), 99);
+      expect(smoother.render(99)!.physicsBodies[0].x).toBe(-4);
+      smoother.pushAuthoritative(ballSnapshot(12, 8, 0), 100); // Out of order.
+      expect(smoother.render(100)!.physicsBodies[0].x).toBe(-4);
+    } finally { smoother.destroy(); }
+  });
+
+  it('rejects Hermite overshoot into static walls and smooths bodyless relic snapshots', async () => {
+    const rules = createDefaultRuleset();
+    rules.obstacles = [];
+    const smoother = new SnapshotSmoother(rules);
+    await smoother.ready;
+    try {
+      const edge = rules.arena.width / 2 - 0.5 - 0.01;
+      const older = ballSnapshot(10, edge, 100);
+      const newer = ballSnapshot(14, edge, -100);
+      older.objectives[0].bodyId = undefined;
+      newer.objectives[0].bodyId = undefined;
+      smoother.pushAuthoritative(older, 1);
+      smoother.pushAuthoritative(newer, 100);
+      const rendered = smoother.render(100)!;
+      expect(rendered.physicsBodies[0].x).toBe(edge);
+      expect(rendered.objectives[0].x).toBe(edge);
+    } finally { smoother.destroy(); }
+  });
 });
+
+function ballSnapshot(tick: number, x: number, vx: number): EngineSnapshot {
+  const snapshot = snapshotAt(tick, []);
+  snapshot.physicsBodies = [{ bodyId: 'ball', x, y: 0, vx, vy: 0, radius: 0.5, color: '#ffffff', remainingTicks: 100 }];
+  snapshot.objectives = [{ objectiveId: 'relic', name: 'Relic', kind: 'relicPush', bodyId: 'ball', x, y: 0, vx, vy: 0,
+    radius: 0.5, color: '#ffffff', scoreCooldownTicks: 0, zones: [] }];
+  return snapshot;
+}
 
 function snapshotAt(tick: number, players: EngineSnapshot['players']): EngineSnapshot {
   return {

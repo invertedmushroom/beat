@@ -1,6 +1,6 @@
-import { createDefaultRuleset, defaultDeathmatchObjective, defaultKingZoneObjective, defaultObjectiveForKind } from './engine/defaultRules';
+import { createDefaultRuleset, defaultObjectiveForKind } from './engine/defaultRules';
 import { EngineClient } from './engine/EngineClient';
-import { hashRuleset } from './engine/rulesHash';
+import { hashRuleset, rulesetFingerprint } from './engine/rulesHash';
 import { validateRuleset } from './engine/rulesValidation';
 import type {
   AiTraceSnapshot,
@@ -46,7 +46,7 @@ import {
 } from './ui/workbench/fields';
 import { escapeHtml, formatMeters, aiTraceLabel, mechanicsChipHtml, mechanicsFlowHtml, rulesInspectorHtml, traceLabel } from './ui/workbench/inspector';
 import { parseWorkbenchDocumentJson, stringifyRulesDocument } from './ui/workbench/jsonSync';
-import { abilityEffectsHtml, matchObjectivesHtml, mechanicsChainHtml } from './ui/workbench/sections';
+import { abilityEffectsHtml, matchObjectivesHtml, mechanicsChainHtml, mechanicsPresetsHtml } from './ui/workbench/sections';
 import {
   createWorkbenchState,
   ensureWorkbenchSelections,
@@ -56,6 +56,21 @@ import {
   type WorkbenchTab,
 } from './ui/workbench/state';
 import { workbenchHtml } from './ui/workbench/view';
+import {
+  MATCH_KITS,
+  MOVEMENT_CHASSIS,
+  compileKit,
+  createExperimentSelection,
+  createKitSelection,
+  withExperimentSelection,
+  withMovementPackage,
+  type KitSelection,
+} from './ui/workbench/kits';
+import { kitSelectionFromControl, selectLibraryGroup, syncKitControls } from './ui/workbench/kitsView';
+import { applyExperiment, isExperimentAddonId, isMechanicPresetId, toggleMechanicPreset } from './ui/workbench/experiments';
+import { configurationSummary } from './ui/workbench/configurationView';
+import { abilityInspectorHtml } from './ui/workbench/abilityView';
+import { syncMovementPackages } from './ui/workbench/movementView';
 import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 import { ReplayFeature } from './ui/ReplayFeature';
@@ -138,7 +153,6 @@ export class BeatApp {
   private resetRulesButton!: HTMLButtonElement;
   private applyRulesButton!: HTMLButtonElement;
   private copyRulesButton!: HTMLButtonElement;
-  private rulesExampleButtons!: HTMLButtonElement[];
   private skillButtons!: HTMLButtonElement[];
   private canvas!: HTMLCanvasElement;
   private controlProfileSelect!: HTMLSelectElement;
@@ -172,6 +186,10 @@ export class BeatApp {
   private consecutiveStuckTicks = 0;
   private arenaHintTimer?: number;
   private workbenchState: WorkbenchState = createWorkbenchState(this.editableRuleset);
+  private kitDraft?: { selection: KitSelection; fingerprint: string } = {
+    selection: createExperimentSelection('combo-preset'),
+    fingerprint: rulesetFingerprint(this.editableRuleset),
+  };
   private workbenchDiagnostics: WorkbenchDiagnostic[] = [];
   private labActorIds = new Set<string>();
   private labSpawnIndex = 0;
@@ -209,7 +227,10 @@ export class BeatApp {
     this.hostButton.addEventListener('click', () => void this.hostRoom());
     this.soloButton.addEventListener('click', () => void this.startSolo(false));
     this.labButton.addEventListener('click', () => void this.startSolo(true));
-    this.workbenchButton.addEventListener('click', () => this.showWorkbench());
+    this.workbenchButton.addEventListener('click', () => {
+      this.selectWorkbenchTab('kits');
+      this.showWorkbench();
+    });
     this.workbenchBackButton.addEventListener('click', () => this.showMenu());
     this.leaveButton.addEventListener('click', () => this.stopActiveMode());
     this.controlProfileSelect.addEventListener('change', () => this.handleControlProfileChange());
@@ -225,16 +246,17 @@ export class BeatApp {
     this.resetRulesButton.addEventListener('click', () => void this.resetRules());
     this.applyRulesButton.addEventListener('click', () => void this.applyRulesJson());
     this.copyRulesButton.addEventListener('click', () => void this.copyRulesJson());
-    this.rulesJsonInput.addEventListener('input', () => void this.refreshRulesInspector());
+    this.rulesJsonInput.addEventListener('input', () => {
+      this.kitDraft = undefined;
+      this.syncWorkbenchControls();
+      void this.refreshRulesInspector();
+    });
     this.workbenchTabsRoot.addEventListener('click', (event) => this.handleWorkbenchTabClick(event));
     this.workbenchTabsRoot.addEventListener('keydown', (event) => this.handleWorkbenchTabKeydown(event));
     this.workbenchDiagnosticsRoot.addEventListener('click', (event) => this.handleWorkbenchDiagnosticClick(event));
     this.workbenchView.addEventListener('input', (event) => void this.handleWorkbenchInput(event));
     this.workbenchView.addEventListener('change', (event) => void this.handleWorkbenchInput(event));
     this.workbenchView.addEventListener('click', (event) => void this.handleWorkbenchCommand(event));
-    for (const button of this.rulesExampleButtons) {
-      button.addEventListener('click', () => void this.insertRulesExample(button.dataset.example ?? ''));
-    }
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('pageshow', this.handlePageShow);
@@ -313,7 +335,6 @@ export class BeatApp {
     this.resetRulesButton = requireNode<HTMLButtonElement>('#reset-rules');
     this.applyRulesButton = requireNode<HTMLButtonElement>('#apply-rules');
     this.copyRulesButton = requireNode<HTMLButtonElement>('#copy-rules');
-    this.rulesExampleButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.rules-example'));
     this.skillButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.skill-slot'));
     if (this.skillButtons.length !== 4) {
       throw new Error('missing skill slots');
@@ -929,6 +950,7 @@ export class BeatApp {
   private selectWorkbenchTab(tab: WorkbenchTab): void {
     this.workbenchState.selectedTab = tab;
     this.syncWorkbenchControls();
+    this.workbenchView.scrollTop = 0;
   }
 
   private handleWorkbenchTabKeydown(event: KeyboardEvent): void {
@@ -990,6 +1012,21 @@ export class BeatApp {
     if (target.id === 'rules-json') {
       return;
     }
+    if (target.hasAttribute('data-movement-package')) {
+      if (event.type === 'change') await this.changeMovementPackage(target.value);
+      return;
+    }
+    if (target.dataset.mechanicPreset && target instanceof HTMLInputElement) {
+      if (event.type !== 'change') return;
+      await this.handleMechanicPresetToggle(target.dataset.mechanicPreset, target.checked);
+      return;
+    }
+    if (target.matches('[data-kit-slot], [data-kit-mutator], [data-kit-bouncy]')) {
+      if (event.type !== 'change' || !this.kitDraft || target instanceof HTMLTextAreaElement) return;
+      const selection = kitSelectionFromControl(this.kitDraft.selection, target);
+      if (selection) await this.applyKitSelection(selection);
+      return;
+    }
     if (target.dataset.prefField) {
       this.updatePreferenceFromControl(target);
       return;
@@ -1046,12 +1083,56 @@ export class BeatApp {
     if (!applyWorkbenchFieldEdit(next, this.workbenchState, edit)) {
       return;
     }
+    // A blur/change after an accepted input must not rebuild the next focused field.
+    if (rulesetFingerprint(next) === rulesetFingerprint(this.editableRuleset)) return;
     await this.commitWorkbenchRules(next, workbenchFieldPath(edit, this.workbenchState));
   }
 
+  private syncConfigurationSummary(): void {
+    const summary = this.menuView.querySelector<HTMLElement>('#menu-current-rules');
+    if (!summary) return;
+    const rules = this.editableRuleset;
+    const invalid = this.rulesValidationLine.classList.contains('is-error');
+    const abilities = rules.loadout.abilityIds.map((id) => rules.abilities.find((entry) => entry.id === id)?.name).join(' / ');
+    summary.innerHTML = `<strong>${escapeHtml(rules.name)}</strong><span>${escapeHtml(configurationSummary(rules))}</span><small>${escapeHtml(abilities)}</small>${invalid ? '<p class="draft-warning">Invalid JSON draft. This is the last valid configuration.</p>' : ''}`;
+  }
+
+  private async handleMechanicPresetToggle(presetId: string, enabled: boolean): Promise<void> {
+    if (this.rulesValidationLine.classList.contains('is-error')) return;
+    if (!isMechanicPresetId(presetId)) return;
+    if (this.kitDraft) {
+      const nextSelection = structuredClone(this.kitDraft.selection);
+      if (presetId === 'combos') {
+        nextSelection.combos = enabled;
+      } else if (isExperimentAddonId(presetId)) {
+        const addons = (nextSelection.addons ?? []).filter((id) => id !== presetId);
+        if (enabled) addons.push(presetId);
+        nextSelection.addons = addons;
+      }
+      await this.applyKitSelection(nextSelection);
+      return;
+    }
+    const next = toggleMechanicPreset(this.editableRuleset, presetId, enabled);
+    await this.commitWorkbenchRules(next, 'mechanics');
+  }
+
   private async handleWorkbenchCommand(event: Event): Promise<void> {
+    const inspectorButton = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-ability-lab], [data-inspect-trigger]');
+    if (inspectorButton && !inspectorButton.disabled) {
+      if (inspectorButton.hasAttribute('data-ability-lab')) await this.startSolo(true);
+      else {
+        this.workbenchState.selectedTriggerId = inspectorButton.dataset.inspectTrigger ?? '';
+        this.selectWorkbenchTab('mechanics');
+      }
+      return;
+    }
+    const kitButton = (event.target as Element | null)?.closest<HTMLButtonElement>('button[data-kit-match], button[data-kit-customize], button[data-kit-start], button[data-library-group], button[data-experiment]');
+    if (kitButton && !kitButton.disabled) {
+      await this.handleLibraryCommand(kitButton);
+      return;
+    }
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>(
-      'button[data-effect-command], button[data-condition-command], button[data-action-command], button[data-score-zone-command]',
+      'button[data-trigger-command], button[data-effect-command], button[data-condition-command], button[data-action-command], button[data-score-zone-command]',
     );
     if (!button || button.disabled) {
       return;
@@ -1090,6 +1171,55 @@ export class BeatApp {
     this.syncWorkbenchControls();
   }
 
+  private async handleLibraryCommand(button: HTMLButtonElement): Promise<void> {
+    if (button.dataset.libraryGroup) {
+      selectLibraryGroup(this.workbenchView, button.dataset.libraryGroup);
+      return;
+    }
+    if (button.dataset.experiment) {
+      const selection = withExperimentSelection(this.kitDraft?.selection, button.dataset.experiment);
+      if (selection) {
+        await this.applyKitSelection(selection);
+      } else {
+        await this.insertExperiment(button.dataset.experiment);
+      }
+      return;
+    }
+    await this.handleKitCommand(button);
+  }
+
+  private async handleKitCommand(button: HTMLButtonElement): Promise<void> {
+    const match = MATCH_KITS.find((entry) => entry.id === button.dataset.kitMatch);
+    if (match) await this.applyKitSelection(createKitSelection(match.id));
+    if (button.dataset.kitCustomize) this.customizeKit(button.dataset.kitCustomize, button.dataset.kitAbilitySlot);
+    if (button.dataset.kitStart === 'solo') await this.startSolo(false);
+    if (button.dataset.kitStart === 'host') await this.hostRoom();
+  }
+
+  private customizeKit(tab: string, abilitySlot: string | undefined): void {
+    if (!isWorkbenchTab(tab)) return;
+    const slot = Number(abilitySlot);
+    if (Number.isInteger(slot) && slot >= 0 && slot < 4) this.workbenchState.selectedAbilityId = this.editableRuleset.loadout.abilityIds[slot];
+    this.selectWorkbenchTab(tab);
+  }
+
+  private async applyKitSelection(selection: KitSelection): Promise<void> {
+    const ruleset = compileKit(selection);
+    this.kitDraft = { selection, fingerprint: rulesetFingerprint(ruleset) };
+    await this.commitWorkbenchRules(ruleset);
+  }
+
+  private async changeMovementPackage(id: string): Promise<void> {
+    if (this.rulesValidationLine.classList.contains('is-error')) return;
+    const chassis = MOVEMENT_CHASSIS.find((entry) => entry.id === id);
+    if (!chassis) return;
+    if (this.kitDraft) {
+      await this.applyKitSelection({ ...structuredClone(this.kitDraft.selection), chassis: chassis.id });
+    } else {
+      await this.commitWorkbenchRules(withMovementPackage(this.editableRuleset, chassis.id), 'player');
+    }
+  }
+
   private async commitWorkbenchRules(nextRuleset: Ruleset, path?: string): Promise<void> {
     try {
       this.editableRuleset = validateRuleset(nextRuleset);
@@ -1114,6 +1244,8 @@ export class BeatApp {
       return;
     }
     const ruleset = this.editableRuleset;
+    syncMovementPackages(this.workbenchView, ruleset);
+    this.syncConfigurationSummary();
     ensureWorkbenchSelections(this.workbenchState, ruleset);
 
     for (const button of this.workbenchTabsRoot.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
@@ -1124,6 +1256,14 @@ export class BeatApp {
     }
     for (const panel of this.workbenchPanelsRoot.querySelectorAll<HTMLElement>('[data-workbench-panel]')) {
       panel.hidden = panel.dataset.workbenchPanel !== this.workbenchState.selectedTab;
+    }
+    this.workbenchPanelsRoot.closest('.workbench-layout')?.classList.toggle('is-ability-view', this.workbenchState.selectedTab === 'abilities');
+    if (this.kitDraft && this.kitDraft.fingerprint !== rulesetFingerprint(ruleset)) this.kitDraft = undefined;
+    const kits = this.workbenchView.querySelector<HTMLElement>('#workbench-panel-kits');
+    if (kits) syncKitControls(kits, this.kitDraft?.selection, ruleset);
+    if (this.rulesValidationLine.classList.contains('is-error')) {
+      const status = this.workbenchView.querySelector<HTMLElement>('#kit-status');
+      if (status) status.textContent = 'JSON draft is invalid. Showing the last valid configuration. Fix Advanced JSON before playing.';
     }
 
     setControlValue(this.workbenchView, '#workbench-rule-name', ruleset.name);
@@ -1151,10 +1291,6 @@ export class BeatApp {
 
     const abilityOptions = ruleset.abilities.map((ability) => ({ value: ability.id, label: ability.name }));
     setSelectOptions(this.workbenchView, '#workbench-ability-select', abilityOptions, this.workbenchState.selectedAbilityId);
-    for (const select of this.workbenchView.querySelectorAll<HTMLSelectElement>('[data-loadout-slot]')) {
-      const slot = Number(select.dataset.loadoutSlot);
-      replaceOptions(select, abilityOptions, ruleset.loadout.abilityIds[slot] ?? '');
-    }
     const ability = ruleset.abilities.find((candidate) => candidate.id === this.workbenchState.selectedAbilityId);
     if (ability) {
       setControlValue(this.workbenchView, '#workbench-ability-damage', String(ability.damage));
@@ -1168,10 +1304,27 @@ export class BeatApp {
     if (abilityEffects) {
       abilityEffects.innerHTML = abilityEffectsHtml(ruleset, this.workbenchState.selectedAbilityId);
     }
+    const abilityInspector = this.workbenchView.querySelector<HTMLElement>('#workbench-ability-inspector');
+    if (abilityInspector) abilityInspector.innerHTML = abilityInspectorHtml(ruleset, this.workbenchState.selectedAbilityId);
 
+    const mechanicsPresets = this.workbenchView.querySelector<HTMLElement>('#workbench-mechanics-presets');
+    if (mechanicsPresets) {
+      mechanicsPresets.innerHTML = mechanicsPresetsHtml(ruleset);
+    }
     const triggerOptions = ruleset.mechanics.triggers.map((trigger) => ({ value: trigger.id, label: trigger.name ?? trigger.id }));
     setSelectOptions(this.workbenchView, '#workbench-trigger-select', triggerOptions, this.workbenchState.selectedTriggerId);
     const trigger = ruleset.mechanics.triggers.find((candidate) => candidate.id === this.workbenchState.selectedTriggerId);
+    const triggerFields = this.workbenchView.querySelector<HTMLElement>('#workbench-trigger-fields');
+    if (triggerFields) {
+      triggerFields.hidden = !trigger;
+      for (const control of triggerFields.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')) {
+        control.disabled = !trigger;
+      }
+    }
+    const removeTriggerButton = this.workbenchView.querySelector<HTMLButtonElement>('#workbench-remove-trigger');
+    if (removeTriggerButton) {
+      removeTriggerButton.disabled = !trigger;
+    }
     if (trigger) {
       setControlValue(this.workbenchView, '#workbench-trigger-name', trigger.name ?? trigger.id);
       setControlValue(this.workbenchView, '#workbench-trigger-event', trigger.event);
@@ -1203,6 +1356,8 @@ export class BeatApp {
     setControlChecked(this.workbenchView, '#pref-trace-open', this.uiPreferences.traceDefaultOpen);
     setControlValue(this.workbenchView, '#pref-hud-density', this.uiPreferences.hudDensity);
     this.syncConditionalWorkbenchFields(ruleset);
+    const invalidDraft = this.rulesValidationLine.classList.contains('is-error');
+    for (const input of this.workbenchView.querySelectorAll<HTMLInputElement>('[data-movement-package], [data-mechanic-preset]')) input.disabled = invalidDraft;
     this.renderWorkbenchDiagnostics();
   }
 
@@ -1627,6 +1782,10 @@ export class BeatApp {
     try {
       return this.currentRuleset();
     } catch (error) {
+      this.workbenchDiagnostics = diagnosticsFromError(error);
+      this.showWorkbench();
+      this.selectWorkbenchTab('advanced');
+      this.rulesJsonInput.focus();
       this.log(`rules rejected: ${readError(error)}`);
       return undefined;
     }
@@ -1634,6 +1793,10 @@ export class BeatApp {
 
   private async resetRules(): Promise<void> {
     this.editableRuleset = createDefaultRuleset();
+    this.kitDraft = {
+      selection: createExperimentSelection('combo-preset'),
+      fingerprint: rulesetFingerprint(this.editableRuleset),
+    };
     updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
     this.workbenchDiagnostics = [];
     this.rulesJsonInput.value = stringifyRulesDocument(this.editableRuleset);
@@ -1698,13 +1861,14 @@ export class BeatApp {
       this.rulesInspector.innerHTML = '<div class="inspector-empty">Invalid JSON</div>';
       this.workbenchDiagnostics = diagnosticsFromError(error);
       this.renderWorkbenchDiagnostics();
+      this.syncWorkbenchControls();
     }
   }
 
-  private async insertRulesExample(example: string): Promise<void> {
+  private async insertExperiment(example: string): Promise<void> {
     try {
       const ruleset = parseWorkbenchDocumentJson(this.rulesJsonInput.value).ruleset;
-      const nextRuleset = applyRulesExample(ruleset, example);
+      const nextRuleset = applyExperiment(ruleset, example);
       this.editableRuleset = validateRuleset(nextRuleset);
       updateWorkbenchDraft(this.workbenchState, this.editableRuleset);
       this.workbenchDiagnostics = [];
@@ -1796,9 +1960,6 @@ export class BeatApp {
     this.resetRulesButton.disabled = locked;
     this.applyRulesButton.disabled = locked;
     this.copyRulesButton.disabled = locked;
-    for (const button of this.rulesExampleButtons) {
-      button.disabled = locked;
-    }
     for (const control of this.workbenchView.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>(
       'input, select, textarea, button',
     )) {
@@ -2006,7 +2167,6 @@ function shellHtml(): string {
               <button id="host-room" class="button button--primary" type="button">Host</button>
               <button id="solo-room" class="button" type="button">Solo</button>
               <button id="lab-room" class="button" type="button">Lab</button>
-              <button id="open-workbench" class="button" type="button">Workbench</button>
               <button id="menu-fullscreen-toggle" class="button fullscreen-toggle-button" type="button">Fullscreen</button>
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
@@ -2018,15 +2178,10 @@ function shellHtml(): string {
               <div id="room-summary" class="room-summary"></div>
               <div id="room-list" class="room-list"></div>
             </section>
-            <section class="menu-section menu-section--rules">
-              <h2>Quick presets</h2>
-              <div class="rules-examples rules-examples--wide">
-                <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
-                <button class="button rules-example" type="button" data-example="platform-preset">Platform</button>
-                <button class="button rules-example" type="button" data-example="deathmatch-preset">Deathmatch</button>
-                <button class="button rules-example" type="button" data-example="duel-preset">Duel</button>
-                <button class="button rules-example" type="button" data-example="king-zone-preset">King Zone</button>
-              </div>
+            <section class="menu-configuration" aria-label="Current configuration">
+              <h2>Current configuration</h2>
+              <div id="menu-current-rules" class="menu-current-rules"></div>
+              <button id="open-workbench" class="button" type="button">Choose match / experiment</button>
             </section>
             <section class="replay-library" aria-labelledby="replay-heading">
               <h2 id="replay-heading">Replays</h2>
@@ -2218,126 +2373,4 @@ function npcRuntimeConfig(archetype: NpcArchetype, team: string): RuntimeNpcConf
     behavior: archetype.behavior,
     casting: archetype.casting,
   };
-}
-
-function applyRulesExample(ruleset: Ruleset, example: string): Ruleset {
-  if (example === 'combo-preset') {
-    return createDefaultRuleset();
-  }
-  if (example === 'deathmatch-preset') {
-    const preset = createDefaultRuleset();
-    preset.id = 'beat-deathmatch';
-    preset.name = 'Beat Deathmatch';
-    preset.match.scoreLimit = 10;
-    preset.objectives = [defaultDeathmatchObjective('center-relic')];
-    return preset;
-  }
-  if (example === 'duel-preset') {
-    const preset = createDefaultRuleset();
-    preset.id = 'beat-duel';
-    preset.name = 'Beat Duel';
-    preset.maxPlayers = 2;
-    preset.match.scoreLimit = 5;
-    preset.match.friendlyFire = true;
-    preset.objectives = [defaultDeathmatchObjective('center-relic')];
-    return preset;
-  }
-  if (example === 'king-zone-preset') {
-    const preset = createDefaultRuleset();
-    preset.id = 'beat-king-zone';
-    preset.name = 'Beat King Zone';
-    preset.match.scoreLimit = 30;
-    preset.objectives = [defaultKingZoneObjective('center-relic')];
-    return preset;
-  }
-  if (example === 'physics-preset') {
-    const preset = createDefaultRuleset();
-    preset.loadout.abilityIds = ['anchor-orb', 'wrecking-weight', 'seeker-spark', 'ion-lance'];
-    return preset;
-  }
-  if (example === 'platform-preset') {
-    const preset = createDefaultRuleset();
-    preset.id = 'beat-platform-lab';
-    preset.name = 'Beat Platform Lab';
-    preset.player.damping = 0.35;
-    preset.player.speed = 7.2;
-    preset.player.movement.mode = 'platform';
-    preset.player.movement.platform = {
-      gravity: 30,
-      jumpVelocity: 12,
-      airControl: 0.48,
-      maxFallSpeed: 20,
-      groundProbeDistance: 0.1,
-    };
-    preset.obstacles = [
-      { id: 'floor', x: 0, y: 9.2, halfWidth: 18, halfHeight: 0.8 },
-      { id: 'bottom-left', x: -11, y: 5.2, halfWidth: 0.8, halfHeight: 0.25 },
-      { id: 'bottom-left_center', x: -6.5, y: 7.2, halfWidth: 0.8, halfHeight: 0.25 },
-      { id: 'bottom-right', x: 11, y: 5.2, halfWidth: 0.8, halfHeight: 0.25 },
-      { id: 'bottom-right_center', x: 6.5, y: 7.2, halfWidth: 0.8, halfHeight: 0.25 },
-      { id: 'lower-center', x: 0, y: 3.8, halfWidth: 6.2, halfHeight: 0.35 },
-      { id: 'mid-left', x: -8.2, y: 0.2, halfWidth: 3.4, halfHeight: 0.35 },
-      { id: 'mid-right', x: 8.2, y: 0.2, halfWidth: 3.4, halfHeight: 0.35 },
-      { id: 'top-left', x: -10.5, y: -3.8, halfWidth: 3.4, halfHeight: 0.35 },
-      { id: 'top-right', x: 10.5, y: -3.8, halfWidth: 3.4, halfHeight: 0.35 },
-      { id: 'top-platform', x: 0, y: -6.8, halfWidth: 5.8, halfHeight: 0.35 },
-    ];
-    const platformObjective = preset.objectives[0];
-    if (platformObjective.kind === 'relicPush') {
-      platformObjective.spawn = { x: 0, y: -7.2 };
-      platformObjective.scoreZones = [
-        { id: 'players-goal', team: 'players', x: 12, y: 8.0, radius: 2.45, points: 1, color: '#2fd17c' },
-        { id: 'hostile-goal', team: 'hostile', x: -12, y: 8.0, radius: 2.45, points: 1, color: '#ff6b4a' },
-      ];
-    }
-    preset.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
-    return preset;
-  }
-  const next = structuredClone(ruleset) as Ruleset;
-  if (example === 'bleed-dot') {
-    upsertById(next.mechanics.statuses, {
-      id: 'bleeding',
-      name: 'Bleeding',
-      color: '#e0524d',
-      durationTicks: 120,
-      tags: ['bleed'],
-      periodic: {
-        everyTicks: 24,
-        actions: [{ kind: 'dealDamage', target: 'target', amount: 4, color: '#e0524d' }],
-      },
-    });
-    const arcSlash = next.abilities.find((ability) => ability.id === 'arc-slash');
-    if (arcSlash) {
-      arcSlash.effects = [...(arcSlash.effects ?? []).filter((effect) => effect.kind !== 'applyStatus' || effect.statusId !== 'bleeding'), {
-        kind: 'applyStatus',
-        target: 'hit',
-        statusId: 'bleeding',
-      }];
-      arcSlash.tags = Array.from(new Set([...(arcSlash.tags ?? []), 'bleed']));
-    }
-    return next;
-  }
-  if (example === 'execute') {
-    upsertById(next.mechanics.triggers, {
-      id: 'low-hp-execute',
-      name: 'Low HP Execute',
-      event: 'onHit',
-      conditions: [{ kind: 'hpBelow', target: 'target', ratio: 0.3 }],
-      actions: [
-        { kind: 'dealDamage', target: 'target', amount: 16, color: '#ffffff' },
-        { kind: 'flashEffect', target: 'target', radius: 1.8, color: '#ffffff' },
-      ],
-    });
-    return next;
-  }
-  return next;
-}
-
-function upsertById<T extends { id: string }>(values: T[], value: T): void {
-  const index = values.findIndex((candidate) => candidate.id === value.id);
-  if (index >= 0) {
-    values[index] = value;
-    return;
-  }
-  values.push(value);
 }

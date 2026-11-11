@@ -44,6 +44,7 @@ export type WorkbenchFieldEdit =
 
 export type WorkbenchCommand =
   | { kind: 'abilityEffect'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; effectIndex?: number; effectKind?: AbilityEffect['kind'] }
+  | { kind: 'mechanicTrigger'; command: 'add' | 'remove' }
   | { kind: 'mechanicCondition'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; conditionIndex?: number }
   | { kind: 'mechanicAction'; command: 'add' | 'remove' | 'moveUp' | 'moveDown'; actionIndex?: number }
   | { kind: 'scoreZone'; command: 'add' | 'duplicate' | 'remove'; scoreZoneId?: string };

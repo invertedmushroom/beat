@@ -1,12 +1,12 @@
 import type { Ruleset } from '../../engine/protocol';
 
 export type WorkbenchTab =
+  | 'kits'
   | 'match'
   | 'player'
   | 'abilities'
   | 'mechanics'
   | 'npcs'
-  | 'presets'
   | 'preferences'
   | 'advanced';
 
@@ -38,12 +38,12 @@ export type WorkbenchState = {
 };
 
 export const WORKBENCH_TABS: Array<{ id: WorkbenchTab; label: string }> = [
+  { id: 'kits', label: 'Library' },
   { id: 'match', label: 'Match' },
   { id: 'player', label: 'Player' },
   { id: 'abilities', label: 'Abilities' },
   { id: 'mechanics', label: 'Mechanics' },
   { id: 'npcs', label: 'NPCs' },
-  { id: 'presets', label: 'Presets' },
   { id: 'preferences', label: 'Preferences' },
   { id: 'advanced', label: 'Advanced JSON' },
 ];
@@ -63,7 +63,7 @@ export function normalizeWorkbenchTab(value: string | undefined): WorkbenchTab |
 
 export function createWorkbenchState(ruleset: Ruleset, editor: WorkbenchEditorState = {}): WorkbenchState {
   const state: WorkbenchState = {
-    selectedTab: normalizeWorkbenchTab(editor.selectedTab) ?? 'player',
+    selectedTab: normalizeWorkbenchTab(editor.selectedTab) ?? 'kits',
     selectedAbilityId: editor.selectedAbilityId ?? '',
     selectedAbilityEffectIndex: editor.selectedAbilityEffectIndex ?? 0,
     selectedTriggerId: editor.selectedTriggerId ?? '',

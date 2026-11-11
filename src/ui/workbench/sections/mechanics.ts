@@ -1,4 +1,6 @@
 import type { MechanicAction, MechanicCondition, Ruleset } from '../../../engine/protocol';
+import { MECHANIC_PRESETS, isMechanicPresetEnabled } from '../experiments';
+import { escapeHtml } from '../inspector';
 import {
   ACTION_KIND_OPTIONS,
   CONDITION_KIND_OPTIONS,
@@ -20,10 +22,23 @@ import {
   teamOptions,
 } from './controls';
 
+export function mechanicsPresetsHtml(ruleset: Ruleset): string {
+  return `
+    <h3>Add mechanics</h3>
+    <p class="kit-intro">These packages modify your current configuration. Toggle them to explore statuses, resources, and conditional effects.</p>
+    <div class="kit-chips">
+      ${MECHANIC_PRESETS.map((preset) => {
+        const checked = isMechanicPresetEnabled(ruleset, preset.id) ? ' checked' : '';
+        return `<label class="kit-chip"><input type="checkbox" data-mechanic-preset="${preset.id}"${checked} /><span><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)}</small></span></label>`;
+      }).join('')}
+    </div>
+  `;
+}
+
 export function mechanicsChainHtml(ruleset: Ruleset, selectedTriggerId: string): string {
   const trigger = ruleset.mechanics.triggers.find((candidate) => candidate.id === selectedTriggerId) ?? ruleset.mechanics.triggers[0];
   if (!trigger) {
-    return sectionShell('Trigger Chain', '<div class="workbench-chain__empty">No trigger selected</div>');
+    return sectionShell('Trigger Chain', '<div class="workbench-chain__empty">No triggers active. Toggle a mechanic package above or click Add trigger.</div>');
   }
   const conditionRows =
     (trigger.conditions?.length ?? 0) > 0

@@ -236,8 +236,8 @@ test('rules inspector validates mechanics examples and updates hash', async ({ p
   await expect(page.locator('#rules-inspector')).toContainText('Shock Bonus');
   const beforeHash = await page.locator('#rules-hash-line').textContent();
 
-  await page.getByRole('tab', { name: 'Presets' }).click();
-  await page.getByRole('button', { name: 'Bleed DOT' }).click();
+  await page.getByRole('button', { name: 'Experiments', exact: true }).click();
+  await page.getByRole('checkbox', { name: /Bleed Over Time/ }).check();
   await expect(page.locator('#rules-validation-line')).toContainText('valid');
   await expect(page.locator('#rules-inspector')).toContainText('Bleeding');
   await expect
@@ -300,7 +300,7 @@ test('workbench keyboard tabs edit structured fields and starts play', async ({ 
   await page.keyboard.press('ArrowRight');
   await expect(page.getByRole('tab', { name: 'Abilities' })).toHaveAttribute('aria-selected', 'true');
 
-  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.getByRole('tab', { name: 'Match', exact: true }).click();
   await page.locator('#workbench-rule-name').fill('Workbench Smoke');
   await expect(page.locator('#workbench-match-objectives')).toContainText('Relic Push');
   await page.locator('#workbench-team-select').selectOption('players');
@@ -373,7 +373,7 @@ test('advanced JSON wrapper and invalid edits preserve last accepted rules', asy
   await expect(page.locator('#workbench-diagnostics')).toContainText('abilities[anchor-orb].effects[0].body.mass');
   await expect(page.locator('#workbench-effect-0-body-mass')).toHaveValue('8');
 
-  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.getByRole('tab', { name: 'Match', exact: true }).click();
   await page.locator('#workbench-score-zone-select').selectOption('players-goal');
   await page.locator('#workbench-score-zone-radius').fill('0');
   await expect(page.locator('#workbench-diagnostics')).toContainText('objectives[center-relic].scoreZones[players-goal].radius');
@@ -384,14 +384,14 @@ test('advanced JSON wrapper and invalid edits preserve last accepted rules', asy
   await expect(page.locator('#rules-validation-line')).toContainText('invalid');
   await expect(page.locator('#workbench-diagnostics')).toContainText('$');
 
-  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.getByRole('tab', { name: 'Match', exact: true }).click();
   await expect(page.locator('#workbench-rule-name')).toHaveValue('Wrapped Workbench');
 });
 
 test('relic push objective scores and ends a match', async ({ page }) => {
   await page.goto('/');
   await openWorkbench(page);
-  await page.getByRole('tab', { name: 'Match' }).click();
+  await page.getByRole('tab', { name: 'Match', exact: true }).click();
   await page.locator('#workbench-score-limit').fill('1');
   await page.locator('#workbench-objective-scoreCooldownTicks').fill('1');
   await page.locator('#workbench-score-zone-select').selectOption('players-goal');
@@ -478,8 +478,8 @@ test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', as
 test('lab physics preset materializes bodies and tethers actors', async ({ page }) => {
   await page.goto('/');
   await openWorkbench(page);
-  await page.getByRole('tab', { name: 'Presets' }).click();
-  await page.getByRole('button', { name: 'Physics' }).click();
+  await page.getByRole('button', { name: 'Experiments', exact: true }).click();
+  await page.locator('[data-experiment="physics-preset"]').click();
   await expect(page.locator('#rules-inspector')).toContainText('Anchor Orb');
   await expect(page.locator('#rules-inspector')).toContainText('phase walls');
   await page.getByRole('tab', { name: 'Abilities' }).click();
@@ -932,7 +932,7 @@ async function aimCanvas(page: Page, side: 'left' | 'right'): Promise<void> {
 }
 
 async function openWorkbench(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Workbench' }).click();
+  await page.getByRole('button', { name: 'Choose match / experiment' }).click();
   await expect(page.locator('#workbench-view')).toBeVisible();
 }
 
@@ -950,7 +950,7 @@ async function applyAndCloseWorkbench(page: Page): Promise<void> {
 
 async function usePreset(page: Page, name: string): Promise<void> {
   await openWorkbench(page);
-  await page.getByRole('tab', { name: 'Presets' }).click();
+  await page.getByRole('button', { name: 'Experiments', exact: true }).click();
   await page.getByRole('button', { name }).click();
   await applyAndCloseWorkbench(page);
 }

@@ -1,6 +1,8 @@
 import { WORKBENCH_TABS, type WorkbenchTab } from './state';
 import { workbenchFieldsForSection, type WorkbenchField } from './fields';
 import { escapeHtml } from './inspector';
+import { kitsHtml } from './kitsView';
+import { movementPackagesHtml } from './movementView';
 
 export function workbenchHtml(): string {
   return `
@@ -23,12 +25,12 @@ export function workbenchHtml(): string {
         </div>
         <div class="workbench-layout">
           <div id="workbench-panels" class="workbench-panels">
+            ${panelHtml('kits', 'Match & experiment library', kitsHtml())}
             ${matchPanelHtml()}
             ${playerPanelHtml()}
             ${abilitiesPanelHtml()}
             ${mechanicsPanelHtml()}
             ${npcsPanelHtml()}
-            ${presetsPanelHtml()}
             ${preferencesPanelHtml()}
             ${advancedPanelHtml()}
           </div>
@@ -69,22 +71,18 @@ function matchPanelHtml(): string {
 }
 
 function playerPanelHtml(): string {
-  return panelHtml('player', 'Player / Controls', `<div class="workbench-grid">${fieldsHtml('player')}</div>`);
+  return panelHtml('player', 'Player & movement', `${movementPackagesHtml()}<h3>Fine-tune player values</h3><div class="workbench-grid">${fieldsHtml('player')}</div>`);
 }
 
 function abilitiesPanelHtml(): string {
   return panelHtml(
     'abilities',
-    'Abilities / Loadout',
+    'Abilities',
     `
-              <div class="workbench-grid workbench-grid--slots">
-                <label class="field"><span>Slot 1</span><select data-loadout-slot="0" data-workbench-path="loadout.abilityIds[0]"></select></label>
-                <label class="field"><span>Slot 2</span><select data-loadout-slot="1" data-workbench-path="loadout.abilityIds[1]"></select></label>
-                <label class="field"><span>Slot 3</span><select data-loadout-slot="2" data-workbench-path="loadout.abilityIds[2]"></select></label>
-                <label class="field"><span>Slot 4</span><select data-loadout-slot="3" data-workbench-path="loadout.abilityIds[3]"></select></label>
-              </div>
+              <label class="field"><span>Edit ability</span><select id="workbench-ability-select" data-ability-select="true"></select></label>
+              <div id="workbench-ability-inspector"></div>
+              <h3>Fine-tune ability values</h3>
               <div class="workbench-grid">
-                <label class="field"><span>Edit ability</span><select id="workbench-ability-select" data-ability-select="true"></select></label>
                 ${fieldsHtml('abilities')}
               </div>
               <div id="workbench-ability-effects" class="workbench-chain" aria-live="polite"></div>
@@ -97,9 +95,19 @@ function mechanicsPanelHtml(): string {
     'mechanics',
     'Mechanics',
     `
-              <div class="workbench-grid">
-                <label class="field"><span>Edit trigger</span><select id="workbench-trigger-select" data-trigger-select="true"></select></label>
-                ${fieldsHtml('mechanics')}
+              <div id="workbench-mechanics-presets" class="workbench-chain__section"></div>
+              <div class="workbench-chain__section">
+                <div class="workbench-chain__toolbar">
+                  <h3>Triggers</h3>
+                  <div class="workbench-mini-actions">
+                    <button id="workbench-add-trigger" class="button button--mini" type="button" data-trigger-command="add">Add trigger</button>
+                    <button id="workbench-remove-trigger" class="button button--mini button--danger" type="button" data-trigger-command="remove">Remove trigger</button>
+                  </div>
+                </div>
+                <div id="workbench-trigger-fields" class="workbench-grid">
+                  <label class="field"><span>Edit trigger</span><select id="workbench-trigger-select" data-trigger-select="true"></select></label>
+                  ${fieldsHtml('mechanics')}
+                </div>
               </div>
               <div id="workbench-mechanics-chain" class="workbench-chain" aria-live="polite"></div>
               <div id="workbench-mechanics-flow" class="mechanics-flow"></div>
@@ -115,25 +123,6 @@ function npcsPanelHtml(): string {
               <div class="workbench-grid">
                 <label class="field"><span>Edit NPC</span><select id="workbench-npc-select" data-npc-select="true"></select></label>
                 ${fieldsHtml('npcs')}
-              </div>
-    `,
-  );
-}
-
-function presetsPanelHtml(): string {
-  return panelHtml(
-    'presets',
-    'Presets',
-    `
-              <div class="rules-examples rules-examples--wide">
-                <button class="button rules-example" type="button" data-example="combo-preset">Combo Preset</button>
-                <button class="button rules-example" type="button" data-example="bleed-dot">Bleed DOT</button>
-                <button class="button rules-example" type="button" data-example="execute">Execute</button>
-                <button class="button rules-example" type="button" data-example="physics-preset">Physics</button>
-                <button class="button rules-example" type="button" data-example="platform-preset">Platform</button>
-                <button class="button rules-example" type="button" data-example="deathmatch-preset">Deathmatch</button>
-                <button class="button rules-example" type="button" data-example="duel-preset">Duel</button>
-                <button class="button rules-example" type="button" data-example="king-zone-preset">King Zone</button>
               </div>
     `,
   );

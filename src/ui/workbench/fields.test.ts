@@ -145,6 +145,30 @@ describe('workbench field registry', () => {
     expect(trigger?.actions[1]).toMatchObject({ kind: 'heal', target: 'source', amount: 6 });
   });
 
+  it('adds and removes triggers on a ruleset with no initial triggers or resources', () => {
+    const ruleset = createDefaultRuleset();
+    ruleset.mechanics.triggers = [];
+    ruleset.mechanics.resources = [];
+    ruleset.mechanics.statuses = [];
+    for (const ability of ruleset.abilities) {
+      ability.effects = (ability.effects ?? []).filter((effect) => effect.kind !== 'applyStatus');
+    }
+    const state = createWorkbenchState(ruleset);
+    expect(state.selectedTriggerId).toBe('');
+
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'mechanicTrigger', command: 'add' })).toBe(true);
+    expect(ruleset.mechanics.triggers).toHaveLength(1);
+    expect(state.selectedTriggerId).toBe('custom-trigger-1');
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'mechanicCondition', command: 'add' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'mechanicConditionKind', conditionIndex: 0, value: 'resourceAtLeast' })).toBe(true);
+    expect(applyWorkbenchFieldEdit(ruleset, state, { kind: 'mechanicActionKind', actionIndex: 0, value: 'applyStatus' })).toBe(true);
+    expect(validateRuleset(ruleset).mechanics.triggers).toHaveLength(1);
+
+    expect(applyWorkbenchCommand(ruleset, state, { kind: 'mechanicTrigger', command: 'remove' })).toBe(true);
+    expect(ruleset.mechanics.triggers).toHaveLength(0);
+    expect(state.selectedTriggerId).toBe('');
+  });
+
   it('reports paths for edits and common validation failures', () => {
     const ruleset = createDefaultRuleset();
     const state = createWorkbenchState(ruleset, { selectedAbilityId: 'pulse-bolt' });
