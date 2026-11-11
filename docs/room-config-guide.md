@@ -12,18 +12,21 @@ categories preserves your current rules. Selecting a match replaces them with th
 | King of the Hill | An open central zone with side cover, first team to 30 points. |
 | Relic Push | A clear central court, first team to push the ball into its colored goal three times. |
 
-Each card supplies movement and a shared four-ability deck. **Change / tune movement**
+Each card supplies movement and a mode-signature four-ability deck. **Change / tune movement**
 opens the Player tab's single movement-package picker: Twin Stick, Heavy Tank, Four-Way,
 or Platform. Detailed values sit below those cards. **Swap ability cards** in the Library
-changes the four loadout slots using six existing abilities.
+changes the four loadout slots using the ten-card ability catalog (`Pulse Bolt`, `Arc Slash`,
+`Seeker Spark`, `Ion Lance`, `Blink Step`, `Heavy Cleave`, `Repulsor Wave`, `Rail Snipe`,
+`Anchor Orb`, and `Wrecking Weight`).
 The three mutator chips multiply cooldowns by 0.4, projectile hit radii by 1.5, or ability
 knockback by 2.5. Toggling a chip off restores the original value. Chip order does
 not change the result. Selecting a different match or complete experiment resets its swaps and chips.
 
 Relic Push modes also offer **Bouncy Relic**, a lighter ball with stronger rebounds and
-less damping. Push the ball with your player body. Weapons retain their existing
-player-target behavior. **Play solo** opens a practice arena; **Host room** uses the
-lobby name and room title so friends can join. Swaps and chips affect the whole room.
+less damping. Push the ball with your player body or strike it with projectile and melee
+abilities (impulse scales with ability damage, knockback force, and charge). **Play solo**
+opens a practice arena; **Host room** uses the lobby name and room title so friends can
+join. Swaps and chips affect the whole room.
 
 The **Current configuration** card shows your actual arena, movement, and four abilities.
 Use **Change / tune movement**, **Inspect / customize ability**, or **Customize / JSON** for

@@ -76,7 +76,7 @@ export function applyExperiment(current: Ruleset, id: string): Ruleset {
 
 function physicsRules(): Ruleset {
   const rules = createDefaultRuleset();
-  rules.loadout.abilityIds = ['anchor-orb', 'wrecking-weight', 'seeker-spark', 'ion-lance'];
+  rules.loadout.abilityIds = ['anchor-orb', 'wrecking-weight', 'repulsor-wave', 'rail-snipe'];
   return rules;
 }
 
@@ -86,6 +86,7 @@ function deathmatchRules(): Ruleset {
   rules.name = 'Beat Deathmatch';
   rules.match.scoreLimit = 10;
   rules.objectives = [defaultDeathmatchObjective('center-relic')];
+  rules.loadout.abilityIds = ['pulse-bolt', 'heavy-cleave', 'seeker-spark', 'ion-lance'];
   return rules;
 }
 
@@ -96,6 +97,7 @@ function duelRules(): Ruleset {
   rules.maxPlayers = 2;
   rules.match.scoreLimit = 5;
   rules.match.friendlyFire = true;
+  rules.loadout.abilityIds = ['pulse-bolt', 'arc-slash', 'blink-step', 'ion-lance'];
   return rules;
 }
 
@@ -105,6 +107,7 @@ function hillRules(): Ruleset {
   rules.name = 'Beat King Zone';
   rules.match.scoreLimit = 30;
   rules.objectives = [defaultKingZoneObjective('center-relic')];
+  rules.loadout.abilityIds = ['heavy-cleave', 'repulsor-wave', 'seeker-spark', 'ion-lance'];
   return rules;
 }
 
@@ -137,7 +140,7 @@ function platformRules(): Ruleset {
       { id: 'hostile-goal', team: 'hostile', x: -12, y: 8, radius: 2.45, points: 1, color: '#ff6b4a' },
     ];
   }
-  rules.loadout.abilityIds = ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'];
+  rules.loadout.abilityIds = ['blink-step', 'pulse-bolt', 'anchor-orb', 'rail-snipe'];
   return rules;
 }
 

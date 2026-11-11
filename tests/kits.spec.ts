@@ -28,7 +28,7 @@ test('match kits rebuild swaps and chips, then preserve manual customization', a
   await page.getByText('Swap ability cards', { exact: true }).click();
   await page.locator('#kit-slot-0').focus();
   await page.locator('#kit-slot-0').selectOption('anchor-orb');
-  expect(await rules(page)).toMatchObject({ player: { movement: { mode: 'tank' }, aim: { mode: 'facing' } }, loadout: { abilityIds: ['anchor-orb', 'arc-slash', 'seeker-spark', 'ion-lance'] } });
+  expect(await rules(page)).toMatchObject({ player: { movement: { mode: 'tank' }, aim: { mode: 'facing' } }, loadout: { abilityIds: ['anchor-orb', 'arc-slash', 'blink-step', 'ion-lance'] } });
   await expect(page.locator('#kit-slot-0')).toBeFocused();
   await page.getByRole('button', { name: 'Inspect / customize ability 1', exact: true }).click();
   await expect(page.locator('#workbench-ability-select')).toHaveValue('anchor-orb');
@@ -72,9 +72,12 @@ test('mobile bouncy relic kit hosts shared rules and a moving ball', async ({ pa
   await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.objectives[0]?.kind)).toBe('relicPush');
   await host.bringToFront();
-  await host.keyboard.down('KeyD');
+  // Fire slot 1 (Pulse Bolt) from spawn (-12, 0) aiming right toward the center relic (0, 0) to strike the ball from afar
+  const arena = await host.locator('#arena').boundingBox();
+  if (!arena) throw new Error('arena canvas missing');
+  await host.mouse.move(arena.x + arena.width - 24, arena.y + arena.height / 2);
+  await host.keyboard.press('Space');
   await expect.poll(() => host.evaluate(() => window.__BEAT_SNAPSHOT__?.objectives[0]?.x ?? 0), { timeout: 7000 }).toBeGreaterThan(2);
-  await host.keyboard.up('KeyD');
   await expect.poll(() => client.evaluate(() => window.__BEAT_SNAPSHOT__?.objectives[0]?.x ?? 0)).toBeGreaterThan(2);
   await client.bringToFront();
   const motion = await client.evaluate(() => new Promise<Array<{ tick: number; x: number; objectiveX: number }>>((resolve) => {

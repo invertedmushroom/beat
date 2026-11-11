@@ -41,10 +41,14 @@ describe('match kits', () => {
     expect(rulesetFingerprint(createDefaultRuleset())).toBe(defaultBefore);
   });
 
-  it('keeps objectives, capacities, and winning scores tied to their match', () => {
-    expect(compileKit(createKitSelection('duel'))).toMatchObject({ maxPlayers: 2, match: { scoreLimit: 5 }, objectives: [{ kind: 'deathmatch' }] });
-    expect(compileKit(createKitSelection('hill'))).toMatchObject({ maxPlayers: 6, match: { scoreLimit: 30, friendlyFire: false }, objectives: [{ kind: 'kingZone' }] });
-    expect(compileKit(createKitSelection('relic'))).toMatchObject({ match: { scoreLimit: 3, friendlyFire: false }, objectives: [{ kind: 'relicPush', resetOnScore: true }] });
+  it('keeps objectives, capacities, winning scores, and distinct signature loadouts tied to their match', () => {
+    const duel = compileKit(createKitSelection('duel'));
+    const hill = compileKit(createKitSelection('hill'));
+    const relic = compileKit(createKitSelection('relic'));
+    expect(duel).toMatchObject({ maxPlayers: 2, match: { scoreLimit: 5 }, objectives: [{ kind: 'deathmatch' }], loadout: { abilityIds: ['pulse-bolt', 'arc-slash', 'blink-step', 'ion-lance'] } });
+    expect(hill).toMatchObject({ maxPlayers: 6, match: { scoreLimit: 30, friendlyFire: false }, objectives: [{ kind: 'kingZone' }], loadout: { abilityIds: ['heavy-cleave', 'repulsor-wave', 'seeker-spark', 'anchor-orb'] } });
+    expect(relic).toMatchObject({ match: { scoreLimit: 3, friendlyFire: false }, objectives: [{ kind: 'relicPush', resetOnScore: true }], loadout: { abilityIds: ['pulse-bolt', 'repulsor-wave', 'blink-step', 'rail-snipe'] } });
+    expect(new Set([duel, hill, relic].map((r) => r.loadout.abilityIds.join(','))).size).toBe(3);
   });
 
   it('rebuilds multipliers once, independent of toggle order or duplicate chip IDs', () => {

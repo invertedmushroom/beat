@@ -24,10 +24,14 @@ export const MOVEMENT_CHASSIS = [
 ] as const;
 
 export const ABILITY_CARDS = [
-  { id: 'pulse-bolt', name: 'Pulse Bolt', tag: 'Knockback', description: 'Fast bolt that pushes rivals back.' },
+  { id: 'pulse-bolt', name: 'Pulse Bolt', tag: 'Knockback', description: 'Fast bolt that pushes rivals and the ball back.' },
   { id: 'arc-slash', name: 'Arc Slash', tag: 'Control', description: 'Aim-assisted melee sweep that chills rivals.' },
   { id: 'seeker-spark', name: 'Seeker Spark', tag: 'Sustain', description: 'Aim-assisted shot; casting heals you.' },
   { id: 'ion-lance', name: 'Ion Lance', tag: 'Burst / Mobility', description: 'Hold to charge a powerful shot; release to dash.' },
+  { id: 'blink-step', name: 'Blink Step', tag: 'Mobility', description: 'Short-cooldown phase step that vaults you forward.' },
+  { id: 'heavy-cleave', name: 'Heavy Cleave', tag: 'Zone Control', description: 'Wide sweeping cleave that knocks back and slows.' },
+  { id: 'repulsor-wave', name: 'Repulsor Wave', tag: '360° Peel', description: 'Radial shockwave that launches nearby rivals and the ball.' },
+  { id: 'rail-snipe', name: 'Rail Snipe', tag: 'Long-Range Burst', description: 'High-velocity charged shot with heavy knockback.' },
   { id: 'anchor-orb', name: 'Anchor Orb', tag: 'Control', description: 'Snare a rival and leave a heavy orb at impact.' },
   { id: 'wrecking-weight', name: 'Wrecking Weight', tag: 'Physics', description: 'Drag a heavy weight behind you on a tether.' },
 ] as const;
@@ -53,26 +57,29 @@ export type KitSelection = {
   bouncyRelic: boolean;
 };
 
+const MATCH_LOADOUTS: Record<MatchKitId, [AbilityCardId, AbilityCardId, AbilityCardId, AbilityCardId]> = {
+  duel: ['pulse-bolt', 'arc-slash', 'blink-step', 'ion-lance'],
+  hill: ['heavy-cleave', 'repulsor-wave', 'seeker-spark', 'anchor-orb'],
+  relic: ['pulse-bolt', 'repulsor-wave', 'blink-step', 'rail-snipe'],
+};
+
 const EXPERIMENT_DEFAULTS: Record<
   CompleteExperimentId,
   { match: MatchKitId; chassis: ChassisId; abilities: [AbilityCardId, AbilityCardId, AbilityCardId, AbilityCardId] }
 > = {
   'combo-preset': { match: 'relic', chassis: 'twin', abilities: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'] },
-  'physics-preset': { match: 'relic', chassis: 'twin', abilities: ['anchor-orb', 'wrecking-weight', 'seeker-spark', 'ion-lance'] },
-  'platform-preset': { match: 'relic', chassis: 'platform', abilities: ['pulse-bolt', 'anchor-orb', 'seeker-spark', 'ion-lance'] },
-  'deathmatch-preset': { match: 'duel', chassis: 'twin', abilities: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'] },
-  'duel-preset': { match: 'duel', chassis: 'twin', abilities: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'] },
-  'king-zone-preset': { match: 'hill', chassis: 'twin', abilities: ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'] },
+  'physics-preset': { match: 'relic', chassis: 'twin', abilities: ['anchor-orb', 'wrecking-weight', 'repulsor-wave', 'rail-snipe'] },
+  'platform-preset': { match: 'relic', chassis: 'platform', abilities: ['blink-step', 'pulse-bolt', 'anchor-orb', 'rail-snipe'] },
+  'deathmatch-preset': { match: 'duel', chassis: 'twin', abilities: ['pulse-bolt', 'heavy-cleave', 'seeker-spark', 'ion-lance'] },
+  'duel-preset': { match: 'duel', chassis: 'twin', abilities: ['pulse-bolt', 'arc-slash', 'blink-step', 'ion-lance'] },
+  'king-zone-preset': { match: 'hill', chassis: 'twin', abilities: ['heavy-cleave', 'repulsor-wave', 'seeker-spark', 'ion-lance'] },
 };
 
 export function createKitSelection(match: MatchKitId): KitSelection {
   return {
     match,
     chassis: 'twin',
-    abilities:
-      match === 'relic'
-        ? ['pulse-bolt', 'wrecking-weight', 'seeker-spark', 'ion-lance']
-        : ['pulse-bolt', 'arc-slash', 'seeker-spark', 'ion-lance'],
+    abilities: [...MATCH_LOADOUTS[match]],
     mutators: [],
     bouncyRelic: false,
   };

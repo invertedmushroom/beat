@@ -75,6 +75,7 @@ type RuntimeProjectile = {
   dy: number;
   ageTicks: number;
   traveled: number;
+  hitBodies: Set<string>;
 };
 
 type RuntimePhysicsBody = {
@@ -125,6 +126,7 @@ type RuntimeMelee = {
   dy: number;
   startedTick: number;
   hitPlayers: Set<string>;
+  hitBodies: Set<string>;
 };
 
 type RuntimeEffect = {
@@ -896,11 +898,13 @@ function spawnProjectile(player: RuntimePlayer, ability: ProjectileAbility, aim:
     dy: aim.y,
     ageTicks: 0,
     traveled: 0,
+    hitBodies: new Set(),
   });
 }
 
 function spawnMelee(player: RuntimePlayer, ability: MeleeAbility, aim: Vec2): void {
   const pos = player.body.translation();
+  const offset = ability.arcDegrees >= 300 ? 0 : ability.range * 0.55;
   melees.push({
     effectId: `melee-${++effectIndex}`,
     ownerId: player.spawn.playerId,
@@ -909,12 +913,13 @@ function spawnMelee(player: RuntimePlayer, ability: MeleeAbility, aim: Vec2): vo
     dy: aim.y,
     startedTick: tick,
     hitPlayers: new Set(),
+    hitBodies: new Set(),
   });
   effects.push({
     effectId: `melee-windup-${effectIndex}`,
     kind: 'melee',
-    x: pos.x + aim.x * ability.range * 0.55,
-    y: pos.y + aim.y * ability.range * 0.55,
+    x: pos.x + aim.x * offset,
+    y: pos.y + aim.y * offset,
     radius: ability.range,
     color: ability.color,
     createdTick: tick,
@@ -947,6 +952,8 @@ function stepProjectiles(): void {
     projectile.y = to.y;
     projectile.ageTicks += 1;
     projectile.traveled += stepDistance;
+
+    stepProjectileBodyHits(projectile, from, to);
 
     const hitPlayer = findProjectileHit(projectile, from, to);
     if (hitPlayer) {
@@ -992,6 +999,7 @@ function stepMelees(): void {
     if (active && owner?.alive) {
       const ownerPos = owner.body.translation();
       const minDot = Math.cos((melee.ability.arcDegrees * Math.PI) / 360);
+      stepMeleeBodyHits(melee, ownerPos, minDot);
       const reach = melee.ability.range + (ruleset?.player.radius ?? 0.5);
       const reachSq = reach * reach;
       for (const target of players.values()) {
@@ -2313,6 +2321,82 @@ function findProjectileHit(projectile: RuntimeProjectile, from: Vec2, to: Vec2):
     }
   }
   return undefined;
+}
+
+function stepProjectileBodyHits(projectile: RuntimeProjectile, from: Vec2, to: Vec2): void {
+  const direction = { x: projectile.dx, y: projectile.dy };
+  for (const body of physicsBodies.values()) {
+    if (projectile.hitBodies.has(body.bodyId) || isBodyDraggedByOwner(body.bodyId, projectile.ownerId)) {
+      continue;
+    }
+    const pos = body.body.translation();
+    if (distancePointToSegment({ x: pos.x, y: pos.y }, from, to) <= body.radius + projectile.ability.radius) {
+      projectile.hitBodies.add(body.bodyId);
+      strikePhysicsBody(body, projectile.ability, direction);
+    }
+  }
+}
+
+function stepMeleeBodyHits(melee: RuntimeMelee, ownerPos: Vec2, minDot: number): void {
+  for (const body of physicsBodies.values()) {
+    if (melee.hitBodies.has(body.bodyId) || isBodyDraggedByOwner(body.bodyId, melee.ownerId)) {
+      continue;
+    }
+    const pos = body.body.translation();
+    const dx = pos.x - ownerPos.x;
+    const dy = pos.y - ownerPos.y;
+    const reach = melee.ability.range + body.radius;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq > reach * reach) {
+      continue;
+    }
+    const distance = Math.sqrt(distanceSq);
+    const dot = distance > 0 ? (dx / distance) * melee.dx + (dy / distance) * melee.dy : 1;
+    if (dot >= minDot) {
+      melee.hitBodies.add(body.bodyId);
+      const radial = normalized(dx, dy) ?? { x: melee.dx, y: melee.dy };
+      const direction =
+        melee.ability.arcDegrees >= 300
+          ? radial
+          : (normalized(radial.x + melee.dx, radial.y + melee.dy) ?? { x: melee.dx, y: melee.dy });
+      strikePhysicsBody(body, melee.ability, direction);
+    }
+  }
+}
+
+function strikePhysicsBody(target: RuntimePhysicsBody, ability: Ability, direction: Vec2): void {
+  const mass = Math.max(4, target.body.mass());
+  const knockback = abilityKnockbackForce(ability);
+  const impulse = 36 + ability.damage * 1.15 + knockback * 28;
+  const launchSpeed = Math.min(26, impulse / mass);
+  const currentVel = target.body.linvel();
+  const nextVx = currentVel.x * 0.35 + direction.x * launchSpeed;
+  const nextVy = currentVel.y * 0.35 + direction.y * launchSpeed;
+  const nextSpeed = Math.hypot(nextVx, nextVy);
+  const scale = nextSpeed > 28 ? 28 / nextSpeed : 1;
+  target.body.wakeUp();
+  target.body.setLinvel({ x: nextVx * scale, y: nextVy * scale }, true);
+  const pos = target.body.translation();
+  addImpact(pos.x, pos.y, Math.max(target.radius * 2.1, ability.radius * 2.4), ability.color);
+}
+
+function abilityKnockbackForce(ability: Ability): number {
+  let total = 0;
+  for (const effect of ability.effects ?? []) {
+    if (effect.kind === 'knockback') {
+      total += effect.force;
+    }
+  }
+  return total;
+}
+
+function isBodyDraggedByOwner(bodyId: string, ownerId: string): boolean {
+  for (const constraint of constraints.values()) {
+    if (constraint.kind === 'drag' && constraint.anchorBodyId === bodyId && constraint.targetId === ownerId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hitsArenaOrObstacle(point: Vec2, radius: number): boolean {

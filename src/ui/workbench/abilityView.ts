@@ -105,6 +105,9 @@ function shapePreview(ability: Ability): string {
 }
 
 function meleeArc(degrees: number): string {
+  if (degrees >= 360) {
+    return '<circle cx="35" cy="50" r="45" fill="currentColor" fill-opacity="0.2" stroke="currentColor"/>';
+  }
   const half = degrees * Math.PI / 360;
   const x = 35 + Math.cos(half) * 65, y = Math.sin(half) * 65;
   return `<path d="M 35 50 L ${x} ${50 - y} A 65 65 0 ${degrees > 180 ? 1 : 0} 1 ${x} ${50 + y} Z" fill="currentColor" fill-opacity="0.2" stroke="currentColor"/>`;

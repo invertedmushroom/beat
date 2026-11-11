@@ -92,8 +92,10 @@ and editor actions.
 
 Library play buttons use the existing Solo and Host entrypoints. The Bouncy Relic option
 is available on any Relic Push ruleset and changes only relic body tuning. Players
-push the ball through existing Rapier contacts, and existing objective logic owns
-goals, scoring, and resets. Player movement and network formats are unchanged.
+can push the ball through Rapier body contacts or strike dynamic physics bodies with
+projectile and melee abilities (impulse scaled by damage, knockback force, and charge),
+while existing objective logic owns goals, scoring, and resets. Player movement and
+network formats are unchanged.
 
 ## Networking
 
