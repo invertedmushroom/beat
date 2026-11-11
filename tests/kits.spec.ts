@@ -233,6 +233,9 @@ test('ability nodes explain edited rules, open triggers, and launch the loadout 
   await page.screenshot({ path: testInfo.outputPath('ion-lance-mobile.png'), fullPage: true });
   await overview.getByRole('button', { name: 'Try this loadout in Lab' }).click();
   await expect(page.locator('#lab-controls')).toBeVisible();
+  await expect(page.locator('#lab-spawn')).toBeHidden();
+  await page.locator('#lab-controls > summary').click();
+  await expect(page.locator('#lab-spawn')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__BEAT_SNAPSHOT__?.tick ?? 0)).toBeGreaterThan(2);
 });
 

@@ -3,6 +3,11 @@
 }
 
 .replay-library { margin-top: 18px; }
+.device-session { margin-top: 20px; border-top: 1px solid #424139; padding-top: 12px; }
+.device-session .button { min-height: 44px; }
+.device-session .room-summary { margin: 8px 0; }
+.arena-actions [data-wake-lock] { min-width: 44px; min-height: 44px; padding: 6px; }
+.arena-actions [data-wake-lock][aria-pressed='true'] { border-color: #ffe66d; color: #ffe66d; }
 .replay-library .button-grid { margin-top: 10px; }
 .replay-controls {
   position: absolute;
@@ -282,6 +287,10 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.button-grid--lobby .button--full {
+  grid-column: 1 / -1;
+}
+
 .button-grid--rules {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 10px;
@@ -421,8 +430,8 @@ a.ability-node:hover, button.ability-node:hover { background: #2b3831; }
 .configuration-overview { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr); gap: 20px; align-items: center; }
 .configuration-overview h3 { margin: 0 0 8px; font-size: 22px; }
 .configuration-overview p { color: #b9b4a8; font-size: 13px; margin-bottom: 12px; }
-.menu-configuration { margin-top: 16px; padding-top: 16px; border-top: 1px solid #34332f; }
-.menu-current-rules { display: grid; gap: 7px; margin-bottom: 12px; }
+.menu-configuration { margin-top: 14px; padding-top: 12px; border-top: 1px solid #34332f; }
+.menu-current-rules { display: grid; gap: 7px; }
 .menu-current-rules strong { font-size: 18px; }
 .menu-current-rules span, .menu-current-rules small { color: #b9b4a8; font-size: 12px; }
 .draft-warning { color: #ffad7d; font-size: 13px; }
@@ -888,22 +897,32 @@ a.ability-node:hover, button.ability-node:hover { background: #2b3831; }
 .lab-controls {
   position: absolute;
   z-index: 5;
-  top: max(92px, calc(env(safe-area-inset-top) + 92px));
+  top: max(132px, calc(env(safe-area-inset-top) + 132px));
   right: max(14px, env(safe-area-inset-right));
-  display: grid;
-  gap: 8px;
   width: min(360px, calc(100% - 28px));
-  padding: 10px;
+  padding: 8px 10px;
   color: #f5f3ed;
   border: 1px solid #34332f;
   border-radius: 6px;
-  background: rgba(20, 20, 20, 0.82);
+  background: rgba(20, 20, 20, 0.86);
   font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.lab-controls:not([open]) {
+  width: auto;
 }
 
 .lab-controls__title {
   color: #ffe66d;
   font-weight: 760;
+  cursor: pointer;
+  user-select: none;
+}
+
+.lab-controls__body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .lab-controls__row {
@@ -1341,17 +1360,26 @@ a.ability-node:hover, button.ability-node:hover { background: #2b3831; }
 
   .arena-actions {
     gap: 6px;
+    max-width: calc(100% - 28px);
   }
 
+  .control-profile-picker { min-width: 0; }
+  .control-profile-picker__label { display: none; }
+  .control-profile-picker__select { width: 100%; min-width: 0; }
+
   .lab-controls {
-    top: auto;
+    top: max(116px, calc(env(safe-area-inset-top) + 116px));
     right: max(14px, env(safe-area-inset-right));
-    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 270px);
-    width: min(330px, calc(100% - 28px));
+    bottom: auto;
+    width: min(320px, calc(100% - 28px));
+  }
+
+  .lab-controls:not([open]) {
+    width: auto;
   }
 
   .lab-controls__row {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .arena-action-button {

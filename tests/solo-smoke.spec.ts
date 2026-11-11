@@ -447,6 +447,10 @@ test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', as
   await page.getByRole('button', { name: 'Lab' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
 
+  const saveBox = await page.locator('#export-live-replay').boundingBox();
+  const labBox = await page.locator('#lab-controls').boundingBox();
+  expect(saveBox && labBox && labBox.y >= saveBox.y + saveBox.height).toBe(true);
+
   await page.locator('#lab-spawn-select').selectOption('spark-chaser');
   await page.getByRole('button', { name: 'Spawn' }).click();
   await expect
@@ -473,6 +477,9 @@ test('lab bench controls spawn NPC AI, pause, clear trace, and reset actors', as
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(2);
   await page.getByRole('button', { name: 'Clear Actors' }).click();
   await expect.poll(async () => page.evaluate(() => window.__BEAT_SNAPSHOT__?.players.length ?? 0)).toBe(1);
+
+  await page.locator('#lab-controls > summary').click();
+  await expect(page.locator('#lab-spawn')).toBeHidden();
 });
 
 test('lab physics preset materializes bodies and tethers actors', async ({ page }) => {

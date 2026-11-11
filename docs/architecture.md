@@ -10,6 +10,22 @@
 - `src/rooms/spacetimeDirectory.ts`, `src/rooms/httpDirectory.ts`, and `src/rooms/localDirectory.ts` provide room discovery and signaling backends.
 - `src/engine/rulesValidation.ts` validates the JSON rule schema before starting a game.
 
+## PWA delivery and device session
+
+- `src/pwa.ts` owns install prompts, production worker registration, update checks,
+  confirmation/reload, device status and disposal. `BeatApp` supplies the active-mode
+  update guard and fences start/join/replay entrypoints while an update is applying.
+- `src/pwa/wakeLock.ts` owns opted-in screen wake intent, one pending request and one
+  sentinel. Visibility, cancellation, system release and disposal are separate transitions.
+- `src/pwa/sw.ts` receives Vite's complete precache inventory. Release caches are scoped
+  to the registration, with current/previous retention. There is no runtime API caching
+  or non-document HTML fallback. Installation failure preserves the active release.
+- Waiting-worker activation requires one window under its scope; other tabs block it.
+  Only the initiating idle page reloads after explicit confirmation. Other controller
+  changes do not reload pages. Existing unsaved recordings/rules remain memory-owned.
+- `npm run test:pwa` checks production offline use and actual two-release updates under
+  a deployment prefix. See [pwa.md](pwa.md) for the delivery contract and phone HTTPS setup.
+
 ## Main app modes
 
 `src/app.ts` supports six runtime modes:

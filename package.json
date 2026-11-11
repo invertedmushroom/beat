@@ -6,10 +6,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:https": "vite --host 0.0.0.0 --mode device-https",
     "build": "tsc --noEmit && vite build",
     "lint": "eslint .",
     "lint:structural": "ast-grep scan --config sgconfig.yml",
     "preview": "vite preview --host 127.0.0.1",
+    "preview:https": "npm run build && vite preview --host 0.0.0.0 --mode device-https",
+    "pwa:icons": "node tools/pwa-icons.mjs",
+    "test:pwa": "playwright test --config playwright.pwa.config.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:structural": "ast-grep test --config sgconfig.yml",
@@ -26,11 +30,13 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
+    "@types/node": "^22.20.5",
     "eslint": "^10.4.0",
     "globals": "^17.6.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",
     "vite": "^8.0.13",
+    "vite-plugin-pwa": "^2.0.0",
     "vitest": "^4.0.14",
     "wrangler": "^4.94.0"
   }

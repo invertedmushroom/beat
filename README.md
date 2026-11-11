@@ -57,6 +57,7 @@ cards replace it.
 ## Documentation
 
 - `docs/architecture.md` — implementation overview and component map.
+- `docs/pwa.md` — installation, offline play, safe updates, wake lock and phone HTTPS testing.
 - `docs/rules-implementation.md` — current rule schema and live semantics.
 - `docs/room-config-guide.md` — user-facing room/rules configuration guide.
 - `docs/engine-flow.md` — tick loop, physics, collision, status and resource updates.

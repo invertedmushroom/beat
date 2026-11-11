@@ -75,6 +75,7 @@ import { createId } from './utils/ids';
 import { shortHash } from './utils/hash';
 import { ReplayFeature } from './ui/ReplayFeature';
 import type { ReplayClip } from './replay/archive';
+import { PwaSession, deviceSessionHtml } from './pwa';
 
 const ROOM_STALE_MS = 5_000;
 const PEER_ID_STORAGE_KEY = 'beat:peer-id:v1';
@@ -109,6 +110,7 @@ export class BeatApp {
   };
   private readonly renderer: CanvasRenderer;
   private readonly replays: ReplayFeature;
+  private readonly pwa: PwaSession;
   private readonly input: InputController;
   private readonly pointerWorld: PointerWorldAdapter;
   private readonly root: HTMLElement;
@@ -134,7 +136,7 @@ export class BeatApp {
   private localMechanicsRoot!: HTMLDivElement;
   private traceRoot!: HTMLDivElement;
   private logRoot!: HTMLDivElement;
-  private labControlsRoot!: HTMLDivElement;
+  private labControlsRoot!: HTMLDetailsElement;
   private labSpawnSelect!: HTMLSelectElement;
   private labSpawnButton!: HTMLButtonElement;
   private labClearActorsButton!: HTMLButtonElement;
@@ -200,6 +202,7 @@ export class BeatApp {
     this.root = container;
     this.root.innerHTML = shellHtml();
     this.bindDom();
+    this.pwa = new PwaSession(this.root, () => this.mode === 'idle' && this.workbenchView.hidden ? undefined : 'Return to the menu before updating. Updating a host ends its room.');
     this.uiPreferences = loadUiPreferences();
     this.uiPreferencesV2 = loadUiPreferencesV2();
     // Persist v2 immediately so the v1→v2 migration sticks even if the user
@@ -271,9 +274,11 @@ export class BeatApp {
     this.hashLine.textContent = this.directoryRuntime.label;
     this.peerLine.textContent = `peer ${shortHash(this.peerId)}`;
     void this.refreshRoomsNow();
+    this.pwa.start();
   }
 
   destroy(): void {
+    this.pwa.destroy();
     this.stopActiveMode();
     this.unsubscribeRooms?.();
     this.unsubscribeInput?.();
@@ -320,7 +325,7 @@ export class BeatApp {
     this.localMechanicsRoot = requireNode<HTMLDivElement>('#local-mechanics');
     this.traceRoot = requireNode<HTMLDivElement>('#trace-log');
     this.logRoot = requireNode<HTMLDivElement>('#log');
-    this.labControlsRoot = requireNode<HTMLDivElement>('#lab-controls');
+    this.labControlsRoot = requireNode<HTMLDetailsElement>('#lab-controls');
     this.labSpawnSelect = requireNode<HTMLSelectElement>('#lab-spawn-select');
     this.labSpawnButton = requireNode<HTMLButtonElement>('#lab-spawn');
     this.labClearActorsButton = requireNode<HTMLButtonElement>('#lab-clear-actors');
@@ -455,14 +460,15 @@ export class BeatApp {
 
   private async joinRoom(room: RoomInfo, options: { allowReservedSlot?: boolean } = {}): Promise<void> {
     const rooms = await this.refreshRoomsNow();
+    if (this.pwa.applyingUpdate) return;
     const liveRoom = rooms.find((candidate) => candidate.roomId === room.roomId);
-    const stale = liveRoom ? Date.now() - liveRoom.lastHeartbeat > ROOM_STALE_MS : false;
+    const stale = roomIsStale(liveRoom);
     const reservedSlot = Boolean(options.allowReservedSlot);
     const unavailable =
       !liveRoom ||
       liveRoom.status === 'closed' ||
       stale ||
-      (!reservedSlot && (liveRoom.status !== 'open' || liveRoom.playerCount >= liveRoom.maxPlayers));
+      (!reservedSlot && !roomHasOpenSlot(liveRoom));
     if (unavailable) {
       this.log(`join blocked: ${room.name} is unavailable${stale ? ' (stale)' : ''}`);
       this.setStatus(`room unavailable: ${room.name}`);
@@ -838,8 +844,8 @@ export class BeatApp {
     this.currentRooms = rooms;
     void this.restoreActiveClientSession(rooms);
     this.roomSummary.innerHTML = '';
-    const openRooms = rooms.filter((room) => room.status === 'open' && room.playerCount < room.maxPlayers);
-    const fullRooms = rooms.filter((room) => room.status !== 'open' || room.playerCount >= room.maxPlayers);
+    const openRooms = rooms.filter(roomHasOpenSlot);
+    const fullRooms = rooms.filter((room) => !roomHasOpenSlot(room));
     const activeCount = openRooms.length + fullRooms.length;
     this.roomSummary.textContent = activeCount > 0 ? `Active rooms: ${activeCount} · available ${openRooms.length} · full ${fullRooms.length}` : 'Active rooms: 0';
     this.roomList.innerHTML = '';
@@ -853,9 +859,11 @@ export class BeatApp {
     const sortedRooms = [...openRooms, ...fullRooms];
     for (const room of sortedRooms) {
       const row = document.createElement('button');
-      const stale = Date.now() - room.lastHeartbeat > ROOM_STALE_MS;
-      const joinable = room.status === 'open' && room.playerCount < room.maxPlayers && !stale;
-      row.className = `room-row${joinable ? '' : ' room-row--full'}${stale ? ' room-row--stale' : ''}`;
+      const stale = roomIsStale(room);
+      const joinable = roomHasOpenSlot(room) && !stale;
+      row.className = 'room-row';
+      row.classList.toggle('room-row--full', !joinable);
+      row.classList.toggle('room-row--stale', stale);
       row.type = 'button';
       row.disabled = !joinable;
       const rulesLabel = room.rulesetName ? `${room.rulesetName} (${room.rulesetId})` : room.rulesetId;
@@ -1663,7 +1671,7 @@ export class BeatApp {
   }
 
   private watchReplay(clip: ReplayClip): void {
-    if (this.mode !== 'idle') return;
+    if (this.mode !== 'idle' || this.pwa.applyingUpdate) return;
     this.stopActiveMode();
     this.mode = 'replay';
     this.ruleset = clip.metadata.ruleset;
@@ -1751,6 +1759,9 @@ export class BeatApp {
     this.labActorIds.clear();
     this.labSpawnIndex = 0;
     this.labPaused = false;
+    if (this.labControlsRoot) {
+      this.labControlsRoot.open = !window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
+    }
     this.syncLabControls();
   }
 
@@ -1779,6 +1790,7 @@ export class BeatApp {
   }
 
   private readRulesForStart(): Ruleset | undefined {
+    if (this.pwa.applyingUpdate) return undefined;
     try {
       return this.currentRuleset();
     } catch (error) {
@@ -2133,6 +2145,14 @@ function writeSessionItem(key: string, value: string): void {
   }
 }
 
+function roomIsStale(room: RoomInfo | undefined): boolean {
+  return Boolean(room && Date.now() - room.lastHeartbeat > ROOM_STALE_MS);
+}
+
+function roomHasOpenSlot(room: RoomInfo): boolean {
+  return room.status === 'open' && room.playerCount < room.maxPlayers;
+}
+
 const CONTROL_PROFILE_OPTIONS: ReadonlyArray<{ value: UiProfileId; label: string }> = getControlProfileOptions();
 
 const UI_PROFILE_ID_SET: ReadonlySet<UiProfileId> = new Set<UiProfileId>([...BUILTIN_PROFILE_IDS, 'custom']);
@@ -2168,8 +2188,13 @@ function shellHtml(): string {
               <button id="solo-room" class="button" type="button">Solo</button>
               <button id="lab-room" class="button" type="button">Lab</button>
               <button id="menu-fullscreen-toggle" class="button fullscreen-toggle-button" type="button">Fullscreen</button>
+              <button id="open-workbench" class="button button--full" type="button">Choose match / experiment</button>
             </div>
             <div id="menu-status-line" class="menu-status">starting</div>
+            <section class="menu-configuration" aria-label="Current configuration">
+              <h2>Current configuration</h2>
+              <div id="menu-current-rules" class="menu-current-rules"></div>
+            </section>
             <section class="room-section">
               <div class="room-section__header">
                 <h2>Rooms</h2>
@@ -2178,11 +2203,7 @@ function shellHtml(): string {
               <div id="room-summary" class="room-summary"></div>
               <div id="room-list" class="room-list"></div>
             </section>
-            <section class="menu-configuration" aria-label="Current configuration">
-              <h2>Current configuration</h2>
-              <div id="menu-current-rules" class="menu-current-rules"></div>
-              <button id="open-workbench" class="button" type="button">Choose match / experiment</button>
-            </section>
+            ${deviceSessionHtml()}
             <section class="replay-library" aria-labelledby="replay-heading">
               <h2 id="replay-heading">Replays</h2>
               <div class="button-grid">
@@ -2219,6 +2240,7 @@ function shellHtml(): string {
             </select>
           </label>
           <button id="leave-room" class="button arena-action-button" type="button">Menu</button>
+          <button class="button arena-action-button" type="button" data-wake-lock data-wake-lock-compact aria-label="Keep screen awake" aria-pressed="false">☀</button>
           <button id="export-live-replay" class="button arena-action-button" type="button" disabled>Save replay</button>
         </div>
         <div id="replay-live-status" class="replay-live-status" role="status"></div>
@@ -2234,19 +2256,21 @@ function shellHtml(): string {
           <div id="replay-time"></div>
           <div id="replay-details" class="room-summary"></div>
         </section>
-        <div id="lab-controls" class="lab-controls" hidden>
-          <div class="lab-controls__title">Lab Bench</div>
-          <div class="lab-controls__row">
-            <button id="lab-pause" class="button lab-control-button" type="button" aria-pressed="false">Pause</button>
-            <button id="lab-reset" class="button lab-control-button" type="button">Reset</button>
-            <button id="lab-clear-trace" class="button lab-control-button" type="button">Clear Trace</button>
+        <details id="lab-controls" class="lab-controls" open hidden>
+          <summary class="lab-controls__title">Lab Bench</summary>
+          <div class="lab-controls__body">
+            <div class="lab-controls__row">
+              <button id="lab-pause" class="button lab-control-button" type="button" aria-pressed="false">Pause</button>
+              <button id="lab-reset" class="button lab-control-button" type="button">Reset</button>
+              <button id="lab-clear-trace" class="button lab-control-button" type="button">Clear Trace</button>
+            </div>
+            <div class="lab-controls__row">
+              <select id="lab-spawn-select" class="lab-select" aria-label="NPC archetype"></select>
+              <button id="lab-spawn" class="button lab-control-button" type="button">Spawn</button>
+              <button id="lab-clear-actors" class="button lab-control-button" type="button">Clear Actors</button>
+            </div>
           </div>
-          <div class="lab-controls__row">
-            <select id="lab-spawn-select" class="lab-select" aria-label="NPC archetype"></select>
-            <button id="lab-spawn" class="button lab-control-button" type="button">Spawn</button>
-            <button id="lab-clear-actors" class="button lab-control-button" type="button">Clear Actors</button>
-          </div>
-        </div>
+        </details>
         <div id="skill-bar" class="skill-bar" aria-label="Skill bar">
           <button class="skill-slot" type="button" data-slot="0">
             <span class="skill-slot__cooldown-fill"></span>
