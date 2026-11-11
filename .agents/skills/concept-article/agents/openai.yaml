@@ -1,0 +1,6 @@
+interface:
+  display_name: "Concept Article"
+  short_description: "Scrolling technical articles with figures and evidence"
+  default_prompt: "Use $concept-article to explain this topic as a continuous, self-contained HTML article."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Concept Clarity"
+  short_description: "Build a precise mental model of a technical concept"
+policy:
+  allow_implicit_invocation: false

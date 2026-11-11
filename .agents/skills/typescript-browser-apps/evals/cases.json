@@ -1,0 +1,14 @@
+[
+  {
+    "id": "manifest",
+    "request": "Update the installed app's name to Field Notes and its short name to Notes. Launch the camera view with ?mode=camera. The app is hosted under /field/ and should remain an online-only app. Use the existing build and verify the resulting artifact."
+  },
+  {
+    "id": "storage",
+    "request": "Draft restoration has been unreliable across app upgrades. Fix the draft store so version upgrades and autosave behave safely while preserving the existing API. Keep normal editing and saving working, and verify the failure paths."
+  },
+  {
+    "id": "camera",
+    "request": "The camera can stay active when someone leaves this panel while permission or preview startup is pending. Fix the panel's camera lifecycle while preserving the existing API. Users can stop capture and start again before an earlier request settles. Verify the asynchronous behavior."
+  }
+]

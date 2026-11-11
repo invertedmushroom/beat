@@ -1,0 +1,3 @@
+interface:
+  display_name: "TypeScript Browser Apps"
+  short_description: "Build reliable TypeScript browser apps and PWAs"

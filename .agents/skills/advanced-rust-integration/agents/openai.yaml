@@ -1,0 +1,3 @@
+interface:
+  display_name: "Advanced Rust Integration"
+  short_description: "Debug Rust crate integrations against resolved source"

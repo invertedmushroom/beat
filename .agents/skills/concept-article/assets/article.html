@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An illustrative article connecting noisy measurements, the variance of an average, and a streaming implementation.">
+  <title>Why averaging quiets independent noise</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #faf9f6; --ink: #1d2b35; --muted: #53616c;
+      --accent: #a63e26; --line: #d7dad8; --wash: #eeece5;
+      --gutter: clamp(1rem, 4vw, 2rem);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-padding-top: 1.5rem; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font: 1.125rem/1.75 system-ui, sans-serif; }
+    main { width: min(100% - 2 * var(--gutter), 72rem); margin: 0 auto; padding: 4rem 0; }
+    header, section, footer { max-width: 46rem; margin-inline: auto; }
+    header { margin-bottom: 3.5rem; }
+    section { margin-block: 3.5rem; scroll-margin-top: 1.5rem; }
+    h1, h2, h3 { line-height: 1.15; text-wrap: balance; }
+    h1, h2 { font-family: Georgia, serif; font-weight: 400; }
+    h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); margin: 0.4em 0; letter-spacing: -0.035em; }
+    h2 { font-size: clamp(1.8rem, 4vw, 2.5rem); margin: 0 0 0.8em; }
+    h3 { font-size: 1.15rem; }
+    p { margin: 1em 0; }
+    a { color: var(--accent); text-underline-offset: 0.18em; }
+    a, p, h1, h2, h3, figcaption, td, th { overflow-wrap: anywhere; }
+    .eyebrow { color: var(--muted); font: 0.8rem/1.5 ui-monospace, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+    .lede { font-size: 1.25rem; line-height: 1.65; }
+    .contents { border-top: 1px solid var(--line); padding-top: 1rem; }
+    .contents ol { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; padding: 0; list-style: none; font-size: 0.95rem; }
+    .skip-link { position: absolute; top: -5rem; left: 1rem; padding: 0.6rem; background: var(--paper); z-index: 1; }
+    .skip-link:focus { top: 1rem; }
+    figure { margin: 2rem 0; }
+    .plot { padding: clamp(0.5rem, 2vw, 1.5rem); background: white; border-block: 1px solid var(--line); }
+    svg { display: block; width: 100%; max-width: 38rem; height: auto; margin-inline: auto; overflow: visible; }
+    svg text { fill: var(--muted); font: 22px system-ui, sans-serif; }
+    .axis { stroke: var(--line); stroke-width: 1.5; }
+    .samples { fill: none; stroke: var(--muted); stroke-width: 2.5; stroke-dasharray: 4 5; }
+    .average { fill: none; stroke: var(--accent); stroke-width: 4; }
+    .legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin: 0 0 0.5rem; font-size: 0.9rem; }
+    .legend span::before { content: ""; display: inline-block; width: 1.5rem; border-top: 3px dashed var(--muted); margin-right: 0.5rem; vertical-align: middle; }
+    .legend .mean-key::before { border-top: 3px solid var(--accent); }
+    figcaption { margin-top: 0.75rem; color: var(--muted); font-size: 0.95rem; }
+    .controls { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem 1rem; margin-top: 1.5rem; }
+    .controls input, .controls p { grid-column: 1 / -1; }
+    .controls input { width: 100%; accent-color: var(--accent); }
+    .controls p { margin: 0; font-size: 0.85rem; color: var(--muted); }
+    .result { font-variant-numeric: tabular-nums; font-size: 0.95rem; }
+    .equation { margin: 1.5rem 0; padding: 1rem; border-block: 1px solid var(--line); }
+    math { font-size: 1.35rem; }
+    code, pre, output { font-family: ui-monospace, monospace; }
+    code { font-size: 0.9em; }
+    pre { padding: 1.25rem; background: var(--wash); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; margin: 1.5rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+    caption { text-align: left; margin-bottom: 0.5rem; color: var(--muted); }
+    th, td { padding: 0.65rem; border-bottom: 1px solid var(--line); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    tbody th, td { white-space: nowrap; }
+    .boundary { padding-left: 1.25rem; border-left: 3px solid var(--accent); }
+    button { font: inherit; color: var(--accent); background: transparent; padding: 0.5rem 0.8rem; border: 1px solid currentColor; border-radius: 0.25rem; cursor: pointer; }
+    [data-answer] { border-left: 2px solid var(--line); padding-left: 1rem; }
+    .sym-highlight { background: #a63e2617; outline: 2px solid var(--accent); outline-offset: 2px; }
+    svg .sym-highlight { outline: none; stroke-width: 6; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+    [hidden] { display: none !important; }
+    footer { border-top: 1px solid var(--line); padding-top: 1.5rem; color: var(--muted); font-size: 0.9rem; }
+    @media (max-width: 36rem) {
+      main { padding-top: 2rem; }
+      th, td { padding: 0.5rem 0.25rem; }
+      pre { padding: 0.8rem; }
+      .plot { padding-inline: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
+    @media print {
+      body { background: white; color: black; font-size: 11pt; }
+      main { width: 100%; padding: 0; }
+      header, section, footer { max-width: none; }
+      header, section { margin-block: 1.5rem; }
+      h1 { font-size: 30pt; }
+      h2 { font-size: 22pt; break-after: avoid; }
+      .contents, .skip-link, .controls, .reveal-button { display: none !important; }
+      [data-answer][hidden] { display: block !important; }
+      pre, .table-wrap { overflow: visible; }
+      .plot, .equation, tr { break-inside: avoid; }
+      .sym-highlight { outline: none; background: transparent; }
+      svg .sym-highlight { stroke-width: 4; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#question">Skip to the explanation</a>
+  <main>
+    <!-- Replace this original illustrative lesson and its simulation with the requested topic. -->
+    <header>
+      <p class="eyebrow">An illustrative model, not a sensor experiment</p>
+      <h1>Why averaging quiets independent noise</h1>
+      <p class="lede">A single reading can wander far from the signal. Averaging gives those errors a chance to cancel. The interesting question is what must be true for that cancellation to keep working.</p>
+      <p>We will connect a noisy trace, a variance calculation, and a streaming implementation. By the end, you should be able to predict what four times as many readings buys you&mdash;and when it buys you nothing.</p>
+      <nav class="contents" aria-label="Article sections">
+        <ol>
+          <li><a href="#question">The readings</a></li>
+          <li><a href="#model">The model</a></li>
+          <li><a href="#implementation">The code</a></li>
+          <li><a href="#boundary">The limit</a></li>
+        </ol>
+      </nav>
+    </header>
+
+    <section id="question" aria-labelledby="question-title">
+      <h2 id="question-title">One signal, many readings</h2>
+      <p>Start with a fixed signal of zero. Each reading adds an error. Our ideal model treats those errors as independent draws from a uniform distribution between &minus;1 and 1, in arbitrary normalized units. Their expected value is zero.</p>
+      <p>The dashed line below shows one fixed pseudorandom sequence. The solid line shows the <span data-sym="mean" tabindex="0">running mean</span> of the readings seen so far. Neither line is a measurement from a physical device.</p>
+      <figure aria-labelledby="trace-caption">
+        <div class="plot">
+          <div class="legend" aria-label="Plot legend">
+            <span>Individual reading</span><span class="mean-key">Running mean</span>
+          </div>
+          <svg viewBox="0 0 480 288" role="img" aria-labelledby="trace-title trace-description">
+            <title id="trace-title">Individual errors and their running mean</title>
+            <desc id="trace-description">The first 16 readings of a fixed synthetic sequence. The final running mean is 0.119. The horizontal axis is reading number and the vertical axis is normalized value.</desc>
+            <line class="axis" x1="48" y1="36" x2="48" y2="232"/>
+            <line class="axis" x1="48" y1="140" x2="448" y2="140"/>
+            <text x="34" y="60" text-anchor="end">1</text>
+            <text x="34" y="148" text-anchor="end">0</text>
+            <text x="34" y="236" text-anchor="end">&minus;1</text>
+            <text x="48" y="264" text-anchor="middle">1</text>
+            <text x="242" y="264" text-anchor="middle">16</text>
+            <text x="448" y="264" text-anchor="middle">32</text>
+            <polyline id="sample-line" class="samples" data-geometry="decoration" points="48.00,185.97 60.90,67.23 73.81,120.20 86.71,64.85 99.61,219.32 112.52,77.38 125.42,164.47 138.32,218.65 151.23,215.89 164.13,54.83 177.03,56.79 189.94,134.50 202.84,148.47 215.74,131.58 228.65,121.51 241.55,91.17"/>
+            <polyline id="mean-line" class="average" data-sym="mean" data-geometry="decoration" points="48.00,185.97 60.90,126.60 73.81,124.47 86.71,109.56 99.61,131.51 112.52,122.49 125.42,128.49 138.32,139.76 151.23,148.22 164.13,138.88 177.03,131.42 189.94,131.67 202.84,132.97 215.74,132.87 228.65,132.11 241.55,129.55"/>
+            <circle id="mean-dot" cx="241.55" cy="129.55" r="5" fill="var(--accent)"/>
+          </svg>
+          <div class="controls" id="sample-controls" hidden>
+            <label for="sample-count">Readings included</label>
+            <output id="count-output" for="sample-count">16</output>
+            <input id="sample-count" type="range" min="1" max="32" step="1" value="16" aria-describedby="sample-help">
+            <p id="sample-help">Change the number of readings, not the underlying sequence. Arrow keys move one reading; Home and End select the bounds.</p>
+          </div>
+          <p class="result" id="sample-summary" role="status" aria-live="polite" aria-atomic="true">16 readings. Running mean: 0.119. Model standard deviation of the mean: 0.144.</p>
+        </div>
+        <figcaption id="trace-caption">Figure 1. Horizontal axis: reading number. Vertical axis: normalized value. The signal is the zero line. This one synthetic trace illustrates the mechanism; it cannot establish a statistical law.</figcaption>
+      </figure>
+      <p>A later reading can move the average farther from zero. The claim is not that every prefix improves. It is that, across independent repetitions of the model, the average becomes less variable.</p>
+    </section>
+
+    <section id="model" aria-labelledby="model-title">
+      <h2 id="model-title">Independence is doing the work</h2>
+      <p>Call the variance of one reading <code>sigma squared</code>. Variance measures spread across repetitions. For independent errors, the variance of a sum is the sum of the variances. Averaging divides the sum by the sample count <code>n</code>, which divides its variance by <code>n squared</code>.</p>
+      <div class="equation">
+        <math display="block" aria-label="Variance of the mean equals n times sample variance divided by n squared, which equals sample variance divided by n">
+          <mrow>
+            <mi mathvariant="normal">Var</mi><mo>(</mo><mi mathvariant="normal">mean</mi><mo>)</mo>
+            <mo>=</mo><mfrac><mrow><mi>n</mi><msup><mi>&sigma;</mi><mn>2</mn></msup></mrow><msup><mi>n</mi><mn>2</mn></msup></mfrac>
+            <mo>=</mo><mfrac><msup><mi>&sigma;</mi><mn>2</mn></msup><mi>n</mi></mfrac>
+          </mrow>
+        </math>
+      </div>
+      <p>In words: <strong>the variance of the mean is the variance of one reading divided by the reading count</strong>. Standard deviation is the square root of variance, so it shrinks with the square root of the count rather than the count itself. For our uniform-noise model, the single-reading variance is <code>1 / 3</code>.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Synthetic trace and theoretical model comparison">
+        <table>
+          <caption>A trace value and a model prediction are different kinds of evidence</caption>
+          <thead><tr><th scope="col">n</th><th scope="col">This trace's mean</th><th scope="col">Model standard deviation</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">1</th><td>&minus;0.522</td><td>0.577</td></tr>
+            <tr><th scope="row">16</th><td>0.119</td><td>0.144</td></tr>
+            <tr><th scope="row">32</th><td>0.041</td><td>0.102</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The middle column describes one deterministic sequence. The last column follows from the model assumptions, not from fitting that sequence. A real experiment would need repeated runs and a check that independence and a fixed signal are reasonable assumptions.</p>
+    </section>
+
+    <section id="implementation" aria-labelledby="implementation-title">
+      <h2 id="implementation-title">The same mean needs only two numbers</h2>
+      <p>The mathematical definition appears to require keeping every reading. Algebra gives a smaller implementation: retain the count and the <span data-sym="mean" tabindex="0">current mean</span>, then adjust the mean toward the next reading.</p>
+      <pre aria-label="JavaScript streaming mean"><code>let n = 0;
+let <span data-sym="mean" tabindex="0">mean</span> = 0;
+
+for (const reading of readings) {
+  n += 1;
+  <span data-sym="mean" tabindex="0">mean</span> += (reading - mean) / n;
+}</code></pre>
+      <p>For <code>n &gt; 0</code>, <code>mean</code> equals the sum of the first <code>n</code> readings divided by <code>n</code> in exact arithmetic. Floating-point arithmetic introduces rounding. This implementation changes the representation, not the independence assumption or the statistical claim.</p>
+    </section>
+
+    <section id="boundary" aria-labelledby="boundary-title">
+      <h2 id="boundary-title">More readings do not remove a shared error</h2>
+      <div class="boundary">
+        <p>If every reading contains the same calibration offset, averaging retains that offset. Correlated errors add covariance terms to the variance of the sum. A changing signal creates another problem: an average of the past may lag behind the present.</p>
+      </div>
+      <p>The useful synthesis is conditional: independent, zero-mean errors around a fixed signal average out in distribution. The streaming code computes the average efficiently, but it cannot make those assumptions true.</p>
+      <h3>Make a prediction</h3>
+      <p>If the model holds and you collect four times as many readings, what happens to the standard deviation of their mean?</p>
+      <button class="reveal-button" type="button" aria-controls="prediction-answer" aria-expanded="false" hidden>Reveal the prediction</button>
+      <div id="prediction-answer" data-answer>
+        <p>It halves, because <code>1 / sqrt(4n) = 1 / (2 sqrt(n))</code>. A shared bias does not halve. The result depends on the assumptions, not on how the mean is stored.</p>
+      </div>
+    </section>
+
+    <footer>
+      <p><strong>Model and method.</strong> This is an original illustrative lesson. The plot uses a fixed 32-bit pseudorandom sequence with seed 7, multiplier 1664525, and increment 1013904223, mapped to [&minus;1, 1). The theoretical calculation assumes ideal independent uniform errors. All code, mathematics, styles, and graphics are embedded in this file.</p>
+    </footer>
+  </main>
+  <script>
+    const symbols = [...document.querySelectorAll('[data-sym]')];
+    function highlight(symbol) {
+      for (const element of symbols) {
+        element.classList.toggle('sym-highlight', Boolean(symbol) && element.dataset.sym === symbol);
+      }
+    }
+    for (const element of symbols) {
+      element.addEventListener('pointerenter', () => highlight(element.dataset.sym));
+      element.addEventListener('pointerleave', () => highlight(document.activeElement?.dataset.sym));
+      element.addEventListener('focus', () => highlight(element.dataset.sym));
+      element.addEventListener('blur', () => highlight(null));
+    }
+
+    for (const button of document.querySelectorAll('.reveal-button')) {
+      const answer = document.getElementById(button.getAttribute('aria-controls'));
+      if (!answer) throw new Error('Prediction reveal is missing its answer element.');
+      answer.hidden = true;
+      button.addEventListener('click', () => {
+        answer.hidden = !answer.hidden;
+        button.setAttribute('aria-expanded', String(!answer.hidden));
+      });
+      button.hidden = false;
+    }
+
+    // Replace this example-specific simulation when changing the article's subject.
+    const samples = [];
+    const means = [];
+    let state = 7;
+    let mean = 0;
+    for (let index = 0; index < 32; index++) {
+      state = (Math.imul(1664525, state) + 1013904223) >>> 0;
+      const sample = state / 4294967296 * 2 - 1;
+      mean += (sample - mean) / (index + 1);
+      samples.push(sample);
+      means.push(mean);
+    }
+    const slider = document.getElementById('sample-count');
+    const x = index => 48 + index / 31 * 400;
+    const y = value => 140 - value * 88;
+    function updateExperiment() {
+      const count = slider.valueAsNumber;
+      const points = values => values.slice(0, count).map((value, index) => `${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(' ');
+      const currentMean = means[count - 1].toFixed(3);
+      document.getElementById('sample-line').setAttribute('points', points(samples));
+      document.getElementById('mean-line').setAttribute('points', points(means));
+      document.getElementById('mean-dot').setAttribute('cx', x(count - 1));
+      document.getElementById('mean-dot').setAttribute('cy', y(means[count - 1]));
+      document.getElementById('count-output').value = String(count);
+      document.getElementById('sample-summary').textContent = `${count} readings. Running mean: ${currentMean}. Model standard deviation of the mean: ${(1 / Math.sqrt(3 * count)).toFixed(3)}.`;
+      document.getElementById('trace-description').textContent = `The first ${count} readings of a fixed synthetic sequence. The final running mean is ${currentMean}. The horizontal axis is reading number and the vertical axis is normalized value.`;
+    }
+    slider.addEventListener('input', updateExperiment);
+    updateExperiment();
+    document.getElementById('sample-controls').hidden = false;
+  </script>
+</body>
+</html>

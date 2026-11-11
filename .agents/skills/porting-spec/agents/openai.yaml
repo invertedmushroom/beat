@@ -1,0 +1,3 @@
+interface:
+  display_name: "Porting Spec"
+  short_description: "Compile a language-agnostic reimplementation spec"
